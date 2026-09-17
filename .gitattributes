@@ -1,0 +1,10 @@
+# 统一换行行为：仓库内 LF，Windows 工作区文本按需转换
+* text=auto
+
+# 钩子与脚本必须保持 LF（CRLF 会导致 shebang 失效）
+*.sh text eol=lf
+.githooks/** text eol=lf
+
+# Windows 批处理必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
