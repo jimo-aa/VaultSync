@@ -44,6 +44,7 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   ffi: ^2.2.0
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:

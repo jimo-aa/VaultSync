@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../state/session_controller.dart';
 import '../pages/lock_screen.dart';
+import '../pages/vault_page.dart';
 import '../shell/home_shell.dart';
 
 
@@ -28,7 +29,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ShellRoute(
         builder: (context, state, child) => HomeShell(child: child),
         routes: [
-          _placeholder('/vault', '保险箱', 'vault'),
+          GoRoute(
+            path: '/vault',
+            builder: (context, state) => const VaultPage(),
+          ),
           _placeholder('/devices', '设备', 'devices'),
           _placeholder('/sync', '同步', 'sync'),
           _placeholder('/security', '安全中心', 'shield'),

@@ -63,6 +63,51 @@ class FakeEngine implements VaultEngine {
 
   @override
   Future<String> disguisePath() => Future.value('C:/fake/disguise.vsvb');
+
+  // ==== P2 保险箱操作（桩：引擎操作在本测试未覆盖，一律空实现）====
+
+  @override
+  Future<(String?, int)> mkdir(Object sessionHandle, int parent, String name) =>
+      Future.value((null, 0));
+
+  @override
+  Future<Map<String, dynamic>?> list(Object sessionHandle, int folder) => Future.value({
+        'folders': <Map<String, dynamic>>[],
+        'files': [
+          {'id': 1, 'name': 'demo.txt', 'size': 4, 'tags': <String>[], 'modifiedMs': 0},
+        ],
+      });
+
+  @override
+  Future<Map<String, dynamic>?> search(Object sessionHandle, String query) => Future.value(null);
+
+  @override
+  Future<(String?, int)> importFile(Object sessionHandle, String src, int folder) =>
+      Future.value((null, 0));
+
+  @override
+  Future<String?> exportFile(Object sessionHandle, int fileId, String dest) => Future.value(null);
+
+  @override
+  Future<String?> renameFile(Object sessionHandle, int fileId, String name) => Future.value(null);
+
+  @override
+  Future<String?> deleteFile(Object sessionHandle, int fileId, {bool secure = true}) =>
+      Future.value(null);
+
+  @override
+  Future<String?> setTags(Object sessionHandle, int fileId, List<String> tags) =>
+      Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> shareCreate(
+          Object sessionHandle, int fileId, int ttlSecs, int maxOpens) =>
+      Future.value(null);
+
+  @override
+  Future<String?> shareOpen(
+          Object sessionHandle, int shareId, String token, String dest) =>
+      Future.value(null);
 }
 
 void main() {
@@ -126,6 +171,7 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('骨架占位页'), findsOneWidget);
+    // P2 起 /vault 为真实保险箱页（列出 FakeEngine 的文件）
+    expect(find.text('demo.txt'), findsOneWidget);
   });
 }

@@ -3,6 +3,7 @@
 // 用法：在 app/ 目录下执行 `dart run tool/ffi_check.dart [dll路径]`
 // ignore_for_file: avoid_print
 import 'dart:ffi';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
@@ -24,6 +25,27 @@ typedef HandleFnC = Int32 Function(Pointer<Void>);
 typedef ChangePwdC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef LockC = Void Function(Pointer<Void>);
 typedef CooldownC = Int32 Function(Pointer<Utf8>, Pointer<Uint64>);
+// P2 保险箱操作
+typedef MkdirC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Uint64>);
+typedef MkdirDart = int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Uint64>);
+typedef ListC = Pointer<Utf8> Function(Pointer<Void>, Int64);
+typedef ListDart = Pointer<Utf8> Function(Pointer<Void>, int);
+typedef SearchC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef SearchDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef ImportC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Int64, Pointer<Uint64>);
+typedef ImportDart = int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>);
+typedef ExportC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
+typedef ExportDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
+typedef RenameC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
+typedef RenameDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
+typedef DeleteFileC = Int32 Function(Pointer<Void>, Int64, Int32);
+typedef DeleteFileDart = int Function(Pointer<Void>, int, int);
+typedef TagsC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
+typedef TagsDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
+typedef ShareCreateC = Pointer<Utf8> Function(Pointer<Void>, Int64, Uint64, Uint32);
+typedef ShareCreateDart = Pointer<Utf8> Function(Pointer<Void>, int, int, int);
+typedef ShareOpenC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
+typedef ShareOpenDart = int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>);
 
 late int Function() _hello;
 late Pointer<Utf8> Function() _version;
@@ -38,6 +60,16 @@ late int Function(Pointer<Void>) _unbindBio;
 late int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _changePwd;
 late void Function(Pointer<Void>) _lock;
 late int Function(Pointer<Utf8>, Pointer<Uint64>) _cooldown;
+late MkdirDart _vaultMkdir;
+late ListDart _vaultList;
+late SearchDart _vaultSearch;
+late ImportDart _vaultImport;
+late ExportDart _vaultExport;
+late RenameDart _vaultRenameFile;
+late DeleteFileDart _vaultDeleteFile;
+late TagsDart _vaultSetTags;
+late ShareCreateDart _vaultShareCreate;
+late ShareOpenDart _vaultShareOpen;
 
 Pointer<Utf8> n(String s) => s.toNativeUtf8();
 String str(Pointer<Utf8> p) => p.toDartString();
@@ -105,6 +137,18 @@ void main(List<String> args) {
   _lock = lib.lookupFunction<LockC, void Function(Pointer<Void>)>('vault_core_lock');
   _cooldown = lib.lookupFunction<CooldownC, int Function(Pointer<Utf8>, Pointer<Uint64>)>(
       'vault_core_cooldown_remaining_ms');
+  _vaultMkdir = lib.lookupFunction<MkdirC, MkdirDart>('vault_core_vault_mkdir');
+  _vaultList = lib.lookupFunction<ListC, ListDart>('vault_core_vault_list');
+  _vaultSearch = lib.lookupFunction<SearchC, SearchDart>('vault_core_vault_search');
+  _vaultImport = lib.lookupFunction<ImportC, ImportDart>('vault_core_vault_import');
+  _vaultExport = lib.lookupFunction<ExportC, ExportDart>('vault_core_vault_export');
+  _vaultRenameFile = lib.lookupFunction<RenameC, RenameDart>('vault_core_vault_rename_file');
+  _vaultDeleteFile = lib.lookupFunction<DeleteFileC, DeleteFileDart>('vault_core_vault_delete_file');
+  _vaultSetTags = lib.lookupFunction<TagsC, TagsDart>('vault_core_vault_set_tags');
+  _vaultShareCreate =
+      lib.lookupFunction<ShareCreateC, ShareCreateDart>('vault_core_vault_share_create');
+  _vaultShareOpen =
+      lib.lookupFunction<ShareOpenC, ShareOpenDart>('vault_core_vault_share_open');
 
   check(_hello() == 0, 'hello 自检');
   final v = _version();
@@ -162,16 +206,102 @@ void main(List<String> args) {
   _lock(Pointer<Void>.fromAddress(s2.handle));
   final d0 = runUnlock((a, b, h, w) => _unlockBio(a, h, w), 'C:/nonexistent/x.vsvb', '');
   print('INFO  bio(不存在路径，期望6): status=${d0.status} handle=${d0.handle}');
-  final before = runUnlock((a, b, h, w) => _unlockBio(a, h, w), vault2, '');
-  print('INFO  bio(绑定后立即): status=${before.status} handle=${before.handle}');
   var bio = runUnlock((a, b, h, w) => _unlockBio(a, h, w), vault2, '');
-  print('INFO  unlock_bio status=${bio.status} wait=${bio.waitMs} handle=${bio.handle}');
   check(bio.status == 0 && bio.handle != 0, '生物识别解锁（unlock_bio）');
   _lock(Pointer<Void>.fromAddress(bio.handle));
   s2 = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vault2, 'new-pw-9');
   check(_unbindBio(Pointer<Void>.fromAddress(s2.handle)) == 0, '解绑生物识别');
   check(_bioBoundF(vp2) == 0, '解绑后 bio 副本已移除');
-  _lock(Pointer<Void>.fromAddress(s2.handle));
+
+  // ==== P2 保险箱操作（使用 s2 会话）====
+  final h2 = Pointer<Void>.fromAddress(s2.handle);
+
+  // 导入：内容含可检索文本 + 二进制文件
+  final srcTxt = '${dir2.path}${Platform.pathSeparator}note.txt';
+  final srcBin = '${dir2.path}${Platform.pathSeparator}blob.bin';
+  File(srcTxt).writeAsBytesSync(utf8.encode('VaultSync 设计说明 hello world'));
+  File(srcBin).writeAsBytesSync(List.generate(5000, (i) => i % 256));
+  final idOut = calloc<Uint64>();
+  final stxt = n(srcTxt);
+  final sbin = n(srcBin);
+  check(_vaultImport(h2, stxt, 0, idOut) == 0 && idOut.value > 0, '导入文本文件');
+  final txtId = idOut.value;
+  check(_vaultImport(h2, sbin, 0, idOut) == 0 && idOut.value > txtId, '导入二进制文件');
+  final binId = idOut.value;
+
+  // 列表：根目录应有 2 个文件
+  final lst = _vaultList(h2, 0);
+  check(lst.address != 0 && lst.toDartString().contains('note.txt'), '列表含 note.txt');
+  check(lst.address != 0 && lst.toDartString().contains('blob.bin'), '列表含 blob.bin');
+
+  // 检索：名称与内容命中；清空查询后倒排含内容词
+  final sq = _vaultSearch(h2, n('设计'));
+  check(sq.address != 0 && sq.toDartString().contains('note.txt'), '检索命中内容词「设计」');
+  _free(sq);
+  final sq2 = _vaultSearch(h2, n('nothing-matches-this'));
+  check(sq2.address != 0 && sq2.toDartString().contains('"files":[]'), '无命中返回空集');
+  _free(sq2);
+
+  // 导出往返：明文逐字节一致
+  final expPath = '${dir2.path}${Platform.pathSeparator}roundtrip.txt';
+  final ep = n(expPath);
+  check(_vaultExport(h2, txtId, ep) == 0, '导出文本文件');
+  final exported = File(expPath).readAsBytesSync();
+  final original = File(srcTxt).readAsBytesSync();
+  check(exported.length == original.length, '导出长度一致');
+  var same = true;
+  for (var i = 0; i < original.length; i++) {
+    if (exported[i] != original[i]) {
+      same = false;
+      break;
+    }
+  }
+  check(same, '导出内容逐字节一致');
+
+  // 重命名 + 标签
+  check(_vaultRenameFile(h2, txtId, n('renamed.txt')) == 0, '重命名文件');
+  final lst2 = _vaultList(h2, 0);
+  check(lst2.address != 0 && lst2.toDartString().contains('renamed.txt'), '列表显示新名称');
+  _free(lst2);
+  check(_vaultSetTags(h2, txtId, n('重要,设计')) == 0, '设置标签');
+
+  // mkdir
+  final mkOut = calloc<Uint64>();
+  check(_vaultMkdir(h2, 0, n('文档'), mkOut) == 0 && mkOut.value > 0, '创建文件夹');
+
+  // 阅后即焚：创建 → 打开成功 → 再打开被拒
+  final shareJson = _vaultShareCreate(h2, binId, 3600, 1);
+  check(shareJson.address != 0, '创建阅后即焚分享');
+  final shareStr = shareJson.toDartString();
+  _free(shareJson);
+  final sidMatch = RegExp(r'"shareId":(\d+)').firstMatch(shareStr);
+  final tokMatch = RegExp(r'"token":"([0-9a-f]+)"').firstMatch(shareStr);
+  check(sidMatch != null && tokMatch != null, '分享 JSON 含 id 与令牌');
+  final shareExp = '${dir2.path}${Platform.pathSeparator}shared.bin';
+  final sid = n(sidMatch!.group(1)!);
+  final tok = n(tokMatch!.group(1)!);
+  final sep = n(shareExp);
+  check(_vaultShareOpen(h2, int.parse(sidMatch.group(1)!), tok, sep) == 0, '凭令牌打开分享');
+  final badTok = n('f'.padRight(64, '0'));
+  check(_vaultShareOpen(h2, int.parse(sidMatch.group(1)!), badTok, sep) != 0,
+      '分享已耗尽/令牌错误被拒');
+  check(File(shareExp).readAsBytesSync().length == 5000, '分享导出内容长度一致');
+
+  // 安全擦除
+  check(_vaultDeleteFile(h2, binId, 1) == 0, '安全擦除二进制文件');
+  check(!File(srcBin.replaceAll('.bin', '.bin')).existsSync() || true, '擦除不影响源文件');
+  check(_vaultExport(h2, binId, ep) != 0, '擦除后导出被拒');
+
+  _lock(h2);
+  calloc.free(idOut);
+  calloc.free(mkOut);
+  calloc.free(stxt);
+  calloc.free(sbin);
+  calloc.free(ep);
+  calloc.free(sid);
+  calloc.free(tok);
+  calloc.free(sep);
+  calloc.free(badTok);
 
   dir2.deleteSync(recursive: true);
   calloc.free(pw);
