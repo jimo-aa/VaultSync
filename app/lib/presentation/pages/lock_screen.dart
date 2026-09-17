@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,7 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/icons/app_icon.dart';
 import '../../state/session_controller.dart';
 
-/// 锁屏：主密码解锁（转盘动效、生物识别在 P1 阶段对接）。
+/// 锁屏：主密码解锁（F-02）+ 生物识别（F-04）+ 防护冷却倒计时（P1-5）。
 class LockScreen extends ConsumerStatefulWidget {
   const LockScreen({super.key});
 
@@ -16,29 +18,57 @@ class LockScreen extends ConsumerStatefulWidget {
 class _LockScreenState extends ConsumerState<LockScreen> {
   final _controller = TextEditingController();
   bool _obscure = true;
-  String? _error;
+  bool _busy = false;
+  Timer? _ticker;
 
-  void _unlock() {
-    final ok = ref.read(sessionProvider.notifier).unlock(_controller.text);
-    if (ok) {
-      context.go('/vault');
-    } else {
-      setState(() => _error = '密码错误，请重试');
-    }
+  @override
+  void initState() {
+    super.initState();
+    // 冷却倒计时刷新
+    _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _ticker?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _unlock() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    await ref.read(sessionProvider.notifier).unlock(_controller.text);
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _unlockBio() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    await ref.read(sessionProvider.notifier).unlockBio();
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final failed = ref.watch(
-      sessionProvider.select((s) => s is SessionLocked ? s.failedAttempts : 0),
-    );
+    final session = ref.watch(sessionProvider);
+    final locked = session is SessionLocked ? session : const SessionLocked();
+
+    // 未锁定 → 由路由守卫跳转；本页只在锁定态渲染。
+    if (session is SessionUnlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => context.go('/vault'));
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final cooling = locked.cooling;
+    final remaining = locked.cooldownUntil?.difference(DateTime.now());
+    final remainingText = remaining == null
+        ? ''
+        : '${remaining.inMinutes.toString().padLeft(2, '0')}:'
+            '${(remaining.inSeconds % 60).toString().padLeft(2, '0')}';
 
     return Scaffold(
       body: Center(
@@ -51,35 +81,58 @@ class _LockScreenState extends ConsumerState<LockScreen> {
               const SizedBox(height: 12),
               Text('VaultSync', style: theme.textTheme.displayLarge),
               const SizedBox(height: 40),
-              if (failed >= 3)
-                Text('连续失败 $failed 次，已触发防护延时', style: TextStyle(color: theme.colorScheme.error))
-              else if (_error != null)
-                Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+              if (cooling)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.timer_outlined, size: 18, color: theme.colorScheme.error),
+                    const SizedBox(width: 6),
+                    Text(
+                      '防护冷却中 $remainingText 后可重试',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ],
+                )
+              else if (locked.hint != null)
+                Text(locked.hint!, style: TextStyle(color: theme.colorScheme.error))
+              else if (locked.failedAttempts > 0)
+                Text(
+                  '密码错误，已失败 ${locked.failedAttempts} 次（连续 3 次触发冷却）',
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
               const SizedBox(height: 8),
               TextField(
                 controller: _controller,
                 obscureText: _obscure,
                 autofocus: true,
+                enabled: !cooling && !_busy,
                 onSubmitted: (_) => _unlock(),
                 decoration: InputDecoration(
-                  hintText: '输入主密码',
+                  hintText: '输入主密码（首次输入将创建保险箱）',
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
-                    icon: Icon(_obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                    icon: Icon(_obscure
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined),
                     onPressed: () => setState(() => _obscure = !_obscure),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
               FilledButton(
-                onPressed: _unlock,
+                onPressed: cooling || _busy ? null : _unlock,
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('解锁'),
+                child: _busy
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('解锁'),
               ),
               const SizedBox(height: 8),
               TextButton.icon(
-                // TODO(P1-3): 对接平台安全区生物识别路径。
-                onPressed: () {},
+                onPressed: cooling || _busy ? null : _unlockBio,
                 icon: const AppIcon('finger'),
                 label: const Text('生物识别'),
               ),
