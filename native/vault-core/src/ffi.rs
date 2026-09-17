@@ -10,6 +10,7 @@ use std::ffi::{c_char, CStr, CString};
 use crate::platform_store::{open_os_store, SecureStore};
 use crate::service::{self, CoreError};
 use crate::session::Session;
+use vault_vault::vault::Vault;
 
 pub const OK: i32 = 0;
 pub const ERR_WRONG_PASSWORD: i32 = 1;
@@ -302,6 +303,253 @@ pub unsafe extern "C" fn vault_core_cooldown_remaining_ms(
         let ms = service::cooldown_remaining_ms(&p).unwrap_or(0);
         write_wait(wait_out, ms);
         Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+// ==== P2 保险箱操作（docs/05-02）====
+// JSON 输出以引擎分配的 CString 返回，调用方用 vault_core_free_string 释放；
+// 出错返回空指针（错误语义与状态码约定一致的部分走 i32 接口）。
+
+fn vault_op<T>(
+    handle: *mut Session,
+    f: impl FnOnce(&mut Vault, &Session) -> Result<T, CoreError>,
+) -> Result<T, i32> {
+    if handle.is_null() {
+        return Err(ERR_INVALID_ARG);
+    }
+    let session = unsafe { &*handle };
+    session
+        .with_vault(|v| f(v, session))
+        .map_err(|e| map_err(&e))
+}
+
+fn json_out(v: serde_json::Value) -> *mut c_char {
+    match serde_json::to_string(&v)
+        .ok()
+        .and_then(|s| CString::new(s).ok())
+    {
+        Some(c) => c.into_raw(),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// 创建文件夹，返回新文件夹 id（out 参数）。
+///
+/// # Safety
+/// `handle` 有效；`name` 合法 UTF-8；`folder_id_out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_mkdir(
+    handle: *mut Session,
+    parent: i64,
+    name: *const c_char,
+    folder_id_out: *mut u64,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if folder_id_out.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let name = unsafe { cstr(name) }?;
+        let id = vault_op(handle, |v, _| {
+            v.mkdir(parent as u64, name).map_err(CoreError::Internal)
+        })?;
+        unsafe { folder_id_out.write(id) };
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 列出子项 JSON。成功返回 JSON 字符串（需 free），失败返回空指针。
+///
+/// # Safety
+/// `handle` 有效；`folder` 为文件夹 id。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_list(handle: *mut Session, folder: i64) -> *mut c_char {
+    match vault_op(handle, |v, _| {
+        v.list_children(folder as u64).map_err(CoreError::Internal)
+    }) {
+        Ok(json) => match CString::new(json) {
+            Ok(c) => c.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 全文检索，返回 JSON 字符串（需 free）。
+///
+/// # Safety
+/// `handle` 有效；`query` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_search(
+    handle: *mut Session,
+    query: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<*mut c_char, i32> {
+        let q = unsafe { cstr(query) }?;
+        let json = vault_op(handle, |v, _| Ok(v.search(q)))?;
+        let c = CString::new(json).map_err(|_| ERR_INTERNAL)?;
+        Ok(c.into_raw())
+    };
+    run().unwrap_or(std::ptr::null_mut())
+}
+
+/// 导入文件，返回文件 id（out 参数）。
+///
+/// # Safety
+/// `handle` 有效；`src` 路径合法；`file_id_out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_import(
+    handle: *mut Session,
+    src: *const c_char,
+    folder: i64,
+    file_id_out: *mut u64,
+) -> i32 {
+    if handle.is_null() || file_id_out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    let src = match unsafe { cstr(src) } {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    match session.with_vault(|v| {
+        v.import_file(std::path::Path::new(src), folder as u64)
+            .map_err(CoreError::Internal)
+    }) {
+        Ok(id) => {
+            unsafe { file_id_out.write(id) };
+            OK
+        }
+        Err(e) => map_err(&e),
+    }
+}
+
+/// 导出解密文件。
+///
+/// # Safety
+/// `handle` 有效；`dest` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_export(
+    handle: *mut Session,
+    file_id: i64,
+    dest: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let dest = unsafe { cstr(dest) }?;
+        vault_op(handle, |v, _| {
+            v.export_file(file_id as u64, std::path::Path::new(dest))
+                .map_err(CoreError::Internal)
+        })
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 重命名文件。
+///
+/// # Safety
+/// `handle` 有效；`name` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_rename_file(
+    handle: *mut Session,
+    file_id: i64,
+    name: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let name = unsafe { cstr(name) }?;
+        vault_op(handle, |v, _| {
+            v.rename_file(file_id as u64, name)
+                .map_err(CoreError::Internal)
+        })
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 删除文件（secure=1 时先单次覆写再删除）。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_delete_file(
+    handle: *mut Session,
+    file_id: i64,
+    secure: i32,
+) -> i32 {
+    vault_op(handle, |v, _| {
+        v.delete_file(file_id as u64, secure != 0)
+            .map_err(CoreError::Internal)
+    })
+    .err()
+    .unwrap_or(OK)
+}
+
+/// 设置标签（逗号分隔）。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_set_tags(
+    handle: *mut Session,
+    file_id: i64,
+    tags_csv: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let csv = unsafe { cstr(tags_csv) }?;
+        let tags: Vec<String> = if csv.is_empty() {
+            Vec::new()
+        } else {
+            csv.split(',').map(str::to_string).collect()
+        };
+        vault_op(handle, |v, _| {
+            v.set_tags(file_id as u64, tags)
+                .map_err(CoreError::Internal)
+        })
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 创建阅后即焚分享，返回 JSON {"shareId":u64,"token":"hex"}。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_share_create(
+    handle: *mut Session,
+    file_id: i64,
+    ttl_secs: u64,
+    max_opens: u32,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        vault_op(handle, |v, _| {
+            v.create_share(file_id as u64, ttl_secs, max_opens)
+                .map(|(id, token)| serde_json::json!({"shareId": id, "token": token}))
+                .map_err(CoreError::Internal)
+        })
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 通过分享导出（消耗一次打开机会）。
+///
+/// # Safety
+/// `handle` 有效；`token`、`dest` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_share_open(
+    handle: *mut Session,
+    share_id: i64,
+    token: *const c_char,
+    dest: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let token = unsafe { cstr(token) }?;
+        let dest = unsafe { cstr(dest) }?;
+        vault_op(handle, |v, _| {
+            v.open_share(share_id as u64, token, std::path::Path::new(dest))
+                .map_err(CoreError::Internal)
+        })
     };
     run().err().unwrap_or(OK)
 }

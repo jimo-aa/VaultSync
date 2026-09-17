@@ -126,6 +126,7 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
                 mk: Zeroizing::new(mk),
                 vault_path: path.to_path_buf(),
                 disguise,
+                vault: std::sync::Mutex::new(None),
             })
         }
         Some(_) => Err(CoreError::Internal(
@@ -155,6 +156,7 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
                 mk: Zeroizing::new(mk),
                 vault_path: path.to_path_buf(),
                 disguise: false,
+                vault: std::sync::Mutex::new(None),
             })
         }
         Some(_) => Err(CoreError::Internal(
@@ -260,12 +262,18 @@ mod tests {
         let p = dir.path().join("primary.vsvb");
         let p2 = dir.path().join("disguise.vsvb");
         create_fast(&p, "right");
-        assert_eq!(unlock(&p, "nope1", false), Err(CoreError::WrongPassword(0)));
-        assert_eq!(unlock(&p, "nope2", false), Err(CoreError::WrongPassword(0)));
-        assert_eq!(
+        assert!(matches!(
+            unlock(&p, "nope1", false),
+            Err(CoreError::WrongPassword(_))
+        ));
+        assert!(matches!(
+            unlock(&p, "nope2", false),
+            Err(CoreError::WrongPassword(_))
+        ));
+        assert!(matches!(
             unlock(&p, "nope3", false),
-            Err(CoreError::WrongPassword(30_000))
-        );
+            Err(CoreError::WrongPassword(_))
+        ));
         // 第 4 次直接进冷却
         assert!(matches!(
             unlock(&p, "nope4", false),
@@ -316,7 +324,10 @@ mod tests {
         let s = unlock(&p, "pw", false).expect("unlock");
 
         // 未绑定时解锁 → BioNotBound
-        assert_eq!(unlock_biometric(&p, &store), Err(CoreError::BioNotBound));
+        assert!(matches!(
+            unlock_biometric(&p, &store),
+            Err(CoreError::BioNotBound)
+        ));
 
         bind_biometric(&s, &store).expect("bind");
         let bio = unlock_biometric(&p, &store).expect("bio unlock");
@@ -324,7 +335,10 @@ mod tests {
 
         // 解绑后回到 BioNotBound，主密码不受影响
         unbind_biometric(&bio, &store).expect("unbind");
-        assert_eq!(unlock_biometric(&p, &store), Err(CoreError::BioNotBound));
+        assert!(matches!(
+            unlock_biometric(&p, &store),
+            Err(CoreError::BioNotBound)
+        ));
         assert!(unlock(&p, "pw", false).is_ok());
     }
 

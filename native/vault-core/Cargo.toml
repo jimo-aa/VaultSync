@@ -19,6 +19,7 @@ vault-audit = { path = "../vault-audit" }
 # Linux 无默认后端 → secure store 不可用 → 生物识别路径自动禁用（docs/05-01 降级）。
 keyring = { version = "3", default-features = false, features = ["windows-native", "apple-native"] }
 zeroize = "1.8"
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

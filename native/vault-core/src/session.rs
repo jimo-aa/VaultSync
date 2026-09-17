@@ -7,14 +7,38 @@ use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 use vault_crypto::KEY_LEN;
+use vault_vault::vault::Vault;
 
 /// 已解锁会话。MK 永不出引擎（零信任红线），FFI 层只传递不透明句柄。
-#[derive(Debug, PartialEq, Eq)]
 pub struct Session {
     pub(crate) mk: Zeroizing<[u8; KEY_LEN]>,
     pub(crate) vault_path: PathBuf,
-    /// 伪装空间会话：真实保险箱操作一律拒绝（docs/05-01 §六 Dummy 语义）。
+    /// 伪装空间会话（docs/05-01 §六 Dummy 语义）：操作只作用于伪空间自身的数据目录。
     pub(crate) disguise: bool,
+    /// 保险箱引擎懒加载（索引密钥派生自 MK，会话销毁即随之销毁）。
+    pub(crate) vault: Mutex<Option<Vault>>,
+}
+
+impl Session {
+    /// 惰性打开保险箱并以闭包执行操作（同一会话内串行）。
+    pub(crate) fn with_vault<T>(
+        &self,
+        f: impl FnOnce(&mut Vault) -> Result<T, crate::service::CoreError>,
+    ) -> Result<T, crate::service::CoreError> {
+        let mut guard = self.vault.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some(
+                Vault::open(&self.vault_path, &self.mk)
+                    .map_err(crate::service::CoreError::Internal)?,
+            );
+        }
+        // 上一分支刚初始化；Option 在此必然为 Some
+        let v = match guard.as_mut() {
+            Some(v) => v,
+            None => return Err(crate::service::CoreError::Internal("vault init invariant")),
+        };
+        f(v)
+    }
 }
 
 /// 单密码错误延时（原型基线：连续 3 次失败起 30s，指数递增，上限 15 分钟）。

@@ -10,12 +10,58 @@ pub mod aead;
 pub mod kdf;
 pub mod random;
 
-pub use aead::{aead_decrypt, aead_encrypt, AES_GCM_NONCE_LEN, AES_GCM_TAG_LEN};
+pub use aead::{
+    aead_decrypt, aead_decrypt_with_aad, aead_encrypt, aead_encrypt_with_aad, AES_GCM_NONCE_LEN,
+    AES_GCM_TAG_LEN,
+};
 pub use kdf::{argon2id_derive, hkdf_sha256_derive, hkdf_sha256_extract_expand, Argon2Params};
 pub use random::{random_bytes, random_key, random_salt};
 
 /// AES-256-GCM 密钥长度（docs/05-01：KEK_pwd / KEK_bio / MK 均 32B）。
 pub const KEY_LEN: usize = 32;
+
+/// SHA-256 增量哈希（整文件终验用，docs/05-02 §3.3）。封装 sha2，避免上层直接依赖。
+pub struct Sha256 {
+    inner: sha2::Sha256,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self {
+            inner: <sha2::Sha256 as sha2::Digest>::new(),
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        sha2::Digest::update(&mut self.inner, data);
+    }
+
+    /// 完成并输出十六进制摘要。
+    pub fn finalize_hex(self) -> String {
+        hex_encode(&sha2::Digest::finalize(self.inner))
+    }
+}
+
+/// 一次性 SHA-256（十六进制）。
+pub fn hash_sha256(data: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize_hex()
+}
+
+/// HMAC-SHA256（十六进制）。用于搜索令牌的确定性伪随机化（SSE-lite，docs/05-02 §4.4）。
+pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
+    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key)
+        .unwrap_or_else(|_| panic!("hmac accepts any key length"));
+    hmac::Mac::update(&mut mac, data);
+    hex_encode(&hmac::Mac::finalize(mac).into_bytes())
+}
 
 /// 引擎自检：跑一次 AEAD 加解密往返，确认密码学栈可用。
 pub fn self_check() -> bool {
