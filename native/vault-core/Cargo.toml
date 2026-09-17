@@ -1,4 +1,4 @@
-# 唯一 FFI 门面 crate：会话管理、指令编排（P1+ 实现）。
+# 唯一 FFI 门面 crate：会话管理、指令编排。
 # cdylib 供 Dart 侧 DynamicLibrary 加载；staticlib 备用（iOS）。
 [package]
 name = "vault-core"
@@ -15,3 +15,10 @@ vault-vault = { path = "../vault-vault" }
 vault-p2p = { path = "../vault-p2p" }
 vault-stego = { path = "../vault-stego" }
 vault-audit = { path = "../vault-audit" }
+# 平台安全存储（Windows Credential Manager / macOS Keychain）。
+# Linux 无默认后端 → secure store 不可用 → 生物识别路径自动禁用（docs/05-01 降级）。
+keyring = { version = "3", default-features = false, features = ["windows-native", "apple-native"] }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3"

@@ -7,8 +7,8 @@ pub use vault_audit;
 pub use vault_crypto;
 
 /// 骨架自检：确认依赖边可用。
-pub fn skeleton_ready() -> bool {
-    vault_crypto::skeleton_ready() && vault_audit::skeleton_ready()
+pub fn self_check() -> bool {
+    vault_crypto::self_check() && vault_audit::self_check()
 }
 
 #[cfg(test)]
@@ -17,6 +17,6 @@ mod tests {
 
     #[test]
     fn dependency_edges_work() {
-        assert!(skeleton_ready());
+        assert!(self_check());
     }
 }

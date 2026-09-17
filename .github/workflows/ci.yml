@@ -40,7 +40,9 @@ jobs:
         with:
           workspaces: native
       - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
+      # 严格性由各 crate 源码级 #![deny(warnings)] 保证
+      #（命令行 -D warnings 会压过源码内 allow 属性，测试代码无法豁免）
+      - run: cargo clippy --all-targets
       - run: cargo test
 
   windows-desktop:

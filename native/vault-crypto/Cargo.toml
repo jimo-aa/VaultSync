@@ -1,5 +1,5 @@
-# 最底层 crate：随机数、Hash、Argon2id、HKDF、AES-256-GCM、Zeroize（P1 落地）。
-# P0 骨架阶段不引入外部依赖，仅固化边界与测试基线。
+# 最底层 crate：随机数、Hash、Argon2id、HKDF、AES-256-GCM、Zeroize。
+# P1-1 落地：本 crate 不得依赖任何 OS / 平台能力，保持纯密码学原语。
 [package]
 name = "vault-crypto"
 version.workspace = true
@@ -7,3 +7,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aes-gcm = "0.10"
+argon2 = "0.5"
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+zeroize = "1.8"
