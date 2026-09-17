@@ -1,0 +1,17 @@
+# 唯一 FFI 门面 crate：会话管理、指令编排（P1+ 实现）。
+# cdylib 供 Dart 侧 DynamicLibrary 加载；staticlib 备用（iOS）。
+[package]
+name = "vault-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }
+vault-vault = { path = "../vault-vault" }
+vault-p2p = { path = "../vault-p2p" }
+vault-stego = { path = "../vault-stego" }
+vault-audit = { path = "../vault-audit" }

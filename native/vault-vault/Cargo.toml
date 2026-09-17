@@ -1,0 +1,10 @@
+# 保险箱容器与索引，依赖 crypto + audit（docs/01 §三）。
+[package]
+name = "vault-vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }
+vault-audit = { path = "../vault-audit" }

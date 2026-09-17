@@ -1,0 +1,9 @@
+# LSB 隐写引擎，依赖 crypto（docs/01 §三）。
+[package]
+name = "vault-stego"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }

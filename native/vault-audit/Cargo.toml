@@ -1,0 +1,8 @@
+# 最底层 crate：链式哈希审计日志（P5-1 完整实现）。
+[package]
+name = "vault-audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

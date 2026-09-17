@@ -1,0 +1,21 @@
+# VaultSync 核心引擎 — Rust Workspace
+# crate 依赖单向无环：vault-crypto / vault-audit 为最底层；vault-core 是唯一 FFI 门面（docs/01 §三）。
+[workspace]
+resolver = "2"
+members = [
+    "vault-core",
+    "vault-crypto",
+    "vault-vault",
+    "vault-p2p",
+    "vault-stego",
+    "vault-audit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

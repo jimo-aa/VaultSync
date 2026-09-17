@@ -1,0 +1,10 @@
+# P2P 网络与同步（libp2p），依赖 crypto + audit（docs/01 §三）。
+[package]
+name = "vault-p2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }
+vault-audit = { path = "../vault-audit" }
