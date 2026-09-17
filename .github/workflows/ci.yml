@@ -1,0 +1,71 @@
+# VaultSync CI — 双流水线（docs/09 P0-5）
+# Dart 侧：analyze + test；Rust 侧：fmt + clippy + test；
+# Windows 集成：验证 cargo→CMake 联动构建与 DLL 捆绑。
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  flutter:
+    name: Flutter analyze & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --fatal-infos
+      - run: flutter test
+
+  rust:
+    name: Rust fmt & clippy & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
+      - run: cargo test
+
+  windows-desktop:
+    name: Windows desktop build (FFI integration)
+    runs-on: windows-latest
+    needs: [flutter, rust]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Cargo test (workspace)
+        working-directory: native
+        run: cargo test
+      - name: Flutter build windows（验证 vault_core.dll 捆绑）
+        working-directory: app
+        run: flutter build windows --debug
+      - name: 校验 DLL 已捆绑
+        shell: pwsh
+        run: |
+          if (-not (Test-Path app/build/windows/x64/runner/Debug/vault_core.dll)) {
+            Write-Error "vault_core.dll 未捆绑进产物"
+          }

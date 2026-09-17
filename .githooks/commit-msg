@@ -1,0 +1,28 @@
+#!/bin/sh
+# Conventional Commits 提交信息校验（规范见 docs/10）。
+# 启用：git config core.hooksPath .githooks
+
+msg=$(head -n 1 "$1")
+
+# 合并/Revert/fixup 提交放行
+case "$msg" in
+  Merge* | Revert* | "fixup!"* | "squash!"*) exit 0 ;;
+esac
+
+pattern='^(feat|fix|docs|refactor|test|chore|security)(\([a-z0-9/-]+\))?!?: .+'
+
+if ! printf '%s' "$msg" | grep -qE "$pattern"; then
+  echo "" >&2
+  echo "✗ 提交信息不符合 Conventional Commits 规范（docs/10）" >&2
+  echo "  格式: <type>(<scope>): <subject>" >&2
+  echo "  type: feat|fix|docs|refactor|test|chore|security" >&2
+  echo "  示例: feat(crypto): 实现 Argon2id 派生 KEK" >&2
+  echo "" >&2
+  exit 1
+fi
+
+subject_len=$(printf '%s' "$msg" | wc -m)
+if [ "$subject_len" -gt 72 ]; then
+  echo "✗ subject 过长（$subject_len > 72 字符），请精炼（docs/10）" >&2
+  exit 1
+fi

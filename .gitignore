@@ -1,0 +1,9 @@
+# Rust
+native/target/
+
+# 工具产物
+.mimosa/
+
+# 系统
+Thumbs.db
+.DS_Store
