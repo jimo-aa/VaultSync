@@ -48,3 +48,15 @@
 - 隐患：锁屏首启"输入即创建"无强度评估（≥4 位临时下限），P4-1 必须替换为完整强度策略；会话句柄 Dart 侧仅存 int 地址，P2 起若加句柄校验需同步引擎。
 - 隐患：CI 的 rust job 在 Linux 上跑，bio 相关 ignored 测试不会执行——Windows 集成 job 目前只构建不跑 `--ignored` 测试，后续可加 step 在 windows job 跑 `cargo test -- --ignored`（会写 Credential Manager，需评估 runner 策略）。
 - 测试基线：Rust 32 项（含 1 项 ignored 本机联测）+ Dart 2 项 + FFI 冒烟 20 项断言全绿；`flutter analyze`/`cargo clippy`/`fmt` 干净；Windows debug 构建通过。
+
+## 2026-09-17 · P2 完成：保险箱与索引（容器 / CDC / 检索 / 擦除 / 分享）
+
+- **P2-1** 每文件独立密文容器 VSEF v2（Header 明文版本化 + 加密元数据 AEAD + CDC 块数据区）；索引 VSIX v2 整体 AEAD 落盘。**设计偏移**：索引未用 SQLite——骨架期索引整体加载进内存、每次变更原子落盘；SQLite（rusqlite）待跨进程并发/超大索引时引入（面板有记录）。
+- **P2-2** fastcdc v2020 StreamCDC：小文件(<1MB) avg 16KB，其余 avg 64KB 上限 256KB；**确定性 nonce = per-file 32bit 前缀 ∥ 64bit 计数器**（docs/05-02 §3.2，杜绝随机 nonce 碰撞），块序号作 AAD 防块重排；块清单存密文 SHA-256（同步块清单来源）。
+- **踩坑（重要）**：`aead_encrypt_with_aad` 返回 nonce‖ct‖tag，import 最初把整个 blob 写入数据区，export 又外层再拼一次 nonce →"双重 nonce"使解密必败。定位方法：候选密钥逐一排除 → 密钥正确 → 锁定 nonce/结构。教训：**封装函数的返回布局必须在调用侧文档化，粘接层最容易犯"多包一层"的错**。
+- **踩坑**：Dart `codeUnits` 写文件会把 UTF-16 码元截断为低字节，中文测试数据损坏导致检索误报失败——写文本一律 `utf8.encode`。
+- **P2-5** 擦除语义：每文件容器使"删容器=密文与密钥同灭"；secure=true 先单次覆写（SSD 兜底语义，docs/05-02 §4.3）。阅后即焚：令牌仅创建时返回一次、HMAC 落索引、TTL+次数；**耗尽检查先于令牌校验**（防耗尽后无限爆破令牌）。
+- 隐患：全文检索为 SSE-lite（等词匹配），CJK 已 bigram 但无词干/模糊；内容采样上限 1MB，超长文本尾部不索引。
+- 隐患：文件在文件夹间移动尚未实现（需换 FSK 重加密元数据并重建倒排），P3-4 同步或 P4-2 UI 需要时补。
+- 测试基线：Rust 46 项 + Dart 2 项 + FFI 冒烟 41 项断言全绿；analyze/clippy/fmt 干净；Windows 构建通过。
+- 最小保险箱页已接入 `/vault`（列表/导入/导出/重命名/擦除/搜索/分享/新建文件夹）；完整资源管理器仍按面板归 P4-2。

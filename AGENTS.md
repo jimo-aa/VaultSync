@@ -6,7 +6,7 @@ VaultSync：端到端加密的多设备文件同步系统。当前仓库处于**
 - `prototype/` — 桌面端高保真 HTML+CSS+JS 原型，纯静态零依赖，双击 `index.html` 即可打开。演示口令：`1234`（真实保险箱）、`88888888`（伪装伪空间）。全部为 Mock 数据，不含真实加密逻辑。其 SVG 图标库已提取至 `app/assets/icons/`（53 枚，i- 前缀已去除）。
 - `app/` — Flutter 桌面客户端（Windows 已验证）。分层：`lib/core`（主题 Token / 图标）、`lib/state`（Riverpod）、`lib/service`（编排 + 引擎服务，后台 Isolate 调 FFI）、`lib/ffi`（dart:ffi 绑定）、`lib/presentation`（router / pages / shell）。锁屏已对接真实引擎（首启输入即创建保险箱，演示口令已废弃）。
 - `native/` — Rust Workspace 六 crate。`vault-crypto` 为唯一密码学原语层（AES-256-GCM / Argon2id / HKDF / CSPRNG / Zeroize）；`vault-core` 为唯一 FFI 门面（keystore VSVB v2 头部、会话、暴力破解防护、keyring 平台安全存储）。
-- FFI 链路：`flutter build windows` 时 CMake POST_BUILD 自动 `cargo build --release` 并把 `vault_core.dll` 拷进产物（`app/windows/runner/CMakeLists.txt`）。P1 冒烟：`cd app && dart run tool/ffi_check.dart`（20 项断言）。
+- FFI 链路：`flutter build windows` 时 CMake POST_BUILD 自动 `cargo build --release` 并把 `vault_core.dll` 拷进产物（`app/windows/runner/CMakeLists.txt`）。P1+P2 冒烟：`cd app && dart run tool/ffi_check.dart`（41 项断言：解锁/冷却/改密/生物识别/导入导出/检索/擦除/分享）。
 - **FFI 约定**：状态码 0=OK/1=密码错误(wait ms)/2=冷却(ms)/3=IO/4=安全存储不可用/5=未绑定生物/6=格式/7=参数/8=内部；会话句柄为不透明指针地址（int），MK 永不出引擎；**每个导出的参数个数不同，typedef 严禁复用**（unlock=5 参、unlock_bio=3 参）。
 
 ## 常用命令
