@@ -132,6 +132,54 @@ impl ContainerReader {
         })
     }
 
+    /// 全量密文域校验：逐块解密验证 + 整文件 SHA-256（不解密落盘）。
+    pub fn verify(&self, fskey: &[u8; KEY_LEN]) -> Result<(), &'static str> {
+        let mut src = std::fs::File::open(&self.path).map_err(|_| "cannot open container")?;
+        src.seek(std::io::SeekFrom::Start(self.data_offset))
+            .map_err(|_| "seek failed")?;
+        let mut hasher = vault_crypto::Sha256::new();
+        for (counter, entry) in (0u64..).zip(self.meta.chunks.iter()) {
+            let mut ct = vec![0u8; entry.len as usize];
+            src.read_exact(&mut ct).map_err(|_| "chunk data missing")?;
+            if vault_crypto::hash_sha256(&ct) != entry.hash {
+                return Err("chunk hash mismatch");
+            }
+            let mut nonce = [0u8; AES_GCM_NONCE_LEN];
+            nonce[..4].copy_from_slice(&self.meta.nonce_prefix.to_be_bytes());
+            nonce[4..].copy_from_slice(&counter.to_be_bytes());
+            let mut aad = [0u8; 8];
+            aad.copy_from_slice(&counter.to_be_bytes());
+            let mut blob = Vec::with_capacity(AES_GCM_NONCE_LEN + ct.len());
+            blob.extend_from_slice(&nonce);
+            blob.extend_from_slice(&ct);
+            let pt = vault_crypto::aead::aead_decrypt_with_aad(fskey, &blob, &aad)
+                .ok_or("chunk tampered or key mismatch")?;
+            hasher.update(&pt);
+        }
+        if hasher.finalize_hex() != self.meta.file_sha256 {
+            return Err("whole-file sha256 mismatch");
+        }
+        Ok(())
+    }
+
+    /// 读取第 `index` 个密文块原样字节（同步传输用，不解密）。
+    pub fn read_ct(&self, index: usize) -> Result<Vec<u8>, &'static str> {
+        let entry = self
+            .meta
+            .chunks
+            .get(index)
+            .ok_or("chunk index out of range")?;
+        let mut src = std::fs::File::open(&self.path).map_err(|_| "cannot open container")?;
+        src.seek(std::io::SeekFrom::Start(self.data_offset + entry.offset))
+            .map_err(|_| "seek failed")?;
+        let mut ct = vec![0u8; entry.len as usize];
+        src.read_exact(&mut ct).map_err(|_| "chunk data missing")?;
+        if vault_crypto::hash_sha256(&ct) != entry.hash {
+            return Err("chunk hash mismatch");
+        }
+        Ok(ct)
+    }
+
     /// 流式解密导出到 `dest`，恒定内存；完成后比对整文件 SHA-256 终验。
     pub fn export_to(&self, dest: &Path, fskey: &[u8; KEY_LEN]) -> Result<(), &'static str> {
         let mut out = std::fs::File::create(dest).map_err(|_| "cannot create dest")?;

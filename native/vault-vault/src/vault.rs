@@ -22,6 +22,15 @@ pub struct Vault {
     index_path: PathBuf,
     index: VaultIndex,
     mk: Zeroizing<[u8; KEY_LEN]>,
+    /// 本机向量时钟设备位（P3 同步；由上层在解锁后设置）。
+    device_id: String,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl Vault {
@@ -47,7 +56,13 @@ impl Vault {
             index_path,
             index,
             mk: Zeroizing::new(*mk),
+            device_id: String::new(),
         })
+    }
+
+    /// 设置向量时钟本机设备位（同步引擎初始化后调用）。
+    pub fn set_device_id(&mut self, device_id: &str) {
+        self.device_id = device_id.to_string();
     }
 
     fn index_key(mk: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
@@ -62,9 +77,18 @@ impl Vault {
         Self::derive_key(&self.mk, &format!("fsk/{folder_id}"))
     }
 
-    fn fskey(&self, folder_id: u64, file_id: u64) -> [u8; KEY_LEN] {
+    /// 文件密钥：同步文件用索引内 FSKey 覆盖，本机文件按 MK 派生（docs/05-02 §3.1）。
+    fn fskey(&self, folder_id: u64, file_id: u64) -> Result<[u8; KEY_LEN], &'static str> {
+        if let Some(hex) = self.index.file_fskey(file_id)? {
+            let k = vault_crypto::hex_decode(&hex).ok_or("bad fskey hex")?;
+            let arr: [u8; KEY_LEN] = k.as_slice().try_into().map_err(|_| "bad fskey len")?;
+            return Ok(arr);
+        }
         let fsk = self.fsk(folder_id);
-        *hkdf_sha256_derive(&fsk, format!("fskey/{file_id}").as_bytes())
+        Ok(*hkdf_sha256_derive(
+            &fsk,
+            format!("fskey/{file_id}").as_bytes(),
+        ))
     }
 
     fn save_index(&self) -> Result<(), &'static str> {
@@ -183,6 +207,7 @@ impl Vault {
 
         self.index
             .add_file_with_id(file_id, folder_id, &name, size, &tokens)?;
+        self.index.bump_vc(file_id, &self.device_id).ok();
         self.save_index()?;
         Ok(file_id)
     }
@@ -190,7 +215,7 @@ impl Vault {
     /// 流式解密导出（F-02）：逐块 GCM 校验 + 整文件 SHA-256 终验。
     pub fn export_file(&self, file_id: u64, dest: &Path) -> Result<(), &'static str> {
         let folder = self.index.file_folder(file_id)?;
-        let fskey = self.fskey(folder, file_id);
+        let fskey = self.fskey(folder, file_id)?;
         let rd = ContainerReader::open(&self.container_path(file_id), &self.fsk(folder))?;
         rd.export_to(dest, &fskey)
     }
@@ -227,7 +252,14 @@ impl Vault {
     /// 安全擦除（F-03，docs/05-02 §4.3）：容器整体删除（密文+密钥材料同灭），
     /// secure=true 时删除前单次覆写（介质兜底；SSD 上为单次覆写语义）。
     pub fn delete_file(&mut self, file_id: u64, secure: bool) -> Result<(), &'static str> {
+        // 删除前快取向量时钟并自增本机位作墓碑（使删除在时钟上支配原版本，docs/05-03 §6.2）
+        let mut vc = self.index.file_vc(file_id).unwrap_or_default();
+        if !self.device_id.is_empty() {
+            let next = vc.get(&self.device_id).copied().unwrap_or(0) + 1;
+            vc.insert(self.device_id.clone(), next);
+        }
         self.index.remove_file(file_id)?;
+        self.index.record_tombstone(file_id, vc);
         let cpath = self.container_path(file_id);
         self.save_index()?;
         if secure {
@@ -250,6 +282,12 @@ impl Vault {
     }
 
     pub fn delete_folder(&mut self, folder_id: u64, secure: bool) -> Result<usize, &'static str> {
+        // 递归收集受影响文件，逐个留墓碑（删除语义同步到对端）
+        for id in self.index.files_under(folder_id) {
+            if let Ok(vc) = self.index.file_vc(id) {
+                self.index.record_tombstone(id, vc);
+            }
+        }
         let ids = self.index.remove_folder(folder_id)?;
         self.save_index()?;
         for id in &ids {
@@ -301,6 +339,159 @@ impl Vault {
         let file_id = self.index.consume_share(share_id, token)?;
         self.save_index()?;
         self.export_file(file_id, dest)
+    }
+
+    // ==== P3 同步支撑（docs/05-03 §五）====
+
+    /// 摄取同步来的文件：密文块已按序写入 `part`（对端原样密文），装配容器并登记。
+    /// FSKey 覆盖与向量时钟随条目入索引；密文块在本机不解密、不重加密。
+    #[allow(clippy::too_many_arguments)]
+    pub fn ingest_remote(
+        &mut self,
+        file_id: u64,
+        folder_id: u64,
+        name: &str,
+        size: u64,
+        modified_ms: u64,
+        meta: crate::container::FileMeta,
+        part: &Path,
+        fskey_hex: &str,
+        vc: std::collections::BTreeMap<String, u64>,
+    ) -> Result<(), &'static str> {
+        if self.index.file_folder(file_id).is_ok() {
+            return Err("duplicate file id");
+        }
+        let cpath = self.container_path(file_id);
+        assemble(&cpath, part, meta, &self.fsk(folder_id))?;
+        let tokens = tokenize(name);
+        self.index.add_remote_file(
+            file_id,
+            folder_id,
+            name,
+            size,
+            modified_ms,
+            fskey_hex,
+            vc,
+            &tokens,
+        )?;
+        self.save_index()
+    }
+
+    /// 同步清单：条目元数据 + 每文件密文块哈希列表（从容器元数据直接取，docs/05-03 §5.1）。
+    /// 墓碑以 deletedMs 标记的清单条目形态包含在内（删除语义同步）。
+    pub fn sync_manifest(&self) -> Result<String, &'static str> {
+        let mut files = self.index.manifest_files();
+        for f in files.iter_mut() {
+            let id = f["id"].as_u64().unwrap_or(0);
+            let folder = self.index.file_folder(id)?;
+            let rd = ContainerReader::open(&self.container_path(id), &self.fsk(folder))?;
+            f["chunks"] = serde_json::json!(rd
+                .meta
+                .chunks
+                .iter()
+                .map(|c| serde_json::json!({"hash": c.hash, "offset": c.offset, "len": c.len}))
+                .collect::<Vec<_>>());
+            f["noncePrefix"] = serde_json::json!(rd.meta.nonce_prefix);
+            f["fileSha"] = serde_json::json!(rd.meta.file_sha256);
+            f["createdMs"] = serde_json::json!(rd.meta.created_ms);
+        }
+        // 墓碑条目（无块清单）
+        let mut tombs = self.index.manifest_tombstones();
+        for t in tombs.iter_mut() {
+            t["chunks"] = serde_json::json!([]);
+        }
+        files.extend(tombs);
+        serde_json::to_string(&files).map_err(|_| "json serialize failed")
+    }
+
+    /// 读取密文块（对端请求的块序号），返回密文原样字节。
+    pub fn read_chunk_ct(&self, file_id: u64, chunk_index: usize) -> Result<Vec<u8>, &'static str> {
+        let folder = self.index.file_folder(file_id)?;
+        let rd = ContainerReader::open(&self.container_path(file_id), &self.fsk(folder))?;
+        rd.read_ct(chunk_index)
+    }
+
+    /// 待同步文件的 FSKey 原始字节（本机派生或索引内覆盖），E2E 信道携带给对端。
+    pub fn fskey_bytes_for(&self, file_id: u64) -> Result<[u8; KEY_LEN], &'static str> {
+        let folder = self.index.file_folder(file_id)?;
+        self.fskey(folder, file_id)
+    }
+
+    /// 文件是否存在（同步计划判定用）。
+    pub fn has_file(&self, file_id: u64) -> bool {
+        self.index.file_folder(file_id).is_ok()
+    }
+
+    /// 同步容器与索引内 FSKey 覆盖的 hex 形式（冲突副本登记用）。
+    pub fn fskey_hex_for(&self, file_id: u64) -> Result<String, &'static str> {
+        Ok(vault_crypto::hex_encode(&self.fskey_bytes_for(file_id)?))
+    }
+
+    /// 保险箱是否没有任何文件（加入同步组前的一致性检查）。
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    /// 向量时钟并集（同步引擎用；内部保存由调用方 save_index_now 触发）。
+    pub fn merge_vc(
+        &mut self,
+        file_id: u64,
+        remote: &std::collections::BTreeMap<String, u64>,
+    ) -> Result<(), &'static str> {
+        self.index.merge_vc(file_id, remote)
+    }
+
+    /// 立即落盘加密索引（同步引擎在共享槽位上修改后调用）。
+    pub fn save_index_now(&self) -> Result<(), &'static str> {
+        self.save_index()
+    }
+
+    /// 文件最近修改时间（同步删除保护窗口判定）。
+    pub fn file_modified(&self, file_id: u64) -> Result<u64, &'static str> {
+        self.index.file_modified(file_id)
+    }
+
+    /// 整文件密文域校验：逐块 GCM 解密 + 密文哈希 + 明文 SHA-256 终验（同步接收后调用）。
+    pub fn verify_file(&self, file_id: u64) -> Result<(), &'static str> {
+        let folder = self.index.file_folder(file_id)?;
+        let fskey = self.fskey(folder, file_id)?;
+        let rd = ContainerReader::open(&self.container_path(file_id), &self.fsk(folder))?;
+        rd.verify(&fskey)
+    }
+
+    /// 将既有文件另存为冲突副本（复制容器 + 新登记；时钟 = 对端时钟 ∪ 本机时钟，本机位 +1）。
+    pub fn save_conflict_copy(
+        &mut self,
+        file_id: u64,
+        remote_vc: std::collections::BTreeMap<String, u64>,
+    ) -> Result<u64, &'static str> {
+        let folder = self.index.file_folder(file_id)?;
+        let name = self.index.file_name(file_id)?;
+        let size = self.index.file_size(file_id)?;
+        let modified = self.index.file_modified(file_id)?;
+        let fskey_hex = self.fskey_hex_for(file_id)?;
+        let local_vc = self.index.file_vc(file_id).unwrap_or_default();
+        let src = self.container_path(file_id);
+        let new_id = self.index.peek_next_id();
+        let dest = self.container_path(new_id);
+        std::fs::copy(&src, &dest).map_err(|_| "cannot copy container")?;
+        let own_next = local_vc.get(&self.device_id).copied().unwrap_or(0) + 1;
+        let mut merged = remote_vc;
+        for (dev, cnt) in local_vc {
+            let slot = merged.entry(dev).or_insert(0);
+            if cnt > *slot {
+                *slot = cnt;
+            }
+        }
+        merged.insert(self.device_id.clone(), own_next);
+        // 冲突副本命名：<原名>.conflict-<时间戳>（docs/05-03 §6.2 多版本保留）
+        let stamped = format!("{name}.conflict-{}", now_ms());
+        let tokens = crate::index::tokenize(&stamped);
+        self.index.add_remote_file(
+            new_id, folder, &stamped, size, modified, &fskey_hex, merged, &tokens,
+        )?;
+        self.save_index()?;
+        Ok(new_id)
     }
 }
 
@@ -430,7 +621,7 @@ mod tests {
         let id = v.import_file(&src, 0).expect("import");
         let cpath = v.container_path(id);
         let fsk = v.fsk(0);
-        let fskey = v.fskey(0, id);
+        let fskey = v.fskey(0, id).expect("fskey");
         println!("id={id} fsk={:02x?} fskey={:02x?}", &fsk[..4], &fskey[..4]);
         let rd = crate::container::ContainerReader::open(&cpath, &fsk).expect("open");
         println!("chunks={} size={}", rd.meta.chunks.len(), rd.meta.size);

@@ -6,6 +6,7 @@
 //! - `service`   密钥封装体系业务逻辑（P1-2/3/4）
 //! - `session`   会话与暴力破解防护（P1-5）
 //! - `platform_store` 平台安全存储（KEK_bio 托管，P1-3）
+//! - `p2p_service` P2P 同步服务编排（P3）
 //! - `ffi`       C ABI 导出
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(warnings)]
@@ -13,6 +14,7 @@
 
 mod ffi;
 mod keystore;
+mod p2p_service;
 mod platform_store;
 mod service;
 mod session;

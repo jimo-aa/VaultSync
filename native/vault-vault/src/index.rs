@@ -3,6 +3,12 @@
 //! 持久化形态：整体 JSON → AEAD 加密（索引密钥 = HKDF(MK,"vault-index")）落盘；
 //! 搜索令牌 = HMAC-SHA256(搜索密钥=HKDF(MK,"search"), 归一化词)（SSE-lite，docs/05-02 §4.4）。
 //! 明文索引只在内存，落盘前序列化缓冲用后即弃。
+//!
+//! P3 同步扩展（向后兼容，serde default）：
+//! - `FileEntry.fskey`：同步文件的 FSKey 覆盖（hex）。本机导入为 None（按 MK 派生）；对端同步来
+//!   的文件携带发送方 FSKey（仅经 E2E 信道），使密文块可原样复用（加密块=同步块=传输块）。
+//! - `FileEntry.vc`：per-file 向量时钟（device_id → 计数），因果识别与冲突判定（docs/05-03 §6.2）。
+//! - `IndexData.tombstones`：删除墓碑，同步时传播删除语义（删除优先，docs/05-03 §6.2）。
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
@@ -29,6 +35,19 @@ pub struct FileEntry {
     pub tags: Vec<String>,
     pub created_ms: u64,
     pub modified_ms: u64,
+    /// FSKey 覆盖（hex，32B）。None = 按 MK 派生（本机导入）；Some = 同步来的文件。
+    #[serde(default)]
+    pub fskey: Option<String>,
+    /// 向量时钟（device_id → 计数）。
+    #[serde(default)]
+    pub vc: BTreeMap<String, u64>,
+}
+
+/// 删除墓碑：同步时向对端传播"该 id 已删除"及其因果历史。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Tombstone {
+    pub deleted_ms: u64,
+    pub vc: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,6 +67,9 @@ struct IndexData {
     shares: BTreeMap<u64, Share>,
     /// token_hex -> file_ids
     search: HashMap<String, BTreeSet<u64>>,
+    /// 已删除文件墓碑（同步删除语义）
+    #[serde(default)]
+    tombstones: BTreeMap<u64, Tombstone>,
     next_id: u64,
 }
 
@@ -124,6 +146,7 @@ impl VaultIndex {
             files: BTreeMap::new(),
             shares: BTreeMap::new(),
             search: HashMap::new(),
+            tombstones: BTreeMap::new(),
             next_id: 1,
         };
         d.folders.insert(
@@ -180,6 +203,8 @@ impl VaultIndex {
                 tags: Vec::new(),
                 created_ms: now,
                 modified_ms: now,
+                fskey: None,
+                vc: BTreeMap::new(),
             },
         );
         self.index_tokens(id, tokens);
@@ -275,6 +300,8 @@ impl VaultIndex {
                 tags: Vec::new(),
                 created_ms: now,
                 modified_ms: now,
+                fskey: None,
+                vc: BTreeMap::new(),
             },
         );
         self.index_tokens(id, tokens);
@@ -450,6 +477,210 @@ impl VaultIndex {
         }
         sh.opens += 1;
         Ok(sh.file_id)
+    }
+
+    // ==== P3 同步支撑（docs/05-03）====
+
+    /// 登记同步来的文件：固定 id（对端权威）、FSKey 覆盖与向量时钟随条目入索引。
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_remote_file(
+        &mut self,
+        id: u64,
+        folder: u64,
+        name: &str,
+        size: u64,
+        modified_ms: u64,
+        fskey_hex: &str,
+        vc: BTreeMap<String, u64>,
+        tokens: &[String],
+    ) -> Result<(), &'static str> {
+        if !self.d.folders.contains_key(&folder) {
+            return Err("folder not found");
+        }
+        if name.is_empty() {
+            return Err("invalid file name");
+        }
+        if self.d.files.contains_key(&id) {
+            return Err("duplicate file id");
+        }
+        let now = now_ms();
+        // 摄取完成即把墓碑清掉（该 id 复活）
+        self.d.tombstones.remove(&id);
+        if id >= self.d.next_id {
+            self.d.next_id = id + 1;
+        }
+        self.d.files.insert(
+            id,
+            FileEntry {
+                folder,
+                name: name.to_string(),
+                size,
+                tags: Vec::new(),
+                created_ms: modified_ms,
+                modified_ms,
+                fskey: Some(fskey_hex.to_string()),
+                vc,
+            },
+        );
+        self.index_tokens(id, tokens);
+        let _ = now;
+        Ok(())
+    }
+
+    /// 本机内容变更后自增本机向量时钟位。
+    pub fn bump_vc(&mut self, id: u64, device: &str) -> Result<(), &'static str> {
+        let c = self.d.files.get_mut(&id).ok_or("file not found")?;
+        let next = c.vc.get(device).copied().unwrap_or(0) + 1;
+        c.vc.insert(device.to_string(), next);
+        Ok(())
+    }
+
+    /// 向量时钟并集（逐位取 max）。
+    pub fn merge_vc(
+        &mut self,
+        id: u64,
+        remote: &BTreeMap<String, u64>,
+    ) -> Result<(), &'static str> {
+        let c = self.d.files.get_mut(&id).ok_or("file not found")?;
+        for (dev, cnt) in remote {
+            let slot = c.vc.entry(dev.clone()).or_insert(0);
+            if *cnt > *slot {
+                *slot = *cnt;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn file_vc(&self, id: u64) -> Result<BTreeMap<String, u64>, &'static str> {
+        self.d
+            .files
+            .get(&id)
+            .map(|f| f.vc.clone())
+            .ok_or("file not found")
+    }
+
+    pub fn file_fskey(&self, id: u64) -> Result<Option<String>, &'static str> {
+        self.d
+            .files
+            .get(&id)
+            .map(|f| f.fskey.clone())
+            .ok_or("file not found")
+    }
+
+    pub fn file_size(&self, id: u64) -> Result<u64, &'static str> {
+        self.d
+            .files
+            .get(&id)
+            .map(|f| f.size)
+            .ok_or("file not found")
+    }
+
+    pub fn file_modified(&self, id: u64) -> Result<u64, &'static str> {
+        self.d
+            .files
+            .get(&id)
+            .map(|f| f.modified_ms)
+            .ok_or("file not found")
+    }
+
+    pub fn peek_next_id(&self) -> u64 {
+        self.d.next_id
+    }
+
+    pub fn tombstones(&self) -> BTreeMap<u64, Tombstone> {
+        self.d.tombstones.clone()
+    }
+
+    pub fn record_tombstone(&mut self, id: u64, vc: BTreeMap<String, u64>) {
+        self.d.tombstones.insert(
+            id,
+            Tombstone {
+                deleted_ms: now_ms(),
+                vc,
+            },
+        );
+    }
+
+    /// 全量清单（同步用）：文件条目 + 墓碑，JSON 数组。
+    pub fn sync_manifest(&self) -> String {
+        let files: Vec<serde_json::Value> = self
+            .d
+            .files
+            .iter()
+            .map(|(id, f)| {
+                serde_json::json!({
+                    "id": id, "folder": f.folder, "name": f.name, "size": f.size,
+                    "modifiedMs": f.modified_ms, "vc": f.vc,
+                })
+            })
+            .collect();
+        let tombs: Vec<serde_json::Value> = self
+            .d
+            .tombstones
+            .iter()
+            .map(|(id, t)| serde_json::json!({"id": id, "deletedMs": t.deleted_ms, "vc": t.vc}))
+            .collect();
+        serde_json::to_string(&serde_json::json!({"files": files, "tombstones": tombs}))
+            .unwrap_or_else(|_| "{\"files\":[],\"tombstones\":[]}".to_string())
+    }
+
+    /// 清单文件条目（serde Value 形式，供编排层补块清单字段）。
+    pub fn manifest_files(&self) -> Vec<serde_json::Value> {
+        self.d
+            .files
+            .iter()
+            .map(|(id, f)| {
+                serde_json::json!({
+                    "id": id, "folder": f.folder, "name": f.name, "size": f.size,
+                    "modifiedMs": f.modified_ms, "vc": f.vc,
+                })
+            })
+            .collect()
+    }
+
+    /// 墓碑清单条目（deletedMs 标记删除，docs/05-03 删除同步语义）。
+    pub fn manifest_tombstones(&self) -> Vec<serde_json::Value> {
+        self.d
+            .tombstones
+            .iter()
+            .map(|(id, t)| {
+                serde_json::json!({
+                    "id": id, "folder": 0, "name": "", "size": 0,
+                    "modifiedMs": t.deleted_ms, "vc": t.vc, "deletedMs": t.deleted_ms,
+                })
+            })
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.d.files.is_empty()
+    }
+
+    /// 递归列出文件夹下全部文件 id（含子文件夹）。
+    pub fn files_under(&self, folder: u64) -> Vec<u64> {
+        let mut stack = vec![folder];
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(cur) = stack.pop() {
+            if !seen.insert(cur) {
+                continue;
+            }
+            stack.extend(
+                self.d
+                    .folders
+                    .iter()
+                    .filter(|(_, f)| f.parent == cur)
+                    .map(|(k, _)| *k),
+            );
+            out.extend(
+                self.d
+                    .files
+                    .iter()
+                    .filter(|(_, f)| f.folder == cur)
+                    .map(|(k, _)| *k),
+            );
+        }
+        out
     }
 
     /// 序列化 + AEAD 加密（索引密钥由调用方提供）。

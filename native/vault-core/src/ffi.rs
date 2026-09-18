@@ -554,6 +554,198 @@ pub unsafe extern "C" fn vault_core_vault_share_open(
     run().err().unwrap_or(OK)
 }
 
+// ==== P3 P2P 同步（docs/05-03、docs/08）====
+// 全部接口仅主空间会话可用；JSON 输出需 vault_core_free_string 释放。
+// 同步为阻塞调用（完成或超时返回）；远程销毁在引擎监听线程异步执行。
+
+/// 生成一次性配对邀请码。返回 JSON {"code","fingerprint","deviceId","port"}。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_pair_begin(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine.pair_begin().map_err(|_| ERR_INTERNAL)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 连接新设备完成配对（PSK = 邀请码派生）。返回 JSON {"peerId","name"}。
+///
+/// # Safety
+/// `handle` 有效；`addr`、`code` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_pair_join(
+    handle: *mut Session,
+    addr: *const c_char,
+    code: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let a = unsafe { cstr(addr) }?;
+        let code = unsafe { cstr(code) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine.pair_join(a, code).map_err(|_| ERR_IO)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 发起一次增量同步（阻塞直至完成）。返回摘要 JSON。
+///
+/// # Safety
+/// `handle` 有效；`addr` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_sync(
+    handle: *mut Session,
+    addr: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let a = unsafe { cstr(addr) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine.sync_with(a).map_err(|_| ERR_IO)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 发起一次经中继的增量同步（发起端）。返回摘要 JSON。
+///
+/// # Safety
+/// `handle` 有效；`relay`、`room` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_sync_relay(
+    handle: *mut Session,
+    relay: *const c_char,
+    room: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let r = unsafe { cstr(relay) }?;
+        let room = unsafe { cstr(room) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine.sync_via_relay(r, room).map_err(|_| ERR_IO)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 作为响应端经中继接入一次（阻塞至本轮同步结束；冒烟/无直连场景用）。
+///
+/// # Safety
+/// `handle` 有效；`relay`、`room` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_serve_relay(
+    handle: *mut Session,
+    relay: *const c_char,
+    room: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let session = unsafe { &*handle };
+        let r = unsafe { cstr(relay) }?;
+        let room = unsafe { cstr(room) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine.serve_relay_connection(r, room).map_err(|_| ERR_IO)
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// P2P 状态（本机身份 / 对端 / 事件 / 武装的销毁）。返回 JSON。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_status(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        Ok(engine.status())
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 向对端发送远程销毁指令（签名 + 延迟秒数；0 = 到达即执行）。
+///
+/// # Safety
+/// `handle` 有效；`addr`、`target` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_destroy_arm(
+    handle: *mut Session,
+    addr: *const c_char,
+    target: *const c_char,
+    delay_secs: u64,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let a = unsafe { cstr(addr) }?;
+        let t = unsafe { cstr(target) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine
+            .destroy_arm_remote(a, t, delay_secs)
+            .map_err(|_| ERR_IO)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 取消本机已武装的延迟销毁。1 = 有任务被取消，0 = 无。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_destroy_cancel(handle: *mut Session) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    match crate::p2p_service::p2p_engine(session) {
+        Ok(e) => i32::from(e.destroy_cancel()),
+        Err(e) => map_err(&e),
+    }
+}
+
+/// 冲突解决：保留 keep_id，删除 drop_id（secure=1 先覆写）。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_conflict_resolve(
+    handle: *mut Session,
+    keep_id: i64,
+    drop_id: i64,
+    secure: i32,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let session = unsafe { &*handle };
+        session
+            .with_vault(|v| {
+                v.delete_file(drop_id as u64, secure != 0)
+                    .map_err(CoreError::Internal)
+            })
+            .map_err(|e| map_err(&e))?;
+        let _ = keep_id;
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

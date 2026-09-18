@@ -126,7 +126,8 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
                 mk: Zeroizing::new(mk),
                 vault_path: path.to_path_buf(),
                 disguise,
-                vault: std::sync::Mutex::new(None),
+                vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                p2p: std::sync::Mutex::new(None),
             })
         }
         Some(_) => Err(CoreError::Internal(
@@ -156,7 +157,8 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
                 mk: Zeroizing::new(mk),
                 vault_path: path.to_path_buf(),
                 disguise: false,
-                vault: std::sync::Mutex::new(None),
+                vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                p2p: std::sync::Mutex::new(None),
             })
         }
         Some(_) => Err(CoreError::Internal(

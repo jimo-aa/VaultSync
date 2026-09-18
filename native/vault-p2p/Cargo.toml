@@ -8,3 +8,12 @@ license.workspace = true
 [dependencies]
 vault-crypto = { path = "../vault-crypto" }
 vault-audit = { path = "../vault-audit" }
+snow = "0.10.0"
+ed25519-dalek = "3.0.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+vault-vault = { version = "0.1.0", path = "../vault-vault" }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

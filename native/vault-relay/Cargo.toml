@@ -1,0 +1,13 @@
+# 自建中继服务端（docs/08）：零信任转发节点——不落盘、不解密、不持有密钥。
+# 官方中继与自建中继协议一致；自建部署可用 token 限制接入。
+[package]
+name = "vault-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vault-relay"
+path = "src/main.rs"
+
+[dependencies]

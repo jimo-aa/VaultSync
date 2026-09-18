@@ -46,6 +46,21 @@ typedef ShareCreateC = Pointer<Utf8> Function(Pointer<Void>, Int64, Uint64, Uint
 typedef ShareCreateDart = Pointer<Utf8> Function(Pointer<Void>, int, int, int);
 typedef ShareOpenC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
 typedef ShareOpenDart = int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>);
+// P3 P2P 同步（每函数独立 typedef）
+typedef P2pPairBeginC = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pPairBeginDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pPairJoinC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef P2pPairJoinDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef P2pSyncDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pStatusDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pDestroyArmC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Uint64);
+typedef P2pDestroyArmDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
 
 late int Function() _hello;
 late Pointer<Utf8> Function() _version;
@@ -70,6 +85,11 @@ late DeleteFileDart _vaultDeleteFile;
 late TagsDart _vaultSetTags;
 late ShareCreateDart _vaultShareCreate;
 late ShareOpenDart _vaultShareOpen;
+late P2pPairBeginDart _p2pPairBegin;
+late P2pPairJoinDart _p2pPairJoin;
+late P2pSyncDart _p2pSync;
+late P2pStatusDart _p2pStatus;
+late P2pDestroyArmDart _p2pDestroyArm;
 
 Pointer<Utf8> n(String s) => s.toNativeUtf8();
 String str(Pointer<Utf8> p) => p.toDartString();
@@ -149,6 +169,14 @@ void main(List<String> args) {
       lib.lookupFunction<ShareCreateC, ShareCreateDart>('vault_core_vault_share_create');
   _vaultShareOpen =
       lib.lookupFunction<ShareOpenC, ShareOpenDart>('vault_core_vault_share_open');
+  _p2pPairBegin =
+      lib.lookupFunction<P2pPairBeginC, P2pPairBeginDart>('vault_core_p2p_pair_begin');
+  _p2pPairJoin =
+      lib.lookupFunction<P2pPairJoinC, P2pPairJoinDart>('vault_core_p2p_pair_join');
+  _p2pSync = lib.lookupFunction<P2pSyncC, P2pSyncDart>('vault_core_p2p_sync');
+  _p2pStatus = lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
+  _p2pDestroyArm =
+      lib.lookupFunction<P2pDestroyArmC, P2pDestroyArmDart>('vault_core_p2p_destroy_arm');
 
   check(_hello() == 0, 'hello 自检');
   final v = _version();
@@ -303,8 +331,118 @@ void main(List<String> args) {
   calloc.free(sep);
   calloc.free(badTok);
 
-  dir2.deleteSync(recursive: true);
-  calloc.free(pw);
+  // ==== P3 P2P 同步：双保险箱、真实 TCP、配对/增量/删除/远程销毁 ====
+  // A 侧用全新保险箱（避免与 B 的 id 空间冲突触发批量冲突路径；独立保险箱配对
+  // 的 id 冲突语义见 LOG.md 已知限制）
+  final dirB = Directory.systemTemp.createTempSync('vaultsync_p3_');
+  final vaultA2 = '${dirB.path}${Platform.pathSeparator}dev-a.vsvb';
+  final vpA2 = n(vaultA2);
+  check(_create(vpA2, pw, 0) == 0, 'P3 创建设备 A 同步保险箱');
+  final sA = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultA2, 'pw-1234');
+  check(sA.status == 0 && sA.handle != 0, 'P3 解锁设备 A');
+  final vaultB = '${dirB.path}${Platform.pathSeparator}dev-b.vsvb';
+  final vpB = n(vaultB);
+  check(_create(vpB, pw, 0) == 0, 'P3 创建第二台设备保险箱');
+  final sb = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultB, 'pw-1234');
+  check(sb.status == 0 && sb.handle != 0, 'P3 解锁设备 B');
+  final hA = Pointer<Void>.fromAddress(sA.handle);
+  final hB = Pointer<Void>.fromAddress(sb.handle);
+
+  // B 出邀请码；A 用错误码被拒
+  var invJson = _p2pPairBegin(hB);
+  check(invJson.address != 0, 'P3 B 生成邀请码');
+  final inv1 = invJson.toDartString();
+  _free(invJson);
+  final portMatch = RegExp(r'"port":(\d+)').firstMatch(inv1);
+  final fpMatch = RegExp(r'"fingerprint":"([0-9a-f ]+)"').firstMatch(inv1);
+  check(portMatch != null && fpMatch != null, 'P3 邀请码 JSON 含端口与指纹');
+  final fpB = fpMatch!.group(1)!;
+  check(fpB.length == 19 && fpB.split(' ').length == 4, 'P3 指纹为 4 组 4 字符（UI 核验格式）');
+  final addrB = n('127.0.0.1:${portMatch!.group(1)!}');
+  check(_p2pPairJoin(hA, addrB, n('wrong-code')).address == 0, 'P3 错误邀请码被拒');
+  invJson = _p2pPairBegin(hB);
+  final code2 =
+      RegExp(r'"code":"([0-9a-f]+)"').firstMatch(invJson.toDartString())!.group(1)!;
+  _free(invJson);
+  final joined = _p2pPairJoin(hA, addrB, n(code2));
+  if (joined.address == 0) {
+    final evA = _p2pStatus(hA);
+    final evB = _p2pStatus(hB);
+    print('INFO  A status=${evA.address != 0 ? evA.toDartString() : "null"}');
+    if (evA.address != 0) _free(evA);
+    print('INFO  B status=${evB.address != 0 ? evB.toDartString() : "null"}');
+    if (evB.address != 0) _free(evB);
+  }
+  check(joined.address != 0 && joined.toDartString().contains('"peerId":"vd-'),
+      'P3 正确邀请码配对成功');
+  _free(joined);
+
+  // B 导入文件 → A 发起同步拉取 → A 导出验证
+  final p3src = '${dirB.path}${Platform.pathSeparator}sync-me.txt';
+  File(p3src).writeAsBytesSync(utf8.encode('P3 incremental sync payload! ' * 3000));
+  check(_vaultImport(hB, n(p3src), 0, idOut) == 0, 'P3 B 导入待同步文件');
+  final p3FileId = idOut.value;
+  final syncJson = _p2pSync(hA, addrB);
+  if (syncJson.address == 0) {
+    final evA = _p2pStatus(hA);
+    final evB = _p2pStatus(hB);
+    print('INFO  syncA ev=${evA.address != 0 ? evA.toDartString() : "null"}');
+    if (evA.address != 0) _free(evA);
+    print('INFO  syncB ev=${evB.address != 0 ? evB.toDartString() : "null"}');
+    if (evB.address != 0) _free(evB);
+  }
+  check(syncJson.address != 0, 'P3 A 发起增量同步');
+  final syncSummary = syncJson.address != 0 ? syncJson.toDartString() : '';
+  if (syncJson.address != 0) _free(syncJson);
+  check(syncSummary.contains('"pulled":[[$p3FileId]]') ||
+      RegExp('"pulled":\\[$p3FileId\\]').hasMatch(syncSummary), 'P3 同步拉取 1 个文件');
+  final p3exp = '${dirB.path}${Platform.pathSeparator}sync-out.txt';
+  check(_vaultExport(hA, p3FileId, n(p3exp)) == 0, 'P3 A 导出同步来的文件');
+  check(
+      File(p3exp).readAsBytesSync().length == File(p3src).readAsBytesSync().length,
+      'P3 同步内容长度一致');
+
+  // 状态：双方互见对端
+  final stA = _p2pStatus(hA);
+  check(stA.address != 0 && stA.toDartString().contains('"peers":[{'), 'P3 A 状态含对端');
+  if (stA.address != 0) _free(stA);
+
+  // 删除同步：A 删除文件 → A 发起同步 → B 收签名删除指令
+  // （B 侧文件在 24h 误删保护窗口内 → 留加密冲突副本 `原名.conflict-<ts>`，docs/05-03 §6.2）
+  check(_vaultDeleteFile(hA, p3FileId, 0) == 0, 'P3 A 删除已同步文件');
+  final sync2 = _p2pSync(hA, addrB);
+  check(sync2.address != 0 && sync2.toDartString().contains('"deleted":[$p3FileId]'),
+      'P3 删除指令同步');
+  if (sync2.address != 0) _free(sync2);
+  // B 在自身线程异步应用删除指令（含保护窗口冲突副本），留出处理时间再核对
+  sleep(const Duration(milliseconds: 2000));
+  final lstB = _vaultList(hB, 0);
+  check(lstB.address != 0 && !lstB.toDartString().contains('"name":"sync-me.txt"'),
+      'P3 B 侧原文件条目已移除');
+  check(lstB.address != 0 && lstB.toDartString().contains('conflict-'),
+      'P3 B 侧保留误删保护冲突副本');
+  if (lstB.address != 0) _free(lstB);
+
+  // 远程销毁：A 对 B 下发延迟 1s 销毁 → B 保险箱文件被擦除
+  final stB = _p2pStatus(hB);
+  final devBId =
+      RegExp(r'"deviceId":"(vd-[0-9a-f]+)"').firstMatch(stB.toDartString())!.group(1)!;
+  _free(stB);
+  final armJson = _p2pDestroyArm(hA, addrB, n(devBId), 1);
+  check(armJson.address != 0 && armJson.toDartString().contains('"sent":true'),
+      'P3 远程销毁指令已签发送达');
+  if (armJson.address != 0) _free(armJson);
+  sleep(const Duration(milliseconds: 1800));
+  check(!File(vaultB).existsSync(), 'P3 延迟销毁到期后 B 保险箱文件被擦除');
+
+  _lock(hA);
+  _lock(hB);
+  calloc.free(vpA2);
+  calloc.free(vpB);
+  calloc.free(addrB);
+  dirB.deleteSync(recursive: true);
+
+  dir2.deleteSync(recursive: true);  calloc.free(pw);
   calloc.free(newPw);
   calloc.free(badOld);
   calloc.free(vp);

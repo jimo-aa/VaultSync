@@ -1,7 +1,7 @@
 //! 会话与暴力破解防护（docs/05-01 §六、原型延时策略）。
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
@@ -15,8 +15,10 @@ pub struct Session {
     pub(crate) vault_path: PathBuf,
     /// 伪装空间会话（docs/05-01 §六 Dummy 语义）：操作只作用于伪空间自身的数据目录。
     pub(crate) disguise: bool,
-    /// 保险箱引擎懒加载（索引密钥派生自 MK，会话销毁即随之销毁）。
-    pub(crate) vault: Mutex<Option<Vault>>,
+    /// 保险箱引擎槽位（Arc 共享给 P2P 引擎的监听线程；索引密钥派生自 MK，会话销毁即随之销毁）。
+    pub(crate) vault: Arc<Mutex<Option<Vault>>>,
+    /// P2P 同步引擎（P3，按会话惰性创建；锁定即随会话销毁）。
+    pub(crate) p2p: Mutex<Option<std::sync::Arc<vault_p2p::P2pEngine>>>,
 }
 
 impl Session {

@@ -1,6 +1,6 @@
 //! KDF：Argon2id（KEK_pwd 派生）与 HKDF-SHA256（FSK / verifier 派生）。
 //! 参数与语义见 docs/05-01 §3.2、docs/README 术语表。
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -49,12 +49,15 @@ pub fn argon2id_derive(
     salt: &[u8; 16],
     params: &Argon2Params,
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, &'static str> {
-    let a2 = Argon2::new(
-        Algorithm::Argon2id,
-        Version::V0x13,
-        Params::new(params.m_kib, params.t, params.p, Some(KEY_LEN))
-            .map_err(|_| "invalid argon2 params")?,
-    );
+    // builder 形式与 Params::new 等价（m/t/p/输出长度），语义不变
+    let a2params = ParamsBuilder::new()
+        .m_cost(params.m_kib)
+        .t_cost(params.t)
+        .p_cost(params.p)
+        .output_len(KEY_LEN)
+        .build()
+        .map_err(|_| "invalid argon2 params")?;
+    let a2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, a2params);
     let mut okm = Zeroizing::new([0u8; KEY_LEN]);
     a2.hash_password_into(password.as_bytes(), salt, okm.as_mut())
         .map_err(|_| "argon2id derive failed")?;

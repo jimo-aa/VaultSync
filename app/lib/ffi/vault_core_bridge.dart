@@ -95,6 +95,28 @@ abstract class VaultCoreBridge {
 
   int vaultShareOpen(Object sessionHandle, int shareId, String token, String dest);
 
+  // ==== P3 P2P 同步（JSON 结果为引擎分配的字符串，由桥接层释放）====
+
+  String? p2pPairBegin(Object sessionHandle);
+
+  String? p2pPairJoin(Object sessionHandle, String addr, String code);
+
+  String? p2pSync(Object sessionHandle, String addr);
+
+  String? p2pSyncRelay(Object sessionHandle, String relay, String room);
+
+  int p2pServeRelay(Object sessionHandle, String relay, String room);
+
+  String? p2pStatus(Object sessionHandle);
+
+  String? p2pDestroyArm(
+      Object sessionHandle, String addr, String target, int delaySecs);
+
+  int p2pDestroyCancel(Object sessionHandle);
+
+  int p2pConflictResolve(
+      Object sessionHandle, int keepId, int dropId, {bool secure = false});
+
   /// 按平台返回动态库文件名。
   static String get libraryName {
     if (Platform.isWindows) return 'vault_core.dll';
@@ -134,6 +156,20 @@ typedef _ShareCreateC = Pointer<Utf8> Function(
     Pointer<Void>, Int64, Uint64, Uint32);
 typedef _ShareOpenC = Int32 Function(
     Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
+// P3 P2P 同步（每函数独立 typedef：参数个数不同严禁复用）
+typedef _P2pPairBeginC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _P2pPairJoinC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef _P2pSyncRelayC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _P2pServeRelayC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _P2pDestroyArmC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Uint64);
+typedef _P2pConflictResolveC = Int32 Function(
+    Pointer<Void>, Int64, Int64, Int32);
 
 class VaultCoreBridgeFfi implements VaultCoreBridge {
   VaultCoreBridgeFfi._(this._lib) {
@@ -182,6 +218,32 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
         Pointer<Utf8> Function(Pointer<Void>, int, int, int)>('vault_core_vault_share_create');
     _vaultShareOpen = _lib.lookupFunction<_ShareOpenC, int Function(
         Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)>('vault_core_vault_share_open');
+    _p2pPairBegin = _lib
+        .lookupFunction<_P2pPairBeginC, Pointer<Utf8> Function(Pointer<Void>)>(
+            'vault_core_p2p_pair_begin');
+    _p2pPairJoin = _lib.lookupFunction<_P2pPairJoinC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>(
+        'vault_core_p2p_pair_join');
+    _p2pSync = _lib
+        .lookupFunction<_P2pSyncC, Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>)>(
+            'vault_core_p2p_sync');
+    _p2pSyncRelay = _lib.lookupFunction<_P2pSyncRelayC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>(
+        'vault_core_p2p_sync_relay');
+    _p2pServeRelay = _lib.lookupFunction<_P2pServeRelayC,
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>(
+        'vault_core_p2p_serve_relay');
+    _p2pStatus = _lib
+        .lookupFunction<_P2pStatusC, Pointer<Utf8> Function(Pointer<Void>)>(
+            'vault_core_p2p_status');
+    _p2pDestroyArm = _lib.lookupFunction<_P2pDestroyArmC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int)>(
+        'vault_core_p2p_destroy_arm');
+    _p2pDestroyCancel = _lib
+        .lookupFunction<_HandleFnC, int Function(Pointer<Void>)>(
+            'vault_core_p2p_destroy_cancel');
+    _p2pConflictResolve = _lib.lookupFunction<_P2pConflictResolveC,
+        int Function(Pointer<Void>, int, int, int)>('vault_core_p2p_conflict_resolve');
     _version = version;
     _freeString = freeString;
   }
@@ -211,6 +273,16 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultSetTags;
   late final Pointer<Utf8> Function(Pointer<Void>, int, int, int) _vaultShareCreate;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>) _vaultShareOpen;
+  late final Pointer<Utf8> Function(Pointer<Void>) _p2pPairBegin;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pPairJoin;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>) _p2pSync;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pSyncRelay;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pServeRelay;
+  late final Pointer<Utf8> Function(Pointer<Void>) _p2pStatus;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int)
+      _p2pDestroyArm;
+  late final int Function(Pointer<Void>) _p2pDestroyCancel;
+  late final int Function(Pointer<Void>, int, int, int) _p2pConflictResolve;
 
   Pointer<Utf8> _toNative(String s) => s.toNativeUtf8();
 
@@ -456,6 +528,84 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       calloc.free(d);
     }
   }
+
+  @override
+  String? p2pPairBegin(Object sessionHandle) =>
+      _takeJson(_p2pPairBegin(_handle(sessionHandle)));
+
+  @override
+  String? p2pPairJoin(Object sessionHandle, String addr, String code) {
+    final a = _toNative(addr);
+    final c = _toNative(code);
+    try {
+      return _takeJson(_p2pPairJoin(_handle(sessionHandle), a, c));
+    } finally {
+      calloc.free(a);
+      calloc.free(c);
+    }
+  }
+
+  @override
+  String? p2pSync(Object sessionHandle, String addr) {
+    final a = _toNative(addr);
+    try {
+      return _takeJson(_p2pSync(_handle(sessionHandle), a));
+    } finally {
+      calloc.free(a);
+    }
+  }
+
+  @override
+  String? p2pSyncRelay(Object sessionHandle, String relay, String room) {
+    final r = _toNative(relay);
+    final rm = _toNative(room);
+    try {
+      return _takeJson(_p2pSyncRelay(_handle(sessionHandle), r, rm));
+    } finally {
+      calloc.free(r);
+      calloc.free(rm);
+    }
+  }
+
+  @override
+  int p2pServeRelay(Object sessionHandle, String relay, String room) {
+    final r = _toNative(relay);
+    final rm = _toNative(room);
+    try {
+      return _p2pServeRelay(_handle(sessionHandle), r, rm);
+    } finally {
+      calloc.free(r);
+      calloc.free(rm);
+    }
+  }
+
+  @override
+  String? p2pStatus(Object sessionHandle) =>
+      _takeJson(_p2pStatus(_handle(sessionHandle)));
+
+  @override
+  String? p2pDestroyArm(
+      Object sessionHandle, String addr, String target, int delaySecs) {
+    final a = _toNative(addr);
+    final t = _toNative(target);
+    try {
+      return _takeJson(_p2pDestroyArm(_handle(sessionHandle), a, t, delaySecs));
+    } finally {
+      calloc.free(a);
+      calloc.free(t);
+    }
+  }
+
+  @override
+  int p2pDestroyCancel(Object sessionHandle) =>
+      _p2pDestroyCancel(_handle(sessionHandle));
+
+  @override
+  int p2pConflictResolve(Object sessionHandle, int keepId, int dropId,
+      {bool secure = false}) {
+    return _p2pConflictResolve(
+        _handle(sessionHandle), keepId, dropId, secure ? 1 : 0);
+  }
 }
 
 /// 桩实现：原生库不可用时（纯 Dart 测试 / CI 无 DLL）。
@@ -538,5 +688,42 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
 
   @override
   int vaultShareOpen(Object sessionHandle, int shareId, String token, String dest) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pPairBegin(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pPairJoin(Object sessionHandle, String addr, String code) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pSync(Object sessionHandle, String addr) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pSyncRelay(Object sessionHandle, String relay, String room) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pServeRelay(Object sessionHandle, String relay, String room) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pDestroyArm(Object sessionHandle, String addr, String target, int delaySecs) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pDestroyCancel(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pConflictResolve(Object sessionHandle, int keepId, int dropId,
+          {bool secure = false}) =>
       throw UnsupportedError('stub: native not linked');
 }
