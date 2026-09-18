@@ -60,3 +60,19 @@
 - 隐患：文件在文件夹间移动尚未实现（需换 FSK 重加密元数据并重建倒排），P3-4 同步或 P4-2 UI 需要时补。
 - 测试基线：Rust 46 项 + Dart 2 项 + FFI 冒烟 41 项断言全绿；analyze/clippy/fmt 干净；Windows 构建通过。
 - 最小保险箱页已接入 `/vault`（列表/导入/导出/重命名/擦除/搜索/分享/新建文件夹）；完整资源管理器仍按面板归 P4-2。
+
+## 2026-09-18 · P3 完成：P2P 同步（设备身份 / 配对 / 增量同步 / 冲突 / 远程销毁 / 中继）
+
+- **P3-1 身份与信道**：每保险箱独立 Ed25519 设备身份，种子 AEAD 于 `HKDF(MK,"p2p-ident")` 落 `<vault>.data/p2p/device.id`；信道用 snow（Noise XX / XXpsk3）+ 应用层单调序号防重放（docs/08 §4.1）；消息按 u32 长度分帧、内部切 60000B Noise 帧（**踩坑**：snow 单帧明文上限 = 65535−16B tag，超限 `write_message` 报 Overflow）。**设计偏移（ADR 建议补录）**：未引入完整 libp2p 栈——DCUtR/Rendezvous/Circuit Relay v2 依赖树过重且桌面首版收益低；改用 snow + ed25519-dalek + x25519-dalek 自研轻量帧协议（workspace 依赖仍单向无环，`vault-p2p → vault-vault` 为新增边，与 docs/01 依赖表偏差已记录）。
+- **踩坑（重要）**：Ed25519 标量不能直接当 X25519 私钥——ed25519-dalek `to_scalar()` 输出未钳位，与 snow 的 X25519 期望不一致，表现为握手成功但 `get_remote_static` 与推导公钥不等。最终方案：X25519 私钥由种子 SHA-256 确定性派生，Hello 携带 X25519 公钥并对 `hh‖x25519` 签名，把信道静态密钥绑定到长期身份（三重核验：签名 / 信道静态密钥一致 / device_id 派生自公钥）。
+- **踩坑**：非阻塞 `TcpListener` accept 出的连接**继承非阻塞标志**，响应端 `read_exact` 立即 WouldBlock，被 `map_err` 误报成 "eof"——握手看似随机失败。修复：handle_conn 前 `set_nonblocking(false)`。
+- **踩坑（serde）**：清单 JSON 用 camelCase（`noncePrefix`/`fileSha`），`ManifestItem` 起初没加 `#[serde(rename_all="camelCase")]`，`nonce_prefix` 静默反序列化为 0 → 接收端按错误 nonce 解密必败。教训：**跨端 JSON 结构必须 rename_all 显式对齐**，`#[serde(default)]` 会把字段名错配吞成默认值而非报错。最小复现方法：绕开网络直接"清单+fskey 手动解密块 0"。
+- **密钥体系决策（LOG 存档）**：跨设备同步采用**独立保险箱 + 逐文件 FSKey E2E 携带**——密文块原样端到端传输（加密块=同步块=传输块），接收端把随文件传来的 FSKey（仅经信道子密钥 `HKDF(hh,"fskey")` 封装）存入自身加密索引（`FileEntry.fskey` 覆盖）。双方 MK 各自独立，不违背"MK 永不出引擎"；已知代价：同 id 冲突语义依赖双方 id 空间，两台各自用过一段时间的保险箱直接配对会触发批量冲突副本（真实部署建议新设备先配对再导入，或 P4 引入"加入保险箱"语义时重审）。
+- **删除同步语义**：删除前墓碑向量时钟自增本机位（保证支配原版本，否则等钟删除会被判为"复活"）；24h 误删保护窗口内删除在幸存侧留 `.conflict-<ts>` 加密副本（docs/05-03 §6.2）。冲突副本命名曾漏加后缀导致冒烟误报，已修。
+- **远程销毁**：指令签名体 `vsync-destroy:{target}:{delay_ms}:{ts}`，接收端验签+目标核验；delay=0 到达即执行（docs/08 §四"销毁除外"语义），>0 武装倒计时可 `destroy_cancel`；擦除回调由 vault-core 注入（删保险箱头部+数据目录）。
+- **中继**：`vault-relay` 极简服务端——`VSR1 <room>` 房间配对后双向透明转发；不落盘、不解密、日志仅 FNV(房间)前缀+字节计量（docs/08 §二）。响应端也需主动拨出（`serve_relay_connection`），发起/响应两端经同一房间在中继对接后再跑完整 E2E 握手，中继只见不透明 Noise 帧。**协议偏移**：与 libp2p Circuit Relay v2 不兼容，官方中继接入（或改信令兼容层）留后续。
+- **测试竞态教训**：发起端 `sync_with` 在送出指令后即返回，响应端在自身线程异步应用（删除/副本/落盘）——Dart 侧断言前必须留等待窗口，冒烟一度误报"B 未删除"。
+- 隐患：会话锁定（Session 销毁）后 P2P 引擎随之销毁、监听停止——设备离线即不可达，自动后台监听（解锁前）留 P4-4/P4-6 事件流设计时定夺。
+- 隐患：同 id 双端"原地编辑"操作尚不存在（引擎只有导入/删除/重命名），并发分叉的端到端冲突用例暂以 dominates 单测+接收覆盖路径代替；P4 文件编辑落地后补真实冲突 E2E。
+- 隐患：cargo test 全量含 P2P 两个 TCP 集成测试，耗时 ~2min（未配对直连拒绝路径有一次 30s 读超时），CI 时长需关注。
+- 测试基线：Rust 61 项（含 P2P 单测 13 + 双引擎 TCP 集成 2）+ Dart 2 项 + FFI 冒烟 61 项断言全绿；analyze/clippy/fmt 干净；Windows debug 构建通过。
