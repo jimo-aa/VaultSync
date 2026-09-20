@@ -1,0 +1,838 @@
+{
+  "@@locale": "en",
+  "@devicesPageDestroyArmedSub": {
+    "placeholders": {
+      "target": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "@devicesPageDestroyConfirmError": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageDestroyConfirmInput": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageDestroySentTo": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageDestroyTarget": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageHeaderSubCounts": {
+    "placeholders": {
+      "peers": {
+        "type": "int"
+      },
+      "online": {
+        "type": "int"
+      }
+    }
+  },
+  "@devicesPageNotifDestroyCancelFailed": {
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
+  },
+  "@devicesPagePairFailed": {
+    "placeholders": {
+      "e": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPagePeerDeviceName": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageSelfSub": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      },
+      "port": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageUnpairFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageUnpairSub": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageUnpaired": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@importDialogImportCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@settingsMinutes": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@settingsStrengthHint": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "@settingsVersionValue": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "@syncPageConflictBanner": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageConflictCopyId": {
+    "placeholders": {
+      "id": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageConflictPeerGone": {
+    "placeholders": {
+      "stamp": {
+        "type": "String"
+      }
+    }
+  },
+  "@syncPageConflictStoredAt": {
+    "placeholders": {
+      "stamp": {
+        "type": "String"
+      }
+    }
+  },
+  "@syncPageEventsRecent": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPagePendingCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSelfPeers": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "peers": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryConflicts": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryDeleted": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryLine": {
+    "placeholders": {
+      "pulled": {
+        "type": "int"
+      },
+      "pushed": {
+        "type": "int"
+      },
+      "deleted": {
+        "type": "int"
+      },
+      "conflicts": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryMerged": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryPulled": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryPushed": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageCreatedFolder": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageDetailSub": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      },
+      "kind": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageExportCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageExportFailedItem": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageExportedMany": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      },
+      "dir": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageExportedTo": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportFailed": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportFileError": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportFolderUnsupported": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportedCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPagePreviewSub": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPagePreviewTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageSearching": {
+    "placeholders": {
+      "query": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageSelectedCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageShareIdAndToken": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      },
+      "token": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageTagsSub": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageUnnamedWithId": {
+    "placeholders": {
+      "id": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeFolderFailed": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyDone": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyFailed": {
+    "placeholders": {
+      "failed": {
+        "type": "int"
+      },
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyFilesSub": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyFoldersSub": {
+    "placeholders": {
+      "folders": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyNote": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "appName": "VaultSync",
+  "decoyCancel": "Cancel",
+  "decoyClose": "Close",
+  "decoyCreate": "Create decoy space",
+  "decoyCreateFailed": "Could not create: {e}",
+  "decoyCreating": "Creating…",
+  "decoyHintMissing": "No decoy space yet: turning the switch on asks for a decoy password and creates one (separate file, separate MK).",
+  "decoyHintReady": "Decoy space ready: the decoy password opens it on the lock screen (turning the switch off stops accepting that password).",
+  "decoyMismatch": "The decoy passwords do not match",
+  "decoyNote": "The decoy space is a separate encrypted container, so it accepts files normally as cover. The real vault refuses every call made from the decoy space, and which space you entered is never recorded (only that the padlock door was entered).",
+  "decoyPwConfirmLabel": "Confirm decoy password",
+  "decoyPwHint": "Must differ from the master password · used under duress",
+  "decoyPwLabel": "Decoy password",
+  "decoySub": "Separate vault file · separate MK · zero sharing with the real space",
+  "decoyTitleNew": "Set up decoy entry",
+  "decoyTitleReset": "Reset decoy password",
+  "devicesPageAddrHint": "host:port, e.g. 192.168.1.10:9100",
+  "devicesPageBadgeLocal": "This device",
+  "devicesPageBadgePaired": "Paired",
+  "devicesPageCancel": "Cancel",
+  "devicesPageCancelDestroy": "Cancel wipe",
+  "devicesPageConfirmUnpair": "Confirm unbind",
+  "devicesPageConnectPair": "Connect and pair",
+  "devicesPageDelay10s": "10 s",
+  "devicesPageDelay10sSub": "Leaves a window to undo a mistake",
+  "devicesPageDelay5m": "5 minutes",
+  "devicesPageDelay5mSub": "Long delay · can be cancelled at any time",
+  "devicesPageDelay60s": "60 s",
+  "devicesPageDelay60sSub": "Can be cancelled with \"Cancel wipe\" on the Devices page",
+  "devicesPageDelayImmediate": "Immediately",
+  "devicesPageDelayImmediateSub": "The command enters the signalling queue as soon as it is issued",
+  "devicesPageDestroyArmed": "Remote wipe armed",
+  "devicesPageDestroyArmedSub": "Target {target} · {seconds}s remaining",
+  "devicesPageDestroyConfirmError": "Type the confirmation word \"{word}\" exactly",
+  "devicesPageDestroyConfirmInput": "Type \"{word}\" to confirm",
+  "devicesPageDestroyConfirmWord": "destroy",
+  "devicesPageDestroyDelay": "Wipe delay",
+  "devicesPageDestroyNote": "A wipe command signed with this device's key is issued to the target (high-priority signalling queue). If the device is offline, it runs the next time it comes online — before any other message is handled.",
+  "devicesPageDestroySendFailed": "Could not send the remote wipe command",
+  "devicesPageDestroySent": "Wipe command sent",
+  "devicesPageDestroySentTo": "Remote wipe command sent to {name}",
+  "devicesPageDestroyTarget": "Target: {name}",
+  "devicesPageDone": "Done",
+  "devicesPageEmptySub": "Unlock the vault first, or use \"Pair a new device\" to set up your first encrypted channel.",
+  "devicesPageEmptyTitle": "No device data yet",
+  "devicesPageFingerprint": "Fingerprint",
+  "devicesPageFingerprintConfirm": "Fingerprints match — pair",
+  "devicesPageGenerateInvite": "Generate invite code",
+  "devicesPageHeaderSub": "Sync with paired devices over an end-to-end encrypted channel",
+  "devicesPageHeaderSubCounts": "{peers} paired devices · {online} online",
+  "devicesPageInviteCode": "One-time invite code",
+  "devicesPageInviteCodePasteHint": "Paste the invite code from the other device",
+  "devicesPageInviteCodeValid": "One-time invite code (valid for 10 minutes)",
+  "devicesPageInviteFailed": "Could not generate the invite code",
+  "devicesPageInviteNote": "The invite code is valid for 10 minutes and expires once used; it carries no sensitive information.",
+  "devicesPageIssueDestroy": "Issue wipe command",
+  "devicesPageKvDevice": "Device",
+  "devicesPageLastSyncJustNow": "Last synced just now",
+  "devicesPageLocalFingerprint": "This device's fingerprint",
+  "devicesPageLocalFingerprintShort": "Local fingerprint",
+  "devicesPageManualAdd": "Add manually",
+  "devicesPageManualHint": "Enter the peer address and the one-time invite code generated by the other device:",
+  "devicesPageManualMode": "Enter manually",
+  "devicesPageMitmNote": "Mismatched fingerprints mean the channel may have been hijacked (MITM) — refuse to pair.",
+  "devicesPageNeedUnlock": "Unlock the vault first",
+  "devicesPageNoPeersSub": "Use \"Pair a new device\" in the top right to scan a QR code or enter an invite code and establish the channel.",
+  "devicesPageNoPeersTitle": "No paired devices yet",
+  "devicesPageNotifDestroyCancelFailed": "Could not cancel the wipe (error code {code})",
+  "devicesPageNotifDestroyCancelled": "Remote wipe cancelled",
+  "devicesPageNotifNeedUnlock": "Unlock the vault first",
+  "devicesPageNotifPaired": "Paired · added to the node list",
+  "devicesPageOffline": "Offline",
+  "devicesPageOnline": "Online",
+  "devicesPagePairDone": "Pairing complete",
+  "devicesPagePairDoneSub": "A long-term encrypted channel is in place · both node lists were updated · recorded in the audit log",
+  "devicesPagePairFailed": "Pairing error: {e}",
+  "devicesPagePairFailedInvalid": "Pairing failed: invalid address or invite code",
+  "devicesPagePairNew": "Pair a new device",
+  "devicesPagePeerAddr": "Peer device address",
+  "devicesPagePeerDevice": "Peer device",
+  "devicesPagePeerDeviceName": "Peer device: {name}",
+  "devicesPageQrHint": "Use \"Generate invite code\" below to create a one-time invite code and QR code, which the other device connects with under Pair → Enter manually.",
+  "devicesPageRefresh": "Refresh",
+  "devicesPageRemoteWipe": "Remote wipe",
+  "devicesPageSelfRole": "This device · primary node",
+  "devicesPageSelfSub": "{id} · port {port}",
+  "devicesPageSending": "Sending…",
+  "devicesPageStepChoose": "Choose a method",
+  "devicesPageStepDone": "Pairing done",
+  "devicesPageStepVerify": "Verify fingerprints",
+  "devicesPageThisComputer": "This computer",
+  "devicesPageTitle": "Devices",
+  "devicesPageUnbind": "Unbind",
+  "devicesPageUnpairFailed": "Could not unbind: {err}",
+  "devicesPageUnpairNote": "Unpairing removes only this device's record of the peer: the other device and its data are unaffected, and no local file is deleted. Re-establishing the channel means exchanging a new one-time invite code and verifying fingerprints again.",
+  "devicesPageUnpairSub": "Remove the trust record for \"{name}\"",
+  "devicesPageUnpairTitle": "Unpair",
+  "devicesPageUnpaired": "Unpaired from \"{name}\"",
+  "devicesPageVerifyHint": "Compare these fingerprints (public-key hashes) on both devices:",
+  "devicesPageWizardSub": "Exchange public keys · verify fingerprints · confirm on both sides",
+  "importDialogCancel": "Cancel",
+  "importDialogDropHere": "Drop files here",
+  "importDialogHint": "Multi-select · any file type",
+  "importDialogImport": "Import",
+  "importDialogImportCount": "Import {n} files",
+  "importDialogNoFiles": "No files selected yet",
+  "importDialogNote": "Ciphertext thumbnails and the full-text index are built right after import (plaintext never touches disk).",
+  "importDialogOrClick": ", or click to choose",
+  "importDialogRemove": "Remove",
+  "importDialogSub": "Streamed reads · CDC chunking · AES-256-GCM per chunk",
+  "importDialogTitle": "Import files",
+  "lockScreenBindManage": "Bind / manage",
+  "lockScreenBiometric": "Biometric unlock",
+  "lockScreenBusy": "Working…",
+  "lockScreenCooldown": "Too many attempts — brute-force protection engaged · retry in {remaining}",
+  "lockScreenCreateAndUnlock": "Create and unlock",
+  "lockScreenFirstRunNote": "First launch · master password ≥{n} characters with mixed character types; the MK is generated by the CSPRNG, so changing the password only re-wraps it",
+  "lockScreenForgotPassword": "Forgot master password?",
+  "lockScreenHintWithAttempts": "{hint} (attempt {n})",
+  "lockScreenPwEnterHint": "Enter master password",
+  "lockScreenPwSetHint": "Set a master password (at least {n} characters)",
+  "lockScreenPwStrengthOk": "{label} · acceptable (KEK derived with Argon2id)",
+  "lockScreenPwStrengthWeak": "{label} · needs at least {n} characters and mixed character types",
+  "lockScreenPwSuggestMix": "Mix upper and lower case and add a digit or symbol",
+  "lockScreenPwTooShort": "At least {n} characters",
+  "lockScreenPwWrongAttempts": "Wrong master password (attempt {n})",
+  "lockScreenRecoveryInfo": "The MK is generated by the CSPRNG and cannot be derived back from your password, so it cannot be recovered from memory. Resetting requires authorization from a paired device (P5), or use the disguise entrance to enter the decoy space.",
+  "lockScreenTagline": "YOUR DATA · EVERYWHERE · ENCRYPTED",
+  "lockScreenTitle": "VaultSync Vault",
+  "lockScreenUnlock": "Unlock",
+  "navDevices": "Devices",
+  "navSecurity": "Security",
+  "navSettings": "Settings",
+  "navStego": "Stego",
+  "navSync": "Sync",
+  "navVault": "Vault",
+  "settingsAbout": "About",
+  "settingsAboutSub": "Version and design docs",
+  "settingsAppearance": "Appearance & language",
+  "settingsAppearanceSub": "Theme · Language",
+  "settingsAutoLockSub": "Locks the vault after an idle timeout",
+  "settingsAutoLockTitle": "Auto-lock",
+  "settingsAutoSync": "Enable auto-sync",
+  "settingsAutoSyncSub": "Selective sync: folders, size, network, devices (refined in P5)",
+  "settingsBioBound": "Bound · Windows Hello fingerprint",
+  "settingsBioBoundDone": "Biometrics bound · MK_wrap_bio appended",
+  "settingsBioHello": "Windows Hello fingerprint",
+  "settingsBioHelloSub": "The key is held by the platform secure enclave; this app never touches biometric data",
+  "settingsBioLoading": "Reading…",
+  "settingsBioNote": "After a secure enclave reset the biometric copy is invalidated automatically; the master password path is unaffected.",
+  "settingsBioTitle": "Biometrics",
+  "settingsBioUnbound": "Not bound · master password always available",
+  "settingsBioUnboundDone": "Biometrics unbound",
+  "settingsCancel": "Cancel",
+  "settingsChange": "Change",
+  "settingsChangePw": "Change master password",
+  "settingsChangePwDialogSub": "Rewraps MK only · no data re-encryption",
+  "settingsChangePwDone": "Master password changed · MK rewrapped, no data re-encryption",
+  "settingsChangePwNote": "The change regenerates MK_wrap_pwd with a fresh salt; paired devices and ciphertext are unaffected.",
+  "settingsChangePwSub": "Done in milliseconds, with no effect on encrypted files or sync",
+  "settingsConfirmChange": "Confirm change",
+  "settingsConfirmPw": "Confirm new master password",
+  "settingsCurrentPw": "Current master password",
+  "settingsDecoyAllow": "Allow decoy password",
+  "settingsDecoyAllowSub": "The decoy password opens the decoy vault on the lock screen; real vault calls are always refused",
+  "settingsDecoySub": "Enter a duress password to open a separate decoy vault",
+  "settingsDecoyTitle": "Decoy entry",
+  "settingsDesignDocLabel": "Design doc",
+  "settingsEngineLabel": "Engine",
+  "settingsForgotPw": "Forgot master password",
+  "settingsForgotPwSub": "Secure reset flow, requires approval from a paired device (P5)",
+  "settingsIdleTimeout": "Idle timeout",
+  "settingsIdleTimeoutSub": "Lock after inactivity (0 = never)",
+  "settingsLanguage": "Language",
+  "settingsLanguageEn": "English",
+  "settingsLanguageSub": "Interface language · applies immediately",
+  "settingsLanguageSystem": "Follow system",
+  "settingsLanguageZh": "中文",
+  "settingsMinutes": "{n} min",
+  "settingsNeedUnlock": "Unlock the vault first",
+  "settingsNever": "Never",
+  "settingsNewPw": "New master password",
+  "settingsOpenDocsFailed": "Could not open the docs link",
+  "settingsPwMismatch": "The new passwords do not match",
+  "settingsPwSection": "Master password",
+  "settingsPwSectionSub": "Changing the password only rewraps the master key; data is never re-encrypted",
+  "settingsStrengthHint": "{label} · Argon2id-derived KEK",
+  "settingsSub": "Security · Lock · Sync · Appearance",
+  "settingsSubmitting": "Submitting…",
+  "settingsSyncOff": "Auto-sync is off",
+  "settingsSyncOn": "Auto-sync is on · manual trigger once turned off",
+  "settingsSyncTitle": "Sync policy",
+  "settingsTheme": "Theme",
+  "settingsThemeDark": "Dark (default)",
+  "settingsThemeLight": "Light",
+  "settingsThemeSub": "Dark is the default · matches the prototype's data-theme",
+  "settingsThemeSystem": "Follow system",
+  "settingsTitle": "Settings",
+  "settingsVersionLabel": "Version",
+  "settingsVersionValue": "VaultSync {version} · end-to-end encrypted multi-device sync",
+  "settingsViewDocs": "Open online docs",
+  "shellAllFiles": "All files",
+  "shellLockNow": "Lock now",
+  "shellMarkAllRead": "Mark all read",
+  "shellNavSectionControl": "Control",
+  "shellNavSectionSpace": "Space",
+  "shellNoNotifications": "No notifications",
+  "shellNotifications": "Notifications",
+  "shellPlaceholderSub": "In development — see docs/09-开发任务面板.md",
+  "shellSearchHint": "Search files, tags, full text…",
+  "shellSubDevices": "Sync with paired devices over an end-to-end encrypted channel",
+  "shellSubSecurity": "Audit · detection · incident response",
+  "shellSubSettings": "Security · auto-lock · sync · appearance",
+  "shellSubStego": "AES-256-GCM ciphertext embedded in image LSBs",
+  "shellSubSync": "Incremental sync · only differing chunks are transferred",
+  "shellTitleDevices": "Devices",
+  "shellTitleSecurity": "Security",
+  "shellTitleSettings": "Settings",
+  "shellTitleStego": "Steganography",
+  "shellTitleSync": "Sync",
+  "shellTitleVault": "Vault",
+  "shellVersionTagline": "V0.2 · Desktop",
+  "stateBioFailed": "Biometric unlock failed",
+  "stateBioNotBound": "Biometrics are not bound yet (bind them in Settings)",
+  "stateBioUnsupported": "Biometrics are unavailable on this platform — use the master password",
+  "stateConflictDropped": "Discarded the conflict copy",
+  "stateConflictKept": "Kept the copy and replaced the original · {name}",
+  "stateConflictResolveFailed": "Could not resolve the conflict: {err}",
+  "stateCooldownHint": "Too many attempts — wait for the cooldown to end",
+  "stateCooldownSeconds": "Too many attempts — retry in {n}s",
+  "stateCreateFailed": "Could not create the vault: {e}",
+  "stateDeviceLoadFailed": "Could not read the device status",
+  "stateDeviceNeedUnlock": "Unlock the vault first",
+  "stateNeedUnlock": "Unlock the vault first",
+  "statePwMin4": "Password must be at least 4 characters",
+  "statePwRequired": "Enter your master password",
+  "statePwTooShort": "Master password must be at least {n} characters",
+  "statePwTooWeak": "Too weak: mix upper and lower case and add digits or symbols",
+  "statePwWrong": "Wrong password",
+  "stateStrengthFair": "Fair",
+  "stateStrengthGood": "Good",
+  "stateStrengthStrong": "Strong",
+  "stateStrengthWeak": "Weak",
+  "stateSyncDone": "Sync complete: pulled {pulled}, pushed {pushed}",
+  "stateSyncDoneWithConflicts": "Sync complete: pulled {pulled}, pushed {pushed}, conflicts {conflicts}",
+  "stateSyncFailed": "Sync failed",
+  "stateSyncRelayFailed": "Relay sync failed",
+  "stateUnknownDevice": "Unknown device",
+  "syncPageAddrHint": "host:port, e.g. 192.168.1.10:9100",
+  "syncPageCancel": "Cancel",
+  "syncPageChunkDetails": "Chunk details",
+  "syncPageChunkDetailsNote": "The per-chunk transfer matrix (encrypted chunk = sync chunk = transport chunk) is wired to real data in P5.",
+  "syncPageConflictBanner": "{n} conflicting files found — conflict copies are kept under .conflict-<timestamp> and can be handled in the vault list.",
+  "syncPageConflictCopyId": "Conflict copy #{id}",
+  "syncPageConflictNote": "When the two sides diverge the engine keeps a conflict copy automatically (the local version is saved as <name>.conflict-<timestamp>). \"Keep the copy\" renames it back and replaces the peer version; \"Discard the copy\" deletes only the copy — both are written to the audit log.",
+  "syncPageConflictPeerGone": "Copy kept at {stamp} · the peer version is gone",
+  "syncPageConflictSection": "Conflict handling",
+  "syncPageConflictStoredAt": "Copy kept at {stamp}",
+  "syncPageDialogNote": "Sync is chunk-level and incremental: only chunks that differ are transferred, and chunks already present are reused after a strong-hash check.",
+  "syncPageDialogSub": "Direct link or your own relay · Noise-encrypted channel",
+  "syncPageDirect": "Direct",
+  "syncPageDropCopy": "Discard the copy",
+  "syncPageEngineNote": "The engine has no transfer queue or per-chunk progress callback yet: the stats, events and conflicts on this page are real data, and the chunk matrix will be wired in once the engine provides callbacks (P5).",
+  "syncPageEvents": "Sync events",
+  "syncPageEventsRecent": "Latest {n}",
+  "syncPageHeaderSub": "Incremental sync · only differing chunks are transferred (CDC)",
+  "syncPageKeepCopy": "Keep the copy",
+  "syncPageLatestSummary": "Latest sync summary",
+  "syncPageLive": "Live",
+  "syncPageNeverSynced": "Not synced yet",
+  "syncPageNoConflicts": "No conflict copies · both sides match",
+  "syncPageNoEvents": "No events yet · they are recorded here after you run \"Sync now\"",
+  "syncPagePeerAddr": "Peer address",
+  "syncPagePendingCount": "{n} to resolve",
+  "syncPageRefresh": "Refresh",
+  "syncPageRelay": "Relay",
+  "syncPageRelayAddr": "Relay address",
+  "syncPageRoomHint": "Shared room ID",
+  "syncPageRoomId": "Room ID",
+  "syncPageScanning": "Scanning…",
+  "syncPageSelfPeers": "This device {name} · {peers} paired",
+  "syncPageStartSync": "Start sync",
+  "syncPageStatConflicts": "Conflicts to resolve",
+  "syncPageStatDeleted": "Items deleted",
+  "syncPageStatPulledFiles": "Files pulled",
+  "syncPageStatPushedFiles": "Files pushed",
+  "syncPageStatus": "Sync status",
+  "syncPageStatusIdle": "Idle · no transfer in progress",
+  "syncPageStatusRunning": "Syncing · chunk-level transfer in progress (single blocking session)",
+  "syncPageSummaryConflicts": "Conflicts {n}",
+  "syncPageSummaryDeleted": "Deleted {n}",
+  "syncPageSummaryLine": "Pulled {pulled} · pushed {pushed} · deleted {deleted} · conflicts {conflicts}",
+  "syncPageSummaryMerged": "Merged {n}",
+  "syncPageSummaryPulled": "Pulled {n}",
+  "syncPageSummaryPushed": "Pushed {n}",
+  "syncPageSyncNow": "Sync now",
+  "syncPageSyncing": "Syncing…",
+  "syncPageTitle": "Sync",
+  "vaultPageAlgoLabel": "Algorithm",
+  "vaultPageAlgoValue": "AES-256-GCM · FastCDC 64KB",
+  "vaultPageBackToFolder": "Back to current folder",
+  "vaultPageBurn": "Burn after read",
+  "vaultPageCancel": "Cancel",
+  "vaultPageCipherThumb": "Ciphertext thumbnail",
+  "vaultPageClose": "Close",
+  "vaultPageConflict": "Conflict",
+  "vaultPageCreate": "Create",
+  "vaultPageCreatedFolder": "Created \"{name}\" · subkey FSK derived",
+  "vaultPageDetailSub": "{size} · {kind}",
+  "vaultPageDetailThumb": "Encrypted thumbnail · decrypted preview after unlock",
+  "vaultPageDone": "Done",
+  "vaultPageEmptyFolderSub": "Drop files here, or use the button below to import (chunked encryption is automatic).",
+  "vaultPageEmptyFolderTitle": "This folder is empty",
+  "vaultPageEmptySearchSub": "Try another keyword, or go back to the folder and search again.",
+  "vaultPageEmptySearchTitle": "No matches",
+  "vaultPageEmptyVaultSub": "Imported files are chunk-encrypted automatically; keys stay on this device only.",
+  "vaultPageEmptyVaultTitle": "This vault is empty",
+  "vaultPageEncInfo": "Encryption details",
+  "vaultPageExport": "Export",
+  "vaultPageExportCount": "Export {n} files",
+  "vaultPageExportFailedItem": "Export failed for {name}: {error}",
+  "vaultPageExportNoneSelected": "Nothing in the selection can be exported",
+  "vaultPageExportToHere": "Export here",
+  "vaultPageExportedMany": "Exported {done}/{total} files to {dir}",
+  "vaultPageExportedTo": "Exported to {path} · final SHA-256 check passed",
+  "vaultPageFileLabel": "File",
+  "vaultPageFolder": "Folder",
+  "vaultPageFsKeyLabel": "File key",
+  "vaultPageFsKeyValue": "FSKey · randomly generated",
+  "vaultPageImport": "Import files",
+  "vaultPageImportFailed": "Import failed: {name}",
+  "vaultPageImportFileError": "{name}: {error}",
+  "vaultPageImportFolderUnsupported": "{name} (folders cannot be imported yet)",
+  "vaultPageImportedCount": "Imported {n} files · CDC-chunked and encrypted into the vault",
+  "vaultPageKindArchive": "Archive",
+  "vaultPageKindDoc": "Document",
+  "vaultPageKindFile": "File",
+  "vaultPageKindFolder": "Encrypted folder",
+  "vaultPageKindImage": "Image",
+  "vaultPageKindVideo": "Video",
+  "vaultPageMkdirHint": "e.g. Contracts",
+  "vaultPageMkdirSub": "Each folder derives its own subkey FSK",
+  "vaultPageMkdirTitle": "New encrypted folder",
+  "vaultPageNameLabel": "Name",
+  "vaultPageNewFolder": "New folder",
+  "vaultPageNoFiles": "No files",
+  "vaultPageNoFilesEmptySub": "This folder is empty — drop files here, or use \"Import files\" below.",
+  "vaultPageNoFilesSub": "No files at this level — open a subfolder on the left, or use \"Import files\" below.",
+  "vaultPageNoSubfolders": "No subfolders",
+  "vaultPageNoTags": "No tags",
+  "vaultPageOpen": "Open",
+  "vaultPagePreview": "Preview",
+  "vaultPagePreviewNote": "The engine exposes no plaintext preview channel (plaintext never leaves the engine layer); export the file to read it.",
+  "vaultPagePreviewSub": "{size} · decrypted inside the unlocked session",
+  "vaultPagePreviewTitle": "Preview · {name}",
+  "vaultPageRename": "Rename",
+  "vaultPageRenameFileSub": "Change the file name in the encrypted metadata",
+  "vaultPageRenameFolderSub": "Change the folder name in the encrypted metadata",
+  "vaultPageRenamed": "Renamed · encrypted metadata updated",
+  "vaultPageSave": "Save",
+  "vaultPageSearching": "Search \"{query}\"",
+  "vaultPageSelectedCount": "{n} selected",
+  "vaultPageShare": "Burn-after-read share",
+  "vaultPageShareFailed": "Could not create the share",
+  "vaultPageShareIdAndToken": "ID: {id}\nToken: {token}",
+  "vaultPageShareNote": "The share expires as soon as the peer opens it with the token; the token cannot be reused.",
+  "vaultPageShareSub": "One-time P2P session · wiped shortly after the peer opens it",
+  "vaultPageShareTokenLabel": "One-time share token (shown once)",
+  "vaultPageSizeLabel": "Size",
+  "vaultPageStatusLabel": "Status",
+  "vaultPageSynced": "Synced",
+  "vaultPageTags": "Tags",
+  "vaultPageTagsHint": "Comma-separated, e.g. work,private",
+  "vaultPageTagsSub": "Manage the tags of \"{name}\"",
+  "vaultPageTagsTitle": "Manage tags",
+  "vaultPageTagsUpdated": "Tags updated",
+  "vaultPageTargetFile": "Target file",
+  "vaultPageTargetFolder": "Target folder",
+  "vaultPageTreeAllFiles": "All files",
+  "vaultPageTreeCurrentPath": "Current path",
+  "vaultPageTreeQuickAccess": "Quick access",
+  "vaultPageTypeLabel": "Type",
+  "vaultPageUnnamed": "Untitled",
+  "vaultPageUnnamedFile": "Untitled file",
+  "vaultPageUnnamedFolder": "Untitled folder",
+  "vaultPageUnnamedWithId": "Untitled-{id}",
+  "vaultPageViewGrid": "Grid",
+  "vaultPageViewList": "List",
+  "vaultPageViewSplit": "Split",
+  "vaultPageWipe": "Secure erase",
+  "vaultPageWipeAll": "Erase all",
+  "vaultPageWipeConfirm": "Erase",
+  "vaultPageWipeCount": "Securely erase {n} files",
+  "vaultPageWipeFileSub": "Destroy the file key FSKey and unlink its chunk list",
+  "vaultPageWipeFolderFailed": "\"{name}\" {error} ({count} files destroyed)",
+  "vaultPageWipeFolderSub": "Recursively destroy the keys and ciphertext of the folder and everything in it",
+  "vaultPageWipeManyDone": "Securely erased {n} items",
+  "vaultPageWipeManyFailed": "Erase finished: {failed}/{n} failed",
+  "vaultPageWipeManyFilesSub": "Destroy the keys of {n} files and delete their ciphertext",
+  "vaultPageWipeManyFoldersSub": "Destroy keys and delete ciphertext ({folders} folders, recursive)",
+  "vaultPageWipeManyNote": "This erases {n} items. It cannot be undone and propagates to every paired device.",
+  "vaultPageWipeManyTitle": "Securely erase selected items",
+  "vaultPageWipeNote": "The erase propagates to every paired device and is written to the audit log.",
+  "vaultPageWiped": "Securely erased",
+  "vsStepsDefaultLabel": "Step {n}",
+  "windowChromeClose": "Close",
+  "windowChromeMaximize": "Maximize",
+  "windowChromeMinimize": "Minimize",
+  "windowChromeRestore": "Restore Down"
+}

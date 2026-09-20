@@ -89,7 +89,14 @@ abstract class VaultCoreBridge {
 
   int vaultDeleteFile(Object sessionHandle, int fileId, {bool secure = true});
 
-  int vaultSetTags(Object sessionHandle, int fileId, List<String> tags);
+  /// 重命名文件夹（根目录不可改名）。
+  int vaultRenameFolder(Object sessionHandle, int folderId, String name);
+
+  /// 递归删除文件夹；成功返回删除的文件数（≥0），失败返回负状态码。
+  int vaultDeleteFolder(Object sessionHandle, int folderId, {bool secure = true});
+
+  /// 设置标签（文件与文件夹通用）。
+  int vaultSetTags(Object sessionHandle, int targetId, List<String> tags);
 
   String? vaultShareCreate(Object sessionHandle, int fileId, int ttlSecs, int maxOpens);
 
@@ -108,6 +115,9 @@ abstract class VaultCoreBridge {
   int p2pServeRelay(Object sessionHandle, String relay, String room);
 
   String? p2pStatus(Object sessionHandle);
+
+  /// 解除与指定设备的配对（幂等：该设备本就不存在亦成功）。
+  int p2pUnpair(Object sessionHandle, String deviceId);
 
   String? p2pDestroyArm(
       Object sessionHandle, String addr, String target, int delaySecs);
@@ -150,7 +160,9 @@ typedef _ImportC = Int32 Function(
     Pointer<Void>, Pointer<Utf8>, Int64, Pointer<Uint64>);
 typedef _ExportC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
 typedef _RenameC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
+typedef _RenameFolderC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
 typedef _DeleteFileC = Int32 Function(Pointer<Void>, Int64, Int32);
+typedef _DeleteFolderC = Int32 Function(Pointer<Void>, Int64, Int32);
 typedef _TagsC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
 typedef _ShareCreateC = Pointer<Utf8> Function(
     Pointer<Void>, Int64, Uint64, Uint32);
@@ -159,6 +171,7 @@ typedef _ShareOpenC = Int32 Function(
 // P3 P2P 同步（每函数独立 typedef：参数个数不同严禁复用）
 typedef _P2pPairBeginC = Pointer<Utf8> Function(Pointer<Void>);
 typedef _P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _P2pUnpairC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _P2pPairJoinC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
@@ -210,8 +223,12 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
         Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_export');
     _vaultRenameFile = _lib.lookupFunction<_RenameC, int Function(
         Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_rename_file');
+    _vaultRenameFolder = _lib.lookupFunction<_RenameFolderC, int Function(
+        Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_rename_folder');
     _vaultDeleteFile = _lib.lookupFunction<_DeleteFileC,
         int Function(Pointer<Void>, int, int)>('vault_core_vault_delete_file');
+    _vaultDeleteFolder = _lib.lookupFunction<_DeleteFolderC,
+        int Function(Pointer<Void>, int, int)>('vault_core_vault_delete_folder');
     _vaultSetTags = _lib.lookupFunction<_TagsC, int Function(
         Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_set_tags');
     _vaultShareCreate = _lib.lookupFunction<_ShareCreateC,
@@ -236,6 +253,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
     _p2pStatus = _lib
         .lookupFunction<_P2pStatusC, Pointer<Utf8> Function(Pointer<Void>)>(
             'vault_core_p2p_status');
+    _p2pUnpair = _lib.lookupFunction<_P2pUnpairC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_p2p_unpair');
     _p2pDestroyArm = _lib.lookupFunction<_P2pDestroyArmC,
         Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int)>(
         'vault_core_p2p_destroy_arm');
@@ -269,7 +288,9 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>) _vaultImport;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultExport;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultRenameFile;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultRenameFolder;
   late final int Function(Pointer<Void>, int, int) _vaultDeleteFile;
+  late final int Function(Pointer<Void>, int, int) _vaultDeleteFolder;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultSetTags;
   late final Pointer<Utf8> Function(Pointer<Void>, int, int, int) _vaultShareCreate;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>) _vaultShareOpen;
@@ -279,6 +300,7 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pSyncRelay;
   late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pServeRelay;
   late final Pointer<Utf8> Function(Pointer<Void>) _p2pStatus;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _p2pUnpair;
   late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int)
       _p2pDestroyArm;
   late final int Function(Pointer<Void>) _p2pDestroyCancel;
@@ -503,10 +525,25 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   @override
-  int vaultSetTags(Object sessionHandle, int fileId, List<String> tags) {
+  int vaultRenameFolder(Object sessionHandle, int folderId, String name) {
+    final n = _toNative(name);
+    try {
+      return _vaultRenameFolder(_handle(sessionHandle), folderId, n);
+    } finally {
+      calloc.free(n);
+    }
+  }
+
+  @override
+  int vaultDeleteFolder(Object sessionHandle, int folderId, {bool secure = true}) {
+    return _vaultDeleteFolder(_handle(sessionHandle), folderId, secure ? 1 : 0);
+  }
+
+  @override
+  int vaultSetTags(Object sessionHandle, int targetId, List<String> tags) {
     final csv = _toNative(tags.join(','));
     try {
-      return _vaultSetTags(_handle(sessionHandle), fileId, csv);
+      return _vaultSetTags(_handle(sessionHandle), targetId, csv);
     } finally {
       calloc.free(csv);
     }
@@ -582,6 +619,16 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   @override
   String? p2pStatus(Object sessionHandle) =>
       _takeJson(_p2pStatus(_handle(sessionHandle)));
+
+  @override
+  int p2pUnpair(Object sessionHandle, String deviceId) {
+    final d = _toNative(deviceId);
+    try {
+      return _p2pUnpair(_handle(sessionHandle), d);
+    } finally {
+      calloc.free(d);
+    }
+  }
 
   @override
   String? p2pDestroyArm(
@@ -679,7 +726,15 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  int vaultSetTags(Object sessionHandle, int fileId, List<String> tags) =>
+  int vaultRenameFolder(Object sessionHandle, int folderId, String name) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int vaultDeleteFolder(Object sessionHandle, int folderId, {bool secure = true}) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int vaultSetTags(Object sessionHandle, int targetId, List<String> tags) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
@@ -712,6 +767,10 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
 
   @override
   String? p2pStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pUnpair(Object sessionHandle, String deviceId) =>
       throw UnsupportedError('stub: native not linked');
 
   @override

@@ -236,6 +236,18 @@ impl P2pEngine {
         Ok(serde_json::json!({"peerId": peer_id, "name": peer_name}))
     }
 
+    /// 解除与某已配对设备的配对（从对端登记表移除）；返回是否曾存在该设备（幂等）。
+    pub fn unpair(&self, device_id: &str) -> Result<bool, &'static str> {
+        let removed = {
+            let mut peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+            peers.remove(device_id)?
+        };
+        if removed {
+            self.log(&format!("unpair: removed {device_id}"));
+        }
+        Ok(removed)
+    }
+
     /// Hello 交换 + 身份核验：签名覆盖 hh‖x25519；信道静态密钥 = 声明的 X25519 公钥；
     /// device_id 派生自声明的 Ed25519 公钥。
     fn hello<S: std::io::Read + std::io::Write>(
@@ -1613,6 +1625,40 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1800));
         assert!(!b.vault_path.exists(), "延迟销毁到期后保险箱文件必须被擦除");
         assert!(!b.dir.path().join("devB.data").exists());
+    }
+
+    #[test]
+    fn unpair_removes_peer_and_logs_event() {
+        let a = mk_dev("unpair-dev");
+        // 直接写入对端表模拟「已配对」状态（配对流程由 e2e 用例覆盖）
+        a.engine
+            .inner
+            .peers
+            .lock()
+            .unwrap()
+            .upsert(
+                "vd-ghost",
+                PeerRec {
+                    name: "Ghost".into(),
+                    pub_hex: "cc".repeat(32),
+                    paired_ms: 1,
+                    counter: 0,
+                },
+            )
+            .unwrap();
+        assert!(a.engine.unpair("vd-ghost").unwrap(), "已配对设备解绑成功");
+        assert!(
+            !a.engine.unpair("vd-ghost").unwrap(),
+            "重复解绑幂等 → false"
+        );
+        assert!(!a.engine.unpair("vd-nope").unwrap(), "不存在的设备 → false");
+        let st = a.engine.status();
+        assert_eq!(st["peers"].as_array().unwrap().len(), 0);
+        let events = st["events"].as_array().unwrap();
+        assert!(events.iter().any(|e| e
+            .as_str()
+            .unwrap_or("")
+            .contains("unpair: removed vd-ghost")));
     }
 
     #[test]

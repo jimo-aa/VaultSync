@@ -1,0 +1,838 @@
+{
+  "@@locale": "zh",
+  "@devicesPageDestroyArmedSub": {
+    "placeholders": {
+      "target": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "@devicesPageDestroyConfirmError": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageDestroyConfirmInput": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageDestroySentTo": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageDestroyTarget": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageHeaderSubCounts": {
+    "placeholders": {
+      "peers": {
+        "type": "int"
+      },
+      "online": {
+        "type": "int"
+      }
+    }
+  },
+  "@devicesPageNotifDestroyCancelFailed": {
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
+  },
+  "@devicesPagePairFailed": {
+    "placeholders": {
+      "e": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPagePeerDeviceName": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageSelfSub": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      },
+      "port": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageUnpairFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageUnpairSub": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@devicesPageUnpaired": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@importDialogImportCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@settingsMinutes": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@settingsStrengthHint": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "@settingsVersionValue": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "@syncPageConflictBanner": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageConflictCopyId": {
+    "placeholders": {
+      "id": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageConflictPeerGone": {
+    "placeholders": {
+      "stamp": {
+        "type": "String"
+      }
+    }
+  },
+  "@syncPageConflictStoredAt": {
+    "placeholders": {
+      "stamp": {
+        "type": "String"
+      }
+    }
+  },
+  "@syncPageEventsRecent": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPagePendingCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSelfPeers": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "peers": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryConflicts": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryDeleted": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryLine": {
+    "placeholders": {
+      "pulled": {
+        "type": "int"
+      },
+      "pushed": {
+        "type": "int"
+      },
+      "deleted": {
+        "type": "int"
+      },
+      "conflicts": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryMerged": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryPulled": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@syncPageSummaryPushed": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageCreatedFolder": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageDetailSub": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      },
+      "kind": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageExportCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageExportFailedItem": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageExportedMany": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      },
+      "dir": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageExportedTo": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportFailed": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportFileError": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportFolderUnsupported": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageImportedCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPagePreviewSub": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPagePreviewTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageSearching": {
+    "placeholders": {
+      "query": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageSelectedCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageShareIdAndToken": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      },
+      "token": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageTagsSub": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "@vaultPageUnnamedWithId": {
+    "placeholders": {
+      "id": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeFolderFailed": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyDone": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyFailed": {
+    "placeholders": {
+      "failed": {
+        "type": "int"
+      },
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyFilesSub": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyFoldersSub": {
+    "placeholders": {
+      "folders": {
+        "type": "int"
+      }
+    }
+  },
+  "@vaultPageWipeManyNote": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "appName": "VaultSync",
+  "decoyCancel": "取消",
+  "decoyClose": "关闭",
+  "decoyCreate": "创建伪装空间",
+  "decoyCreateFailed": "创建失败：{e}",
+  "decoyCreating": "创建中…",
+  "decoyHintMissing": "尚未创建伪装空间：打开上方开关时设置伪装密码即可创建（独立文件、独立 MK）。",
+  "decoyHintReady": "伪装空间已就绪：锁屏输入伪装密码即进入伪空间（开关关闭后不再承认该密码）。",
+  "decoyMismatch": "两次输入的伪装密码不一致",
+  "decoyNote": "伪装空间是独立加密容器，可以正常导入文件作为掩护；真实保险箱在伪空间内一律拒绝访问，且不记录「进入了哪个空间」（仅记录进入了挂锁门）。",
+  "decoyPwConfirmLabel": "确认伪装密码",
+  "decoyPwHint": "必须与主密码不同 · 胁迫场景下输入",
+  "decoyPwLabel": "伪装密码",
+  "decoySub": "独立保险箱文件 · 独立 MK · 与真实空间零共享",
+  "decoyTitleNew": "设置伪装入口",
+  "decoyTitleReset": "重设伪装密码",
+  "devicesPageAddrHint": "host:port，如 192.168.1.10:9100",
+  "devicesPageBadgeLocal": "本机",
+  "devicesPageBadgePaired": "已配对",
+  "devicesPageCancel": "取消",
+  "devicesPageCancelDestroy": "取消销毁",
+  "devicesPageConfirmUnpair": "确认解绑",
+  "devicesPageConnectPair": "连接并配对",
+  "devicesPageDelay10s": "10 秒",
+  "devicesPageDelay10sSub": "给误操作留出撤回窗口",
+  "devicesPageDelay5m": "5 分钟",
+  "devicesPageDelay5mSub": "长延时 · 期间可随时取消",
+  "devicesPageDelay60s": "60 秒",
+  "devicesPageDelay60sSub": "可在设备页「取消销毁」",
+  "devicesPageDelayImmediate": "立即执行",
+  "devicesPageDelayImmediateSub": "签发后指令即进入信令队列",
+  "devicesPageDestroyArmed": "远程销毁已武装",
+  "devicesPageDestroyArmedSub": "目标 {target} · 还剩余 {seconds} 秒",
+  "devicesPageDestroyConfirmError": "请准确输入确认语「{word}」",
+  "devicesPageDestroyConfirmInput": "输入「{word}」以确认",
+  "devicesPageDestroyConfirmWord": "销毁",
+  "devicesPageDestroyDelay": "销毁延时",
+  "devicesPageDestroyNote": "将向目标设备签发由本机密钥签名的销毁指令（高优先级信令队列）。设备离线时，将于下次上线后、处理任何其他消息之前执行。",
+  "devicesPageDestroySendFailed": "远程销毁指令发送失败",
+  "devicesPageDestroySent": "销毁指令已发送",
+  "devicesPageDestroySentTo": "远程销毁指令已发送至 {name}",
+  "devicesPageDestroyTarget": "目标：{name}",
+  "devicesPageDone": "完成",
+  "devicesPageEmptySub": "先解锁保险箱，或通过「配对新设备」建立第一个加密信道。",
+  "devicesPageEmptyTitle": "暂无设备数据",
+  "devicesPageFingerprint": "指纹",
+  "devicesPageFingerprintConfirm": "指纹一致，确认配对",
+  "devicesPageGenerateInvite": "生成邀请码",
+  "devicesPageHeaderSub": "通过端到端加密信道与已配对设备同步",
+  "devicesPageHeaderSubCounts": "{peers} 台已配对设备 · {online} 台本机在线",
+  "devicesPageInviteCode": "一次性邀请码",
+  "devicesPageInviteCodePasteHint": "粘贴对方生成的邀请码",
+  "devicesPageInviteCodeValid": "一次性邀请码（10 分钟内有效）",
+  "devicesPageInviteFailed": "邀请码生成失败",
+  "devicesPageInviteNote": "邀请码 10 分钟内有效，用后即失效；内容不含敏感信息。",
+  "devicesPageIssueDestroy": "签发销毁指令",
+  "devicesPageKvDevice": "设备",
+  "devicesPageLastSyncJustNow": "上次同步 刚刚",
+  "devicesPageLocalFingerprint": "本机指纹（Fingerprint）",
+  "devicesPageLocalFingerprintShort": "本机指纹",
+  "devicesPageManualAdd": "手动添加",
+  "devicesPageManualHint": "输入对端地址与对方设备生成的一次性邀请码：",
+  "devicesPageManualMode": "手动输入",
+  "devicesPageMitmNote": "指纹不一致说明信道可能被劫持（MITM），请拒绝配对。",
+  "devicesPageNeedUnlock": "请先解锁",
+  "devicesPageNoPeersSub": "点击右上角「配对新设备」，扫码或手动输入邀请码建立信道。",
+  "devicesPageNoPeersTitle": "暂无已配对设备",
+  "devicesPageNotifDestroyCancelFailed": "取消销毁失败（错误码 {code}）",
+  "devicesPageNotifDestroyCancelled": "已取消远程销毁",
+  "devicesPageNotifNeedUnlock": "请先解锁保险箱",
+  "devicesPageNotifPaired": "配对完成 · 已加入节点清单",
+  "devicesPageOffline": "离线",
+  "devicesPageOnline": "在线",
+  "devicesPagePairDone": "配对完成",
+  "devicesPagePairDoneSub": "已建立长期加密信道 · 双方节点清单已更新 · 已记入审计",
+  "devicesPagePairFailed": "配对异常：{e}",
+  "devicesPagePairFailedInvalid": "配对失败：地址或邀请码无效",
+  "devicesPagePairNew": "配对新设备",
+  "devicesPagePeerAddr": "对端设备地址",
+  "devicesPagePeerDevice": "对方设备",
+  "devicesPagePeerDeviceName": "对方设备：{name}",
+  "devicesPageQrHint": "点击下方「生成邀请码」生成一次性邀请码与二维码，供对方设备在「配对 → 手动输入」中连接。",
+  "devicesPageRefresh": "刷新",
+  "devicesPageRemoteWipe": "远程销毁",
+  "devicesPageSelfRole": "本机 · 主节点",
+  "devicesPageSelfSub": "{id} · 端口 {port}",
+  "devicesPageSending": "发送中…",
+  "devicesPageStepChoose": "选择方式",
+  "devicesPageStepDone": "完成配对",
+  "devicesPageStepVerify": "指纹核验",
+  "devicesPageThisComputer": "这台电脑",
+  "devicesPageTitle": "设备",
+  "devicesPageUnbind": "解绑",
+  "devicesPageUnpairFailed": "解绑失败：{err}",
+  "devicesPageUnpairNote": "解绑只删除本机的对端登记：对方设备与其上的数据不受影响；本机文件也不会被删除。重新建立信道需再次交换一次性邀请码并核验指纹。",
+  "devicesPageUnpairSub": "移除「{name}」的互信记录",
+  "devicesPageUnpairTitle": "解除配对",
+  "devicesPageUnpaired": "已解除与「{name}」的配对",
+  "devicesPageVerifyHint": "请在两台设备上分别核对以下指纹是否一致（公钥哈希）：",
+  "devicesPageWizardSub": "交换公钥 · 校验指纹 · 双向确认",
+  "importDialogCancel": "取消",
+  "importDialogDropHere": "拖放文件到此处",
+  "importDialogHint": "支持多选 · 不限文件类型",
+  "importDialogImport": "导入",
+  "importDialogImportCount": "导入 {n} 个文件",
+  "importDialogNoFiles": "尚未选择文件",
+  "importDialogNote": "导入完成后立即生成密文缩略图与全文索引（明文不落盘）。",
+  "importDialogOrClick": "，或点击选择",
+  "importDialogRemove": "移除",
+  "importDialogSub": "流式读取 · CDC 分块 · AES-256-GCM 逐块加密",
+  "importDialogTitle": "导入文件",
+  "lockScreenBindManage": "绑定 / 管理",
+  "lockScreenBiometric": "生物识别",
+  "lockScreenBusy": "处理中…",
+  "lockScreenCooldown": "尝试过于频繁，已触发暴力破解保护 · {remaining} 后可重试",
+  "lockScreenCreateAndUnlock": "创建并解锁",
+  "lockScreenFirstRunNote": "首次启动 · 主密码 ≥{n} 位并混合字符类型；MK 由 CSPRNG 生成，改密只需重新包装",
+  "lockScreenForgotPassword": "忘记主密码？",
+  "lockScreenHintWithAttempts": "{hint}（第 {n} 次）",
+  "lockScreenPwEnterHint": "输入主密码",
+  "lockScreenPwSetHint": "设置主密码（至少 {n} 位）",
+  "lockScreenPwStrengthOk": "{label} · 可通过（Argon2id 派生 KEK）",
+  "lockScreenPwStrengthWeak": "{label} · 需要至少 {n} 位且混合字符类型",
+  "lockScreenPwSuggestMix": "建议混合大小写并加入数字或符号",
+  "lockScreenPwTooShort": "至少 {n} 位",
+  "lockScreenPwWrongAttempts": "主密码错误（第 {n} 次）",
+  "lockScreenRecoveryInfo": "MK 由 CSPRNG 生成且不被密码反推，无法凭记忆恢复；重置需已配对设备授权（P5 接入），或使用伪装入口进入伪空间。",
+  "lockScreenTagline": "YOUR DATA · EVERYWHERE · ENCRYPTED",
+  "lockScreenTitle": "VaultSync 保险箱",
+  "lockScreenUnlock": "解锁",
+  "navDevices": "设备",
+  "navSecurity": "安全中心",
+  "navSettings": "设置",
+  "navStego": "隐写术",
+  "navSync": "同步",
+  "navVault": "保险箱",
+  "settingsAbout": "关于",
+  "settingsAboutSub": "版本与设计文档",
+  "settingsAppearance": "外观与语言",
+  "settingsAppearanceSub": "主题 · 语言",
+  "settingsAutoLockSub": "空闲超时后自动锁定保险箱",
+  "settingsAutoLockTitle": "自动落锁",
+  "settingsAutoSync": "启用自动同步",
+  "settingsAutoSyncSub": "选择性同步：文件夹、大小、网络、设备（P5 细化）",
+  "settingsBioBound": "已绑定 · Windows Hello 指纹",
+  "settingsBioBoundDone": "生物识别已绑定 · 已追加 MK_wrap_bio",
+  "settingsBioHello": "Windows Hello 指纹",
+  "settingsBioHelloSub": "密钥由平台安全区托管，本应用不接触生物特征",
+  "settingsBioLoading": "读取中…",
+  "settingsBioNote": "安全区重置后生物识别副本自动失效，主密码路径不受影响。",
+  "settingsBioTitle": "生物识别",
+  "settingsBioUnbound": "未绑定 · 主密码始终可用",
+  "settingsBioUnboundDone": "生物识别已解绑",
+  "settingsCancel": "取消",
+  "settingsChange": "修改",
+  "settingsChangePw": "修改主密码",
+  "settingsChangePwDialogSub": "仅重新包装 MK · 数据零重加密",
+  "settingsChangePwDone": "主密码已修改 · MK 重新包装完成，数据零重加密",
+  "settingsChangePwNote": "修改后重新生成 MK_wrap_pwd 并更换 salt；已配对设备与密文不受影响。",
+  "settingsChangePwSub": "毫秒级完成，不影响已加密文件与同步",
+  "settingsConfirmChange": "确认修改",
+  "settingsConfirmPw": "确认新主密码",
+  "settingsCurrentPw": "当前主密码",
+  "settingsDecoyAllow": "允许伪装密码",
+  "settingsDecoyAllowSub": "锁屏输入伪装密码即进入伪空间，真实保险箱调用一律拒绝",
+  "settingsDecoySub": "胁迫场景下输入伪装密码进入独立伪空间",
+  "settingsDecoyTitle": "伪装入口",
+  "settingsDesignDocLabel": "设计文档",
+  "settingsEngineLabel": "引擎",
+  "settingsForgotPw": "忘记主密码",
+  "settingsForgotPwSub": "安全重置流程，需已配对设备授权（P5 接入）",
+  "settingsIdleTimeout": "空闲超时",
+  "settingsIdleTimeoutSub": "无操作后自动锁定（0 = 从不）",
+  "settingsLanguage": "语言",
+  "settingsLanguageEn": "English",
+  "settingsLanguageSub": "界面语言 · 切换后立即生效",
+  "settingsLanguageSystem": "跟随系统",
+  "settingsLanguageZh": "中文",
+  "settingsMinutes": "{n} 分钟",
+  "settingsNeedUnlock": "请先解锁保险箱",
+  "settingsNever": "从不",
+  "settingsNewPw": "新主密码",
+  "settingsOpenDocsFailed": "无法打开文档链接",
+  "settingsPwMismatch": "两次输入的新密码不一致",
+  "settingsPwSection": "主密码管理",
+  "settingsPwSectionSub": "修改密码仅重新包装主密钥，数据零重加密",
+  "settingsStrengthHint": "{label} · Argon2id 派生 KEK",
+  "settingsSub": "安全 · 落锁 · 同步 · 外观",
+  "settingsSubmitting": "提交中…",
+  "settingsSyncOff": "自动同步已关闭",
+  "settingsSyncOn": "自动同步已开启 · 关闭后需手动触发",
+  "settingsSyncTitle": "同步策略",
+  "settingsTheme": "主题",
+  "settingsThemeDark": "深色（默认）",
+  "settingsThemeLight": "浅色",
+  "settingsThemeSub": "深色为默认 · 对应原型 data-theme",
+  "settingsThemeSystem": "跟随系统",
+  "settingsTitle": "设置",
+  "settingsVersionLabel": "版本",
+  "settingsVersionValue": "VaultSync {version} · 端到端加密多设备同步",
+  "settingsViewDocs": "查看在线文档",
+  "shellAllFiles": "全部文件",
+  "shellLockNow": "立即锁定",
+  "shellMarkAllRead": "全部已读",
+  "shellNavSectionControl": "管控",
+  "shellNavSectionSpace": "空间",
+  "shellNoNotifications": "暂无通知",
+  "shellNotifications": "通知",
+  "shellPlaceholderSub": "功能开发中 —— 计划见 docs/09-开发任务面板.md",
+  "shellSearchHint": "搜索文件、标签、全文…",
+  "shellSubDevices": "通过端到端加密信道与已配对设备同步",
+  "shellSubSecurity": "审计 · 检测 · 应急响应",
+  "shellSubSettings": "安全 · 落锁 · 同步 · 外观",
+  "shellSubStego": "AES-256-GCM 密文嵌入图片 LSB",
+  "shellSubSync": "增量同步 · 仅传输差异块",
+  "shellTitleDevices": "设备",
+  "shellTitleSecurity": "安全中心",
+  "shellTitleSettings": "设置",
+  "shellTitleStego": "隐写术",
+  "shellTitleSync": "同步",
+  "shellTitleVault": "保险箱",
+  "shellVersionTagline": "V0.2 · 桌面端",
+  "stateBioFailed": "生物识别解锁失败",
+  "stateBioNotBound": "尚未绑定生物识别（设置中绑定后可用）",
+  "stateBioUnsupported": "此平台不支持生物识别，请使用主密码",
+  "stateConflictDropped": "已丢弃冲突副本",
+  "stateConflictKept": "已保留副本并替换原条目 · {name}",
+  "stateConflictResolveFailed": "冲突解决失败：{err}",
+  "stateCooldownHint": "尝试过于频繁，请等待冷却结束",
+  "stateCooldownSeconds": "尝试过于频繁，请等待 {n} 秒",
+  "stateCreateFailed": "创建保险箱失败：{e}",
+  "stateDeviceLoadFailed": "设备状态读取失败",
+  "stateDeviceNeedUnlock": "请先解锁保险箱",
+  "stateNeedUnlock": "请先解锁保险箱",
+  "statePwMin4": "密码至少 4 位",
+  "statePwRequired": "请输入主密码",
+  "statePwTooShort": "主密码至少 {n} 位",
+  "statePwTooWeak": "强度不足：建议混合大小写并加入数字或符号",
+  "statePwWrong": "密码错误",
+  "stateStrengthFair": "一般",
+  "stateStrengthGood": "较强",
+  "stateStrengthStrong": "强",
+  "stateStrengthWeak": "弱",
+  "stateSyncDone": "同步完成：拉取 {pulled}，推送 {pushed}",
+  "stateSyncDoneWithConflicts": "同步完成：拉取 {pulled}，推送 {pushed}，冲突 {conflicts}",
+  "stateSyncFailed": "同步失败",
+  "stateSyncRelayFailed": "中继同步失败",
+  "stateUnknownDevice": "未知设备",
+  "syncPageAddrHint": "host:port，如 192.168.1.10:9100",
+  "syncPageCancel": "取消",
+  "syncPageChunkDetails": "分块详情",
+  "syncPageChunkDetailsNote": "逐块传输进度矩阵（加密块 = 同步块 = 传输块）将在 P5 接入真实数据。",
+  "syncPageConflictBanner": "发现 {n} 个冲突文件，冲突副本以 .conflict-<时间戳> 命名保留，可在保险箱列表中处理。",
+  "syncPageConflictCopyId": "冲突副本 #{id}",
+  "syncPageConflictNote": "冲突副本由引擎在两侧版本分叉时自动留存（本地版本另存为 <原名>.conflict-<时间戳>）。「保留副本」会把副本改回原名并替换对端版本，「丢弃副本」则只删副本——两者都会记入审计。",
+  "syncPageConflictPeerGone": "副本留存于 {stamp} · 对端版本已不存在",
+  "syncPageConflictSection": "冲突处理",
+  "syncPageConflictStoredAt": "副本留存于 {stamp}",
+  "syncPageDialogNote": "同步为块级增量：仅传输双方差异块，已到块经强哈希校验后复用。",
+  "syncPageDialogSub": "直连或经自建中继 · Noise 加密信道",
+  "syncPageDirect": "直连",
+  "syncPageDropCopy": "丢弃副本",
+  "syncPageEngineNote": "引擎暂无传输队列与逐块进度回调：本页的统计、事件与冲突均为真实数据，逐块矩阵待引擎提供回调后接入（P5）。",
+  "syncPageEvents": "同步事件",
+  "syncPageEventsRecent": "最近 {n} 条",
+  "syncPageHeaderSub": "增量同步 · 仅传输差异块（CDC）",
+  "syncPageKeepCopy": "保留副本",
+  "syncPageLatestSummary": "最新同步摘要",
+  "syncPageLive": "实时",
+  "syncPageNeverSynced": "尚未同步",
+  "syncPageNoConflicts": "没有冲突副本 · 同步结果一致",
+  "syncPageNoEvents": "暂无事件 · 完成「立即同步」后在此记录",
+  "syncPagePeerAddr": "对端地址",
+  "syncPagePendingCount": "{n} 项待解决",
+  "syncPageRefresh": "刷新",
+  "syncPageRelay": "中继",
+  "syncPageRelayAddr": "中继地址",
+  "syncPageRoomHint": "共享房间 Room ID",
+  "syncPageRoomId": "房间号",
+  "syncPageScanning": "扫描中…",
+  "syncPageSelfPeers": "本机 {name} · {peers} 台已配对",
+  "syncPageStartSync": "开始同步",
+  "syncPageStatConflicts": "冲突待解决",
+  "syncPageStatDeleted": "已删除项",
+  "syncPageStatPulledFiles": "拉取的文件",
+  "syncPageStatPushedFiles": "推送的文件",
+  "syncPageStatus": "同步状态",
+  "syncPageStatusIdle": "空闲 · 无进行中的传输",
+  "syncPageStatusRunning": "正在同步 · 块级增量传输中（阻塞式单次会话）",
+  "syncPageSummaryConflicts": "冲突 {n}",
+  "syncPageSummaryDeleted": "删除 {n}",
+  "syncPageSummaryLine": "拉取 {pulled} · 推送 {pushed} · 删除 {deleted} · 冲突 {conflicts}",
+  "syncPageSummaryMerged": "合并 {n}",
+  "syncPageSummaryPulled": "拉取 {n}",
+  "syncPageSummaryPushed": "推送 {n}",
+  "syncPageSyncNow": "立即同步",
+  "syncPageSyncing": "同步中…",
+  "syncPageTitle": "同步",
+  "vaultPageAlgoLabel": "算法",
+  "vaultPageAlgoValue": "AES-256-GCM · FastCDC 64KB",
+  "vaultPageBackToFolder": "返回当前文件夹",
+  "vaultPageBurn": "阅后即焚",
+  "vaultPageCancel": "取消",
+  "vaultPageCipherThumb": "密文缩略图",
+  "vaultPageClose": "关闭",
+  "vaultPageConflict": "冲突",
+  "vaultPageCreate": "创建",
+  "vaultPageCreatedFolder": "已创建「{name}」· 独立派生子密钥 FSK",
+  "vaultPageDetailSub": "{size} · {kind}",
+  "vaultPageDetailThumb": "加密缩略图 · 解锁后解密预览",
+  "vaultPageDone": "完成",
+  "vaultPageEmptyFolderSub": "将文件拖入此处，或点击下方按钮导入（自动分块加密）。",
+  "vaultPageEmptyFolderTitle": "此文件夹为空",
+  "vaultPageEmptySearchSub": "换个关键词，或返回文件夹后重新搜索。",
+  "vaultPageEmptySearchTitle": "未找到匹配内容",
+  "vaultPageEmptyVaultSub": "导入的文件将自动分块加密，密钥仅存于本机。",
+  "vaultPageEmptyVaultTitle": "此保险箱为空",
+  "vaultPageEncInfo": "加密信息",
+  "vaultPageExport": "导出",
+  "vaultPageExportCount": "导出 {n} 个文件",
+  "vaultPageExportFailedItem": "导出失败 {name}：{error}",
+  "vaultPageExportNoneSelected": "所选项目中没有可导出的文件",
+  "vaultPageExportToHere": "导出到此处",
+  "vaultPageExportedMany": "已导出 {done}/{total} 个文件到 {dir}",
+  "vaultPageExportedTo": "已导出到 {path} · SHA-256 终验通过",
+  "vaultPageFileLabel": "文件",
+  "vaultPageFolder": "文件夹",
+  "vaultPageFsKeyLabel": "文件密钥",
+  "vaultPageFsKeyValue": "FSKey · 随机生成",
+  "vaultPageImport": "导入文件",
+  "vaultPageImportFailed": "导入失败 {name}",
+  "vaultPageImportFileError": "{name}：{error}",
+  "vaultPageImportFolderUnsupported": "{name}（文件夹暂不支持导入）",
+  "vaultPageImportedCount": "已导入 {n} 个文件 · CDC 分块加密入箱",
+  "vaultPageKindArchive": "压缩包",
+  "vaultPageKindDoc": "文档",
+  "vaultPageKindFile": "文件",
+  "vaultPageKindFolder": "加密文件夹",
+  "vaultPageKindImage": "图片",
+  "vaultPageKindVideo": "视频",
+  "vaultPageMkdirHint": "例如：合同归档",
+  "vaultPageMkdirSub": "文件夹独立派生子密钥 FSK",
+  "vaultPageMkdirTitle": "新建加密文件夹",
+  "vaultPageNameLabel": "名称",
+  "vaultPageNewFolder": "新建文件夹",
+  "vaultPageNoFiles": "无文件",
+  "vaultPageNoFilesEmptySub": "此文件夹为空 —— 将文件拖入此处，或点击下方「导入文件」。",
+  "vaultPageNoFilesSub": "此层级没有文件，可从左侧进入子文件夹，或点击下方「导入文件」。",
+  "vaultPageNoSubfolders": "无子文件夹",
+  "vaultPageNoTags": "暂无标签",
+  "vaultPageOpen": "打开",
+  "vaultPagePreview": "预览",
+  "vaultPagePreviewNote": "引擎未开放明文预览通道（明文不出引擎层）；查看内容请先「导出」。",
+  "vaultPagePreviewSub": "{size} · 解锁会话内解密",
+  "vaultPagePreviewTitle": "预览 · {name}",
+  "vaultPageRename": "重命名",
+  "vaultPageRenameFileSub": "修改加密元数据中的文件名",
+  "vaultPageRenameFolderSub": "修改加密元数据中的文件夹名",
+  "vaultPageRenamed": "已重命名 · 加密元数据已更新",
+  "vaultPageSave": "保存",
+  "vaultPageSearching": "搜索「{query}」",
+  "vaultPageSelectedCount": "已选 {n} 项",
+  "vaultPageShare": "阅后即焚分享",
+  "vaultPageShareFailed": "分享创建失败",
+  "vaultPageShareIdAndToken": "ID：{id}\n令牌：{token}",
+  "vaultPageShareNote": "对方凭令牌打开后分享即失效，令牌不可复用。",
+  "vaultPageShareSub": "一次性 P2P 会话 · 对端打开后限时自动擦除",
+  "vaultPageShareTokenLabel": "一次性分享令牌（仅显示这一次）",
+  "vaultPageSizeLabel": "大小",
+  "vaultPageStatusLabel": "状态",
+  "vaultPageSynced": "已同步",
+  "vaultPageTags": "标签",
+  "vaultPageTagsHint": "逗号分隔，如: 工作,私密",
+  "vaultPageTagsSub": "管理「{name}」的标签",
+  "vaultPageTagsTitle": "标签管理",
+  "vaultPageTagsUpdated": "标签已更新",
+  "vaultPageTargetFile": "目标文件",
+  "vaultPageTargetFolder": "目标文件夹",
+  "vaultPageTreeAllFiles": "全部文件",
+  "vaultPageTreeCurrentPath": "当前路径",
+  "vaultPageTreeQuickAccess": "快速访问",
+  "vaultPageTypeLabel": "类型",
+  "vaultPageUnnamed": "未命名",
+  "vaultPageUnnamedFile": "未命名文件",
+  "vaultPageUnnamedFolder": "未命名文件夹",
+  "vaultPageUnnamedWithId": "未命名-{id}",
+  "vaultPageViewGrid": "网格",
+  "vaultPageViewList": "列表",
+  "vaultPageViewSplit": "分栏",
+  "vaultPageWipe": "安全擦除",
+  "vaultPageWipeAll": "全部擦除",
+  "vaultPageWipeConfirm": "确认擦除",
+  "vaultPageWipeCount": "安全擦除 {n} 个文件",
+  "vaultPageWipeFileSub": "销毁文件密钥 FSKey 并摘除块清单",
+  "vaultPageWipeFolderFailed": "「{name}」{error}（已销毁 {count} 个文件）",
+  "vaultPageWipeFolderSub": "递归销毁文件夹及其内文件的密钥与密文",
+  "vaultPageWipeManyDone": "已批量安全擦除 {n} 个项目",
+  "vaultPageWipeManyFailed": "批量擦除完成：{failed}/{n} 项失败",
+  "vaultPageWipeManyFilesSub": "销毁 {n} 个文件的密钥并删除密文",
+  "vaultPageWipeManyFoldersSub": "销毁密钥并删除密文（含 {folders} 个文件夹，递归）",
+  "vaultPageWipeManyNote": "将批量擦除 {n} 个项目，不可恢复，且同步传播到已配对设备。",
+  "vaultPageWipeManyTitle": "批量安全擦除",
+  "vaultPageWipeNote": "擦除将同步传播到所有已配对设备，操作会记入审计日志。",
+  "vaultPageWiped": "已安全擦除",
+  "vsStepsDefaultLabel": "步骤 {n}",
+  "windowChromeClose": "关闭",
+  "windowChromeMaximize": "最大化",
+  "windowChromeMinimize": "最小化",
+  "windowChromeRestore": "向下还原"
+}

@@ -465,6 +465,26 @@ pub unsafe extern "C" fn vault_core_vault_rename_file(
     run().err().unwrap_or(OK)
 }
 
+/// 重命名文件夹（根目录不可改名）。
+///
+/// # Safety
+/// `handle` 有效；`name` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_rename_folder(
+    handle: *mut Session,
+    folder_id: i64,
+    name: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let name = unsafe { cstr(name) }?;
+        vault_op(handle, |v, _| {
+            v.rename_folder(folder_id as u64, name)
+                .map_err(CoreError::Internal)
+        })
+    };
+    run().err().unwrap_or(OK)
+}
+
 /// 删除文件（secure=1 时先单次覆写再删除）。
 ///
 /// # Safety
@@ -481,6 +501,27 @@ pub unsafe extern "C" fn vault_core_vault_delete_file(
     })
     .err()
     .unwrap_or(OK)
+}
+
+/// 递归删除文件夹（secure=1 时逐个先单次覆写再删除），返回删除的文件数；失败返回负状态码。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_delete_folder(
+    handle: *mut Session,
+    folder_id: i64,
+    secure: i32,
+) -> i32 {
+    let r = vault_op(handle, |v, _| {
+        v.delete_folder(folder_id as u64, secure != 0)
+            .map_err(CoreError::Internal)
+    });
+    // 成功返回删除的文件数（≥0）；失败返回负状态码（-1..-8 不会与计数混淆）。
+    match r {
+        Ok(n) => i32::try_from(n).unwrap_or(i32::MAX),
+        Err(code) => -code,
+    }
 }
 
 /// 设置标签（逗号分隔）。
@@ -677,6 +718,28 @@ pub unsafe extern "C" fn vault_core_p2p_status(handle: *mut Session) -> *mut c_c
         Ok(v) => json_out(v),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+/// 解除与指定设备的配对（从对端登记表移除）。0 = OK（本来就不存在亦返回 0，幂等）。
+///
+/// # Safety
+/// `handle` 有效；`device_id` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_unpair(
+    handle: *mut Session,
+    device_id: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        let id = unsafe { cstr(device_id) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine.unpair(id).map_err(|_| ERR_INTERNAL)?;
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
 }
 
 /// 向对端发送远程销毁指令（签名 + 延迟秒数；0 = 到达即执行）。

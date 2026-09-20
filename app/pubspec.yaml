@@ -45,6 +45,9 @@ dependencies:
     sdk: flutter
   ffi: ^2.2.0
   file_selector: ^1.1.0
+  desktop_drop: ^0.4.4
+  url_launcher: ^6.3.0
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:
@@ -67,6 +70,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Generate `lib/l10n/app_localizations.dart` from ARB (see l10n.yaml).
+  generate: true
 
   assets:
     - assets/icons/

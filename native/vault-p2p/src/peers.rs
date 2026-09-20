@@ -62,6 +62,15 @@ impl PeerStore {
         self.save()
     }
 
+    /// 解除配对：存在则删除并落盘；返回是否删除过（不存在时不改动落盘）。
+    pub fn remove(&mut self, device_id: &str) -> Result<bool, &'static str> {
+        if self.d.peers.remove(device_id).is_none() {
+            return Ok(false);
+        }
+        self.save()?;
+        Ok(true)
+    }
+
     pub fn list(&self) -> Vec<(String, PeerRec)> {
         self.d
             .peers
@@ -109,5 +118,39 @@ mod tests {
         assert!(st2.by_pub(&"aa".repeat(32)).is_some());
         // 错误密钥解不开
         assert!(PeerStore::load_or_new(dir.path(), &vault_crypto::random_key()).is_err());
+    }
+
+    #[test]
+    fn remove_unpair_and_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let mk = vault_crypto::random_key();
+        let rec = |name: &str, tag: char| PeerRec {
+            name: name.into(),
+            pub_hex: tag.to_string().repeat(64),
+            paired_ms: 1,
+            counter: 0,
+        };
+        let mut st = PeerStore::load_or_new(dir.path(), &mk).unwrap();
+        st.upsert("vd-a", rec("A", 'a')).unwrap();
+        st.upsert("vd-b", rec("B", 'b')).unwrap();
+        assert_eq!(st.list().len(), 2);
+
+        assert!(st.remove("vd-a").unwrap(), "存在则删除返回 true");
+        let rest = st.list();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].0, "vd-b");
+        assert!(st.by_pub(&"a".repeat(64)).is_none());
+
+        // 不存在的 id：Ok(false) 且不落盘
+        assert!(!st.remove("vd-absent").unwrap());
+        assert!(!st.remove("vd-a").unwrap());
+        assert_eq!(st.list().len(), 1);
+
+        // 重载后删除结果持久化
+        drop(st);
+        let st2 = PeerStore::load_or_new(dir.path(), &mk).unwrap();
+        assert_eq!(st2.list().len(), 1);
+        assert!(st2.get("vd-a").is_none());
+        assert!(st2.get("vd-b").is_some());
     }
 }

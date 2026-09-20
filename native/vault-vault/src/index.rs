@@ -25,6 +25,10 @@ const MAX_TOKENS_PER_FILE: usize = 10000;
 pub struct Folder {
     pub name: String,
     pub parent: u64,
+    /// 文件夹标签（P4 右键菜单「标签」，与文件同一 UI 概念）。
+    /// 与文件夹名一样不进倒排索引（搜索只返回文件），serde default 保证旧索引可读。
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -154,6 +158,7 @@ impl VaultIndex {
             Folder {
                 name: String::new(),
                 parent: 0,
+                tags: Vec::new(),
             },
         );
         Self { d, search_key }
@@ -243,6 +248,7 @@ impl VaultIndex {
             Folder {
                 name: name.to_string(),
                 parent,
+                tags: Vec::new(),
             },
         );
         Ok(id)
@@ -352,7 +358,13 @@ impl VaultIndex {
         Ok(removed)
     }
 
+    /// 设置标签：文件走倒排重索引；文件夹无倒排（与文件夹名一致），仅存元数据。
     pub fn set_tags(&mut self, id: u64, tags: Vec<String>) -> Result<(), &'static str> {
+        if !self.d.files.contains_key(&id) {
+            let f = self.d.folders.get_mut(&id).ok_or("entry not found")?;
+            f.tags = tags;
+            return Ok(());
+        }
         let old = {
             let f = self.d.files.get_mut(&id).ok_or("file not found")?;
             std::mem::replace(&mut f.tags, tags)
@@ -378,8 +390,9 @@ impl VaultIndex {
             .d
             .folders
             .iter()
-            .filter(|(_, f)| f.parent == folder)
-            .map(|(id, f)| serde_json::json!({"id": id, "name": f.name}))
+            // 根目录（id=0, parent=0）不是自己的子文件夹，必须排除
+            .filter(|(id, f)| f.parent == folder && **id != ROOT_FOLDER)
+            .map(|(id, f)| serde_json::json!({"id": id, "name": f.name, "tags": f.tags}))
             .collect();
         folders.sort_by_key(|v| v["name"].as_str().map(str::to_string).unwrap_or_default());
         let mut files: Vec<serde_json::Value> = self
@@ -724,6 +737,7 @@ impl VaultIndex {
         d.folders.entry(ROOT_FOLDER).or_insert(Folder {
             name: String::new(),
             parent: 0,
+            tags: Vec::new(),
         });
         Ok(Self { d, search_key })
     }
@@ -766,6 +780,9 @@ mod tests {
             .list_children(ROOT_FOLDER)
             .expect("list")
             .contains("文档"));
+        // 根目录不能把自己列为子文件夹（parent=0 自匹配 bug 回归测试）
+        let root_children = ix.list_children(ROOT_FOLDER).expect("list");
+        assert!(!root_children.contains("\"id\":0"));
         let id = ix.add_file(docs, "报告.txt", 10, &[]).expect("add");
         assert_eq!(ix.file_folder(id).expect("folder"), docs);
         let removed = ix.remove_folder(docs).expect("rm");
@@ -817,6 +834,34 @@ mod tests {
         // 标签入索引
         ix.set_tags(id2, vec!["设计".into()]).expect("tags");
         assert!(ix.search("设计").contains("photo"));
+    }
+
+    #[test]
+    fn folder_tags_and_rename() {
+        let mut ix = VaultIndex::new(key());
+        let folder = ix.mkdir(ROOT_FOLDER, "相册").expect("mkdir");
+        let fid = ix.add_file(folder, "a.png", 1, &[]).expect("add");
+
+        // 文件夹标签：存元数据、随 list_children 返回；不进倒排（搜索仍只返回文件）
+        ix.set_tags(folder, vec!["证件".into(), "重要".into()])
+            .expect("folder tags");
+        let listed = ix.list_children(ROOT_FOLDER).expect("list");
+        assert!(listed.contains("\"tags\":[\"证件\",\"重要\"]"));
+        assert!(!ix.search("证件").contains("\"id\""));
+
+        // 改名后父子关系与子文件不受影响
+        ix.rename_folder(folder, "相册2026").expect("rename folder");
+        let listed = ix.list_children(ROOT_FOLDER).expect("list");
+        assert!(listed.contains("相册2026"));
+        assert_eq!(ix.file_folder(fid).expect("folder"), folder);
+        assert!(ix.rename_folder(ROOT_FOLDER, "x").is_err());
+
+        // 不存在的 id 报错（不再误报 file not found）
+        assert_eq!(ix.set_tags(9999, vec![]).unwrap_err(), "entry not found");
+
+        // 递归删除文件夹连带子文件
+        let ids = ix.remove_folder(folder).expect("rm");
+        assert_eq!(ids, vec![fid]);
     }
 
     #[test]

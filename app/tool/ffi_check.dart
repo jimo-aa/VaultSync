@@ -22,30 +22,43 @@ typedef UnlockBioNative = Int32 Function(
 typedef UnlockBioDart = int Function(
     Pointer<Utf8>, Pointer<Pointer<Void>>, Pointer<Uint64>);
 typedef HandleFnC = Int32 Function(Pointer<Void>);
-typedef ChangePwdC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef ChangePwdC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef LockC = Void Function(Pointer<Void>);
 typedef CooldownC = Int32 Function(Pointer<Utf8>, Pointer<Uint64>);
 // P2 保险箱操作
-typedef MkdirC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Uint64>);
-typedef MkdirDart = int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Uint64>);
+typedef MkdirC = Int32 Function(
+    Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Uint64>);
+typedef MkdirDart = int Function(
+    Pointer<Void>, int, Pointer<Utf8>, Pointer<Uint64>);
 typedef ListC = Pointer<Utf8> Function(Pointer<Void>, Int64);
 typedef ListDart = Pointer<Utf8> Function(Pointer<Void>, int);
 typedef SearchC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef SearchDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
-typedef ImportC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Int64, Pointer<Uint64>);
-typedef ImportDart = int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>);
+typedef ImportC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Int64, Pointer<Uint64>);
+typedef ImportDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>);
 typedef ExportC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
 typedef ExportDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
 typedef RenameC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
 typedef RenameDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
+// 文件夹重命名 / 递归删除（P4：右键菜单「重命名」「安全擦除」对文件夹生效）
+typedef RenameFolderC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
+typedef RenameFolderDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
 typedef DeleteFileC = Int32 Function(Pointer<Void>, Int64, Int32);
 typedef DeleteFileDart = int Function(Pointer<Void>, int, int);
+typedef DeleteFolderC = Int32 Function(Pointer<Void>, Int64, Int32);
+typedef DeleteFolderDart = int Function(Pointer<Void>, int, int);
 typedef TagsC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>);
 typedef TagsDart = int Function(Pointer<Void>, int, Pointer<Utf8>);
-typedef ShareCreateC = Pointer<Utf8> Function(Pointer<Void>, Int64, Uint64, Uint32);
+typedef ShareCreateC = Pointer<Utf8> Function(
+    Pointer<Void>, Int64, Uint64, Uint32);
 typedef ShareCreateDart = Pointer<Utf8> Function(Pointer<Void>, int, int, int);
-typedef ShareOpenC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
-typedef ShareOpenDart = int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>);
+typedef ShareOpenC = Int32 Function(
+    Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
+typedef ShareOpenDart = int Function(
+    Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>);
 // P3 P2P 同步（每函数独立 typedef）
 typedef P2pPairBeginC = Pointer<Utf8> Function(Pointer<Void>);
 typedef P2pPairBeginDart = Pointer<Utf8> Function(Pointer<Void>);
@@ -57,6 +70,8 @@ typedef P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef P2pSyncDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
 typedef P2pStatusDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pUnpairC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef P2pUnpairDart = int Function(Pointer<Void>, Pointer<Utf8>);
 typedef P2pDestroyArmC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Uint64);
 typedef P2pDestroyArmDart = Pointer<Utf8> Function(
@@ -81,7 +96,9 @@ late SearchDart _vaultSearch;
 late ImportDart _vaultImport;
 late ExportDart _vaultExport;
 late RenameDart _vaultRenameFile;
+late RenameFolderDart _vaultRenameFolder;
 late DeleteFileDart _vaultDeleteFile;
+late DeleteFolderDart _vaultDeleteFolder;
 late TagsDart _vaultSetTags;
 late ShareCreateDart _vaultShareCreate;
 late ShareOpenDart _vaultShareOpen;
@@ -89,6 +106,7 @@ late P2pPairBeginDart _p2pPairBegin;
 late P2pPairJoinDart _p2pPairJoin;
 late P2pSyncDart _p2pSync;
 late P2pStatusDart _p2pStatus;
+late P2pUnpairDart _p2pUnpair;
 late P2pDestroyArmDart _p2pDestroyArm;
 
 Pointer<Utf8> n(String s) => s.toNativeUtf8();
@@ -137,46 +155,66 @@ void main(List<String> args) {
   final lib = DynamicLibrary.open(dll);
 
   _hello = lib.lookupFunction<HelloC, int Function()>('vault_core_hello');
-  _version = lib.lookupFunction<VersionC, Pointer<Utf8> Function()>('vault_core_version');
-  _free =
-      lib.lookupFunction<FreeStringC, void Function(Pointer<Utf8>)>('vault_core_free_string');
-  _exists = lib.lookupFunction<PathFnC, int Function(Pointer<Utf8>)>('vault_core_vault_exists');
-  _bioBoundF =
-      lib.lookupFunction<PathFnC, int Function(Pointer<Utf8>)>('vault_core_bio_bound');
-  _create = lib.lookupFunction<CreateC, int Function(Pointer<Utf8>, Pointer<Utf8>, int)>(
-      'vault_core_create_vault');
-  _unlock = lib
-      .lookupFunction<UnlockNative, UnlockDart>('vault_core_unlock');
+  _version = lib
+      .lookupFunction<VersionC, Pointer<Utf8> Function()>('vault_core_version');
+  _free = lib.lookupFunction<FreeStringC, void Function(Pointer<Utf8>)>(
+      'vault_core_free_string');
+  _exists = lib.lookupFunction<PathFnC, int Function(Pointer<Utf8>)>(
+      'vault_core_vault_exists');
+  _bioBoundF = lib.lookupFunction<PathFnC, int Function(Pointer<Utf8>)>(
+      'vault_core_bio_bound');
+  _create = lib
+      .lookupFunction<CreateC, int Function(Pointer<Utf8>, Pointer<Utf8>, int)>(
+          'vault_core_create_vault');
+  _unlock = lib.lookupFunction<UnlockNative, UnlockDart>('vault_core_unlock');
   _unlockBio = lib
       .lookupFunction<UnlockBioNative, UnlockBioDart>('vault_core_unlock_bio');
-  _bindBio = lib.lookupFunction<HandleFnC, int Function(Pointer<Void>)>('vault_core_bind_bio');
-  _unbindBio =
-      lib.lookupFunction<HandleFnC, int Function(Pointer<Void>)>('vault_core_unbind_bio');
-  _changePwd = lib.lookupFunction<ChangePwdC, int Function(
-      Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>('vault_core_change_password');
-  _lock = lib.lookupFunction<LockC, void Function(Pointer<Void>)>('vault_core_lock');
-  _cooldown = lib.lookupFunction<CooldownC, int Function(Pointer<Utf8>, Pointer<Uint64>)>(
-      'vault_core_cooldown_remaining_ms');
+  _bindBio = lib.lookupFunction<HandleFnC, int Function(Pointer<Void>)>(
+      'vault_core_bind_bio');
+  _unbindBio = lib.lookupFunction<HandleFnC, int Function(Pointer<Void>)>(
+      'vault_core_unbind_bio');
+  _changePwd = lib.lookupFunction<
+      ChangePwdC,
+      int Function(Pointer<Void>, Pointer<Utf8>,
+          Pointer<Utf8>)>('vault_core_change_password');
+  _lock = lib
+      .lookupFunction<LockC, void Function(Pointer<Void>)>('vault_core_lock');
+  _cooldown = lib
+      .lookupFunction<CooldownC, int Function(Pointer<Utf8>, Pointer<Uint64>)>(
+          'vault_core_cooldown_remaining_ms');
   _vaultMkdir = lib.lookupFunction<MkdirC, MkdirDart>('vault_core_vault_mkdir');
   _vaultList = lib.lookupFunction<ListC, ListDart>('vault_core_vault_list');
-  _vaultSearch = lib.lookupFunction<SearchC, SearchDart>('vault_core_vault_search');
-  _vaultImport = lib.lookupFunction<ImportC, ImportDart>('vault_core_vault_import');
-  _vaultExport = lib.lookupFunction<ExportC, ExportDart>('vault_core_vault_export');
-  _vaultRenameFile = lib.lookupFunction<RenameC, RenameDart>('vault_core_vault_rename_file');
-  _vaultDeleteFile = lib.lookupFunction<DeleteFileC, DeleteFileDart>('vault_core_vault_delete_file');
-  _vaultSetTags = lib.lookupFunction<TagsC, TagsDart>('vault_core_vault_set_tags');
-  _vaultShareCreate =
-      lib.lookupFunction<ShareCreateC, ShareCreateDart>('vault_core_vault_share_create');
-  _vaultShareOpen =
-      lib.lookupFunction<ShareOpenC, ShareOpenDart>('vault_core_vault_share_open');
-  _p2pPairBegin =
-      lib.lookupFunction<P2pPairBeginC, P2pPairBeginDart>('vault_core_p2p_pair_begin');
-  _p2pPairJoin =
-      lib.lookupFunction<P2pPairJoinC, P2pPairJoinDart>('vault_core_p2p_pair_join');
+  _vaultSearch =
+      lib.lookupFunction<SearchC, SearchDart>('vault_core_vault_search');
+  _vaultImport =
+      lib.lookupFunction<ImportC, ImportDart>('vault_core_vault_import');
+  _vaultExport =
+      lib.lookupFunction<ExportC, ExportDart>('vault_core_vault_export');
+  _vaultRenameFile =
+      lib.lookupFunction<RenameC, RenameDart>('vault_core_vault_rename_file');
+  _vaultRenameFolder = lib.lookupFunction<RenameFolderC, RenameFolderDart>(
+      'vault_core_vault_rename_folder');
+  _vaultDeleteFile = lib.lookupFunction<DeleteFileC, DeleteFileDart>(
+      'vault_core_vault_delete_file');
+  _vaultDeleteFolder = lib.lookupFunction<DeleteFolderC, DeleteFolderDart>(
+      'vault_core_vault_delete_folder');
+  _vaultSetTags =
+      lib.lookupFunction<TagsC, TagsDart>('vault_core_vault_set_tags');
+  _vaultShareCreate = lib.lookupFunction<ShareCreateC, ShareCreateDart>(
+      'vault_core_vault_share_create');
+  _vaultShareOpen = lib
+      .lookupFunction<ShareOpenC, ShareOpenDart>('vault_core_vault_share_open');
+  _p2pPairBegin = lib.lookupFunction<P2pPairBeginC, P2pPairBeginDart>(
+      'vault_core_p2p_pair_begin');
+  _p2pPairJoin = lib.lookupFunction<P2pPairJoinC, P2pPairJoinDart>(
+      'vault_core_p2p_pair_join');
   _p2pSync = lib.lookupFunction<P2pSyncC, P2pSyncDart>('vault_core_p2p_sync');
-  _p2pStatus = lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
-  _p2pDestroyArm =
-      lib.lookupFunction<P2pDestroyArmC, P2pDestroyArmDart>('vault_core_p2p_destroy_arm');
+  _p2pStatus =
+      lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
+  _p2pUnpair = lib.lookupFunction<P2pUnpairC, P2pUnpairDart>(
+      'vault_core_p2p_unpair');
+  _p2pDestroyArm = lib.lookupFunction<P2pDestroyArmC, P2pDestroyArmDart>(
+      'vault_core_p2p_destroy_arm');
 
   check(_hello() == 0, 'hello 自检');
   final v = _version();
@@ -220,7 +258,8 @@ void main(List<String> args) {
   // 改密码（F-07 零重加密）：旧密码错误被拒；成功后新密码可解锁、旧密码失效
   check(_changePwd(Pointer<Void>.fromAddress(s.handle), badOld, newPw) == 1,
       '改密码：旧密码错误被拒');
-  check(_changePwd(Pointer<Void>.fromAddress(s.handle), oldPw, newPw) == 0, '改密码成功');
+  check(_changePwd(Pointer<Void>.fromAddress(s.handle), oldPw, newPw) == 0,
+      '改密码成功');
   _lock(Pointer<Void>.fromAddress(s.handle));
   s = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vault2, 'new-pw-9');
   check(s.status == 0 && s.handle != 0, '新密码解锁');
@@ -229,10 +268,12 @@ void main(List<String> args) {
   check(r.status == 1, '旧密码已失效');
 
   // 生物识别（F-03/F-04）：绑定 → 专用接口解锁 → 解绑 → 解锁被拒
-  var s2 = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vault2, 'new-pw-9');
+  var s2 =
+      runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vault2, 'new-pw-9');
   check(_bindBio(Pointer<Void>.fromAddress(s2.handle)) == 0, '绑定生物识别');
   _lock(Pointer<Void>.fromAddress(s2.handle));
-  final d0 = runUnlock((a, b, h, w) => _unlockBio(a, h, w), 'C:/nonexistent/x.vsvb', '');
+  final d0 = runUnlock(
+      (a, b, h, w) => _unlockBio(a, h, w), 'C:/nonexistent/x.vsvb', '');
   print('INFO  bio(不存在路径，期望6): status=${d0.status} handle=${d0.handle}');
   var bio = runUnlock((a, b, h, w) => _unlockBio(a, h, w), vault2, '');
   check(bio.status == 0 && bio.handle != 0, '生物识别解锁（unlock_bio）');
@@ -254,20 +295,25 @@ void main(List<String> args) {
   final sbin = n(srcBin);
   check(_vaultImport(h2, stxt, 0, idOut) == 0 && idOut.value > 0, '导入文本文件');
   final txtId = idOut.value;
-  check(_vaultImport(h2, sbin, 0, idOut) == 0 && idOut.value > txtId, '导入二进制文件');
+  check(
+      _vaultImport(h2, sbin, 0, idOut) == 0 && idOut.value > txtId, '导入二进制文件');
   final binId = idOut.value;
 
   // 列表：根目录应有 2 个文件
   final lst = _vaultList(h2, 0);
-  check(lst.address != 0 && lst.toDartString().contains('note.txt'), '列表含 note.txt');
-  check(lst.address != 0 && lst.toDartString().contains('blob.bin'), '列表含 blob.bin');
+  check(lst.address != 0 && lst.toDartString().contains('note.txt'),
+      '列表含 note.txt');
+  check(lst.address != 0 && lst.toDartString().contains('blob.bin'),
+      '列表含 blob.bin');
 
   // 检索：名称与内容命中；清空查询后倒排含内容词
   final sq = _vaultSearch(h2, n('设计'));
-  check(sq.address != 0 && sq.toDartString().contains('note.txt'), '检索命中内容词「设计」');
+  check(
+      sq.address != 0 && sq.toDartString().contains('note.txt'), '检索命中内容词「设计」');
   _free(sq);
   final sq2 = _vaultSearch(h2, n('nothing-matches-this'));
-  check(sq2.address != 0 && sq2.toDartString().contains('"files":[]'), '无命中返回空集');
+  check(
+      sq2.address != 0 && sq2.toDartString().contains('"files":[]'), '无命中返回空集');
   _free(sq2);
 
   // 导出往返：明文逐字节一致
@@ -289,13 +335,38 @@ void main(List<String> args) {
   // 重命名 + 标签
   check(_vaultRenameFile(h2, txtId, n('renamed.txt')) == 0, '重命名文件');
   final lst2 = _vaultList(h2, 0);
-  check(lst2.address != 0 && lst2.toDartString().contains('renamed.txt'), '列表显示新名称');
+  check(lst2.address != 0 && lst2.toDartString().contains('renamed.txt'),
+      '列表显示新名称');
   _free(lst2);
   check(_vaultSetTags(h2, txtId, n('重要,设计')) == 0, '设置标签');
 
   // mkdir
   final mkOut = calloc<Uint64>();
   check(_vaultMkdir(h2, 0, n('文档'), mkOut) == 0 && mkOut.value > 0, '创建文件夹');
+  final folderId = mkOut.value;
+
+  // P4：文件夹重命名 / 标签 / 递归擦除（右键菜单「重命名」「标签」「安全擦除」）
+  final folderSrc = '${dir2.path}${Platform.pathSeparator}folder.txt';
+  File(folderSrc).writeAsStringSync('folder-payload');
+  final pf = n(folderSrc);
+  final fOut = calloc<Uint64>();
+  check(_vaultImport(h2, pf, folderId, fOut) == 0, '导入文件到子文件夹');
+  check(_vaultRenameFolder(h2, folderId, n('归档')) == 0, '重命名文件夹');
+  final lst3 = _vaultList(h2, 0);
+  check(lst3.address != 0 && lst3.toDartString().contains('归档'), '列表显示文件夹新名');
+  _free(lst3);
+  check(_vaultRenameFolder(h2, 0, n('x')) != 0, '根目录不可改名被拒');
+  check(_vaultSetTags(h2, folderId, n('重要')) == 0, '设置文件夹标签');
+  final lst4 = _vaultList(h2, 0);
+  check(lst4.address != 0 && lst4.toDartString().contains('"tags":["重要"]'),
+      '文件夹标签随列表返回');
+  _free(lst4);
+  check(_vaultDeleteFolder(h2, folderId, 1) == 1, '递归擦除文件夹返回删除文件数');
+  final lst5 = _vaultList(h2, 0);
+  check(lst5.address != 0 && !lst5.toDartString().contains('归档'), '擦除后文件夹消失');
+  _free(lst5);
+  calloc.free(pf);
+  calloc.free(fOut);
 
   // 阅后即焚：创建 → 打开成功 → 再打开被拒
   final shareJson = _vaultShareCreate(h2, binId, 3600, 1);
@@ -309,7 +380,8 @@ void main(List<String> args) {
   final sid = n(sidMatch!.group(1)!);
   final tok = n(tokMatch!.group(1)!);
   final sep = n(shareExp);
-  check(_vaultShareOpen(h2, int.parse(sidMatch.group(1)!), tok, sep) == 0, '凭令牌打开分享');
+  check(_vaultShareOpen(h2, int.parse(sidMatch.group(1)!), tok, sep) == 0,
+      '凭令牌打开分享');
   final badTok = n('f'.padRight(64, '0'));
   check(_vaultShareOpen(h2, int.parse(sidMatch.group(1)!), badTok, sep) != 0,
       '分享已耗尽/令牌错误被拒');
@@ -317,7 +389,8 @@ void main(List<String> args) {
 
   // 安全擦除
   check(_vaultDeleteFile(h2, binId, 1) == 0, '安全擦除二进制文件');
-  check(!File(srcBin.replaceAll('.bin', '.bin')).existsSync() || true, '擦除不影响源文件');
+  check(!File(srcBin.replaceAll('.bin', '.bin')).existsSync() || true,
+      '擦除不影响源文件');
   check(_vaultExport(h2, binId, ep) != 0, '擦除后导出被拒');
 
   _lock(h2);
@@ -338,12 +411,14 @@ void main(List<String> args) {
   final vaultA2 = '${dirB.path}${Platform.pathSeparator}dev-a.vsvb';
   final vpA2 = n(vaultA2);
   check(_create(vpA2, pw, 0) == 0, 'P3 创建设备 A 同步保险箱');
-  final sA = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultA2, 'pw-1234');
+  final sA =
+      runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultA2, 'pw-1234');
   check(sA.status == 0 && sA.handle != 0, 'P3 解锁设备 A');
   final vaultB = '${dirB.path}${Platform.pathSeparator}dev-b.vsvb';
   final vpB = n(vaultB);
   check(_create(vpB, pw, 0) == 0, 'P3 创建第二台设备保险箱');
-  final sb = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultB, 'pw-1234');
+  final sb =
+      runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultB, 'pw-1234');
   check(sb.status == 0 && sb.handle != 0, 'P3 解锁设备 B');
   final hA = Pointer<Void>.fromAddress(sA.handle);
   final hB = Pointer<Void>.fromAddress(sb.handle);
@@ -357,12 +432,14 @@ void main(List<String> args) {
   final fpMatch = RegExp(r'"fingerprint":"([0-9a-f ]+)"').firstMatch(inv1);
   check(portMatch != null && fpMatch != null, 'P3 邀请码 JSON 含端口与指纹');
   final fpB = fpMatch!.group(1)!;
-  check(fpB.length == 19 && fpB.split(' ').length == 4, 'P3 指纹为 4 组 4 字符（UI 核验格式）');
+  check(fpB.length == 19 && fpB.split(' ').length == 4,
+      'P3 指纹为 4 组 4 字符（UI 核验格式）');
   final addrB = n('127.0.0.1:${portMatch!.group(1)!}');
   check(_p2pPairJoin(hA, addrB, n('wrong-code')).address == 0, 'P3 错误邀请码被拒');
   invJson = _p2pPairBegin(hB);
-  final code2 =
-      RegExp(r'"code":"([0-9a-f]+)"').firstMatch(invJson.toDartString())!.group(1)!;
+  final code2 = RegExp(r'"code":"([0-9a-f]+)"')
+      .firstMatch(invJson.toDartString())!
+      .group(1)!;
   _free(invJson);
   final joined = _p2pPairJoin(hA, addrB, n(code2));
   if (joined.address == 0) {
@@ -379,7 +456,8 @@ void main(List<String> args) {
 
   // B 导入文件 → A 发起同步拉取 → A 导出验证
   final p3src = '${dirB.path}${Platform.pathSeparator}sync-me.txt';
-  File(p3src).writeAsBytesSync(utf8.encode('P3 incremental sync payload! ' * 3000));
+  File(p3src)
+      .writeAsBytesSync(utf8.encode('P3 incremental sync payload! ' * 3000));
   check(_vaultImport(hB, n(p3src), 0, idOut) == 0, 'P3 B 导入待同步文件');
   final p3FileId = idOut.value;
   final syncJson = _p2pSync(hA, addrB);
@@ -394,30 +472,38 @@ void main(List<String> args) {
   check(syncJson.address != 0, 'P3 A 发起增量同步');
   final syncSummary = syncJson.address != 0 ? syncJson.toDartString() : '';
   if (syncJson.address != 0) _free(syncJson);
-  check(syncSummary.contains('"pulled":[[$p3FileId]]') ||
-      RegExp('"pulled":\\[$p3FileId\\]').hasMatch(syncSummary), 'P3 同步拉取 1 个文件');
+  check(
+      syncSummary.contains('"pulled":[[$p3FileId]]') ||
+          RegExp('"pulled":\\[$p3FileId\\]').hasMatch(syncSummary),
+      'P3 同步拉取 1 个文件');
   final p3exp = '${dirB.path}${Platform.pathSeparator}sync-out.txt';
   check(_vaultExport(hA, p3FileId, n(p3exp)) == 0, 'P3 A 导出同步来的文件');
   check(
-      File(p3exp).readAsBytesSync().length == File(p3src).readAsBytesSync().length,
+      File(p3exp).readAsBytesSync().length ==
+          File(p3src).readAsBytesSync().length,
       'P3 同步内容长度一致');
 
   // 状态：双方互见对端
   final stA = _p2pStatus(hA);
-  check(stA.address != 0 && stA.toDartString().contains('"peers":[{'), 'P3 A 状态含对端');
+  check(stA.address != 0 && stA.toDartString().contains('"peers":[{'),
+      'P3 A 状态含对端');
   if (stA.address != 0) _free(stA);
 
   // 删除同步：A 删除文件 → A 发起同步 → B 收签名删除指令
   // （B 侧文件在 24h 误删保护窗口内 → 留加密冲突副本 `原名.conflict-<ts>`，docs/05-03 §6.2）
   check(_vaultDeleteFile(hA, p3FileId, 0) == 0, 'P3 A 删除已同步文件');
   final sync2 = _p2pSync(hA, addrB);
-  check(sync2.address != 0 && sync2.toDartString().contains('"deleted":[$p3FileId]'),
+  check(
+      sync2.address != 0 &&
+          sync2.toDartString().contains('"deleted":[$p3FileId]'),
       'P3 删除指令同步');
   if (sync2.address != 0) _free(sync2);
   // B 在自身线程异步应用删除指令（含保护窗口冲突副本），留出处理时间再核对
   sleep(const Duration(milliseconds: 2000));
   final lstB = _vaultList(hB, 0);
-  check(lstB.address != 0 && !lstB.toDartString().contains('"name":"sync-me.txt"'),
+  check(
+      lstB.address != 0 &&
+          !lstB.toDartString().contains('"name":"sync-me.txt"'),
       'P3 B 侧原文件条目已移除');
   check(lstB.address != 0 && lstB.toDartString().contains('conflict-'),
       'P3 B 侧保留误删保护冲突副本');
@@ -425,8 +511,9 @@ void main(List<String> args) {
 
   // 远程销毁：A 对 B 下发延迟 1s 销毁 → B 保险箱文件被擦除
   final stB = _p2pStatus(hB);
-  final devBId =
-      RegExp(r'"deviceId":"(vd-[0-9a-f]+)"').firstMatch(stB.toDartString())!.group(1)!;
+  final devBId = RegExp(r'"deviceId":"(vd-[0-9a-f]+)"')
+      .firstMatch(stB.toDartString())!
+      .group(1)!;
   _free(stB);
   final armJson = _p2pDestroyArm(hA, addrB, n(devBId), 1);
   check(armJson.address != 0 && armJson.toDartString().contains('"sent":true'),
@@ -435,6 +522,32 @@ void main(List<String> args) {
   sleep(const Duration(milliseconds: 1800));
   check(!File(vaultB).existsSync(), 'P3 延迟销毁到期后 B 保险箱文件被擦除');
 
+  // 解除配对（P4-4 设备页「解绑」）：A 侧移除已配对的 B（须在销毁用例之后，
+  // 销毁指令依赖 B 仍登记在 A 的对端表中）
+  // 注意：events 时间线里本就含 deviceId（如 "paired with vd-…"），故断言只解析
+  // peers 数组，不对整段 JSON 做 contains。
+  List<dynamic> peersOf(Pointer<Utf8> st) {
+    if (st.address == 0) return <dynamic>[];
+    final m = jsonDecode(st.toDartString()) as Map<String, dynamic>;
+    return m['peers'] as List<dynamic>;
+  }
+
+  final preUnpair = _p2pStatus(hA);
+  final prePeers = peersOf(preUnpair);
+  check(prePeers.any((p) => (p as Map<String, dynamic>)['deviceId'] == devBId),
+      'P4 解绑前 A 侧对端表含 B');
+  if (preUnpair.address != 0) _free(preUnpair);
+  check(_p2pUnpair(hA, n(devBId)) == 0, 'P4 解绑已配对设备返回 0');
+  final postUnpair = _p2pStatus(hA);
+  final postPeers = peersOf(postUnpair);
+  check(postPeers.isEmpty, 'P4 解绑后 A 侧对端表为空');
+  check(
+      !postPeers.any((p) => (p as Map<String, dynamic>)['deviceId'] == devBId),
+      'P4 解绑后 deviceId 不再出现于 peers');
+  if (postUnpair.address != 0) _free(postUnpair);
+  check(_p2pUnpair(hA, n('vd-0000000000000000')) == 0,
+      'P4 解绑不存在的设备仍返回 0（幂等）');
+
   _lock(hA);
   _lock(hB);
   calloc.free(vpA2);
@@ -442,7 +555,8 @@ void main(List<String> args) {
   calloc.free(addrB);
   dirB.deleteSync(recursive: true);
 
-  dir2.deleteSync(recursive: true);  calloc.free(pw);
+  dir2.deleteSync(recursive: true);
+  calloc.free(pw);
   calloc.free(newPw);
   calloc.free(badOld);
   calloc.free(vp);

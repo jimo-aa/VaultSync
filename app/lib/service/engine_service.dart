@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../core/l10n/vs_l10n.dart';
 import '../ffi/vault_core_bridge.dart';
 
 /// 解锁结果（服务层语义，隔离 FFI 状态码细节）。
@@ -52,7 +53,7 @@ class VaultEngine {
 
   bool get isNative => _bridge is VaultCoreBridgeFfi;
 
-  /// 首次运行：主密码设置即创建保险箱（F-01；强度策略 UI 随 P4-1 落地）。
+  /// 首次运行：主密码设置即创建保险箱（F-01；强度策略见 PasswordPolicy）。
   Future<void> ensureCreated(String password) async {
     final primary = await primaryPath();
     if (_bridge.vaultExists(primary)) return;
@@ -60,6 +61,18 @@ class VaultEngine {
     final err = await Isolate.run(() => _createSync(primary, password));
     if (err != VaultStatus.ok) {
       throw StateError('创建保险箱失败: ${VaultStatus.message(err)}');
+    }
+  }
+
+  /// 创建 / 重设伪装保险箱（F-06）：独立文件 + 独立 MK，与真实保险箱无任何共享。
+  /// 已存在时不覆盖（改伪装密码请使用设置页的「重设伪装密码」）。
+  Future<void> ensureDisguiseCreated(String password) async {
+    final path = await disguisePath();
+    if (_bridge.vaultExists(path)) return;
+    if (!isNative) throw StateError('原生引擎未加载，无法创建伪装保险箱');
+    final err = await Isolate.run(() => _createSync(path, password));
+    if (err != VaultStatus.ok) {
+      throw StateError('创建伪装保险箱失败: ${VaultStatus.message(err)}');
     }
   }
 
@@ -112,6 +125,15 @@ class VaultEngine {
 
   void lock(Object sessionHandle) {
     if (isNative) _bridge.lock(sessionHandle);
+  }
+
+  /// 绑定/解绑生物识别（F-04）。返回 null=成功；非 null=用户可读错误。
+  Future<String?> bindBio(Object sessionHandle, {bool bind = true}) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => bind ? _bindBioSync(h) : _unbindBioSync(h))
+        : (bind ? _bridge.bindBio(sessionHandle) : _bridge.unbindBio(sessionHandle));
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
   // ==== P2 保险箱操作（docs/05-02）====
@@ -184,11 +206,32 @@ class VaultEngine {
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
-  Future<String?> setTags(Object sessionHandle, int fileId, List<String> tags) async {
+  /// 重命名文件夹（根目录不可改名）。
+  Future<String?> renameFolder(Object sessionHandle, int folderId, String name) async {
     final h = sessionHandle as int;
     final err = isNative
-        ? await Isolate.run(() => _statusSync(h, fileId, tags.join(','), Op.setTags))
-        : _bridge.vaultSetTags(sessionHandle, fileId, tags);
+        ? await Isolate.run(() => _statusSync(h, folderId, name, Op.renameFolder))
+        : _bridge.vaultRenameFolder(sessionHandle, folderId, name);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 递归擦除文件夹；返回 (err, 删除的文件数)。
+  Future<(String?, int)> deleteFolder(Object sessionHandle, int folderId,
+      {bool secure = true}) async {
+    final h = sessionHandle as int;
+    final n = isNative
+        ? await Isolate.run(() => _deleteFolderSync(h, folderId, secure))
+        : _bridge.vaultDeleteFolder(sessionHandle, folderId, secure: secure);
+    // FFI 约定：成功返回删除的文件数（≥0），失败返回负状态码。
+    if (n < 0) return (VaultStatus.message(-n), 0);
+    return (null, n);
+  }
+
+  Future<String?> setTags(Object sessionHandle, int targetId, List<String> tags) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _statusSync(h, targetId, tags.join(','), Op.setTags))
+        : _bridge.vaultSetTags(sessionHandle, targetId, tags);
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
@@ -212,6 +255,109 @@ class VaultEngine {
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
+  // ==== P3 P2P 同步（docs/05, docs/08）====
+  // 10 个导出补封装入服务层，遵循既有 isolate 模式：
+  // 句柄为 int 跨 isolate 安全；JSON 结果为引擎分配字符串，桥层 _takeJson 释放。
+
+  /// 开始配对，返回 JSON（含设备身份与邀请信息）；失败返回 null。
+  Future<Map<String, dynamic>?> pairBegin(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pPairBeginSync(h))
+        : _bridge.p2pPairBegin(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 加入配对（addr + 一次性邀请码）。返回 JSON 或 null。
+  Future<Map<String, dynamic>?> pairJoin(
+      Object sessionHandle, String addr, String code) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pPairJoinSync(h, addr, code))
+        : _bridge.p2pPairJoin(sessionHandle, addr, code);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 直连增量同步。返回 JSON 摘要 {pulled/pushed/deleted/merged/conflicts} 或 null。
+  Future<Map<String, dynamic>?> sync(Object sessionHandle, String addr) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pSyncSync(h, addr))
+        : _bridge.p2pSync(sessionHandle, addr);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 经中继同步（relay + room）。
+  Future<Map<String, dynamic>?> syncRelay(
+      Object sessionHandle, String relay, String room) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pSyncRelaySync(h, relay, room))
+        : _bridge.p2pSyncRelay(sessionHandle, relay, room);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 《待定语义》serveRelay 返回 ERR 码 int（状态码语义见 AGENTS）。
+  Future<int> serveRelay(
+      Object sessionHandle, String relay, String room) async {
+    final h = sessionHandle as int;
+    return isNative
+        ? await Isolate.run(() => _p2pServeRelaySync(h, relay, room))
+        : _bridge.p2pServeRelay(sessionHandle, relay, room);
+  }
+
+  /// P2P 状态快照 JSON（设备身份 / peers / 部署销毁 / 事件时间线）。
+  Future<Map<String, dynamic>?> status(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pStatusSync(h))
+        : _bridge.p2pStatus(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 解除与指定设备的配对（幂等：该设备本就不存在亦视为成功）。
+  /// 返回 null = 成功；非 null = 用户可读错误消息。
+  Future<String?> unpair(Object sessionHandle, String deviceId) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _p2pUnpairSync(h, deviceId))
+        : _bridge.p2pUnpair(sessionHandle, deviceId);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 部署远程销毁；返回 JSON 或 null。
+  Future<Map<String, dynamic>?> destroyArm(
+      Object sessionHandle, String addr, String target, int delaySecs) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pJson3Sync(h, addr, target, delaySecs))
+        : _bridge.p2pDestroyArm(sessionHandle, addr, target, delaySecs);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 取消武装中的销毁；返回 ERR 码 int。
+  Future<int> destroyCancel(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    return isNative
+        ? await Isolate.run(() => _p2pDestroyCancelSync(h))
+        : _bridge.p2pDestroyCancel(sessionHandle);
+  }
+
+  /// 解决冲突：keep 保留，drop 丢弃（可选 secure）。
+  Future<int> conflictResolve(Object sessionHandle, int keepId, int dropId,
+      {bool secure = false}) async {
+    final h = sessionHandle as int;
+    return isNative
+        ? await Isolate.run(() => _p2pConflictResolveSync(h, keepId, dropId, secure))
+        : _bridge.p2pConflictResolve(sessionHandle, keepId, dropId, secure: secure);
+  }
+
   Future<String> primaryPath() async => _join(await _vaultDir(), primaryName);
 
   Future<String> disguisePath() async => _join(await _vaultDir(), disguiseName);
@@ -229,8 +375,10 @@ class VaultEngine {
     return switch (r.status) {
       VaultStatus.wrongPassword => UnlockWrongPassword(cooldownMs: r.waitMs),
       VaultStatus.cooldown => UnlockCooldown(r.waitMs),
-      VaultStatus.bioUnavailable => const UnlockFailure('此平台不支持生物识别，请使用主密码'),
-      VaultStatus.bioNotBound => const UnlockFailure('尚未绑定生物识别（设置中绑定后可用）'),
+      VaultStatus.bioUnavailable => UnlockFailure(VsL10n.orNull?.stateBioUnsupported ??
+          '此平台不支持生物识别，请使用主密码'),
+      VaultStatus.bioNotBound => UnlockFailure(VsL10n.orNull?.stateBioNotBound ??
+          '尚未绑定生物识别（设置中绑定后可用）'),
       _ => UnlockFailure(VaultStatus.message(r.status)),
     };
   }
@@ -279,10 +427,21 @@ int _changeSync(int handle, String oldPassword, String newPassword) {
   return lib.changePassword(handle, oldPassword, newPassword);
 }
 
+int _bindBioSync(int handle) => _handleFnSync((lib) => lib.bindBio(handle));
+
+int _unbindBioSync(int handle) => _handleFnSync((lib) => lib.unbindBio(handle));
+
+/// 一个 session 句柄的幂等原生调用（未链接 DLL 时返回内部错误）。
+int _handleFnSync(int Function(VaultCoreBridgeFfi) fn) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return fn(lib);
+}
+
 // ---- P2 保险箱操作的 isolate 侧函数 ----
 
 /// 统一的"状态码 + 可选字符串载荷"操作。shareOpen 复用 payload：'token\u0000dest'。
-enum Op { export, rename, setTags, shareOpen }
+enum Op { export, rename, renameFolder, setTags, shareOpen }
 
 int _statusSync(int handle, int id, String payload, Op op) {
   final lib = VaultCoreBridgeFfi.tryOpen();
@@ -292,6 +451,8 @@ int _statusSync(int handle, int id, String payload, Op op) {
       return lib.vaultExport(handle, id, payload);
     case Op.rename:
       return lib.vaultRenameFile(handle, id, payload);
+    case Op.renameFolder:
+      return lib.vaultRenameFolder(handle, id, payload);
     case Op.setTags:
       return lib.vaultSetTags(handle, id, payload.split(','));
     case Op.shareOpen:
@@ -322,6 +483,12 @@ int _deleteSync(int handle, int fileId, bool secure) {
   return lib.vaultDeleteFile(handle, fileId, secure: secure);
 }
 
+int _deleteFolderSync(int handle, int folderId, bool secure) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return -VaultStatus.internal;
+  return lib.vaultDeleteFolder(handle, folderId, secure: secure);
+}
+
 String? _jsonSync(int handle, int folder, String? query) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return null;
@@ -333,6 +500,68 @@ String? _shareCreateSync(int handle, int fileId, int ttlSecs, int maxOpens) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return null;
   return lib.vaultShareCreate(handle, fileId, ttlSecs, maxOpens);
+}
+
+// ---- P3 p2p isolate 侧函数（句柄为 int，桥对象不可跨 isolate）----
+
+String? _p2pPairBeginSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pPairBegin(handle);
+}
+
+String? _p2pPairJoinSync(int handle, String addr, String code) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pPairJoin(handle, addr, code);
+}
+
+String? _p2pSyncSync(int handle, String addr) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pSync(handle, addr);
+}
+
+String? _p2pSyncRelaySync(int handle, String relay, String room) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pSyncRelay(handle, relay, room);
+}
+
+int _p2pServeRelaySync(int handle, String relay, String room) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.p2pServeRelay(handle, relay, room);
+}
+
+String? _p2pStatusSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pStatus(handle);
+}
+
+int _p2pUnpairSync(int handle, String deviceId) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.p2pUnpair(handle, deviceId);
+}
+
+String? _p2pJson3Sync(int handle, String a, String b, int delaySecs) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pDestroyArm(handle, a, b, delaySecs);
+}
+
+int _p2pDestroyCancelSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.p2pDestroyCancel(handle);
+}
+
+int _p2pConflictResolveSync(int handle, int keepId, int dropId, bool secure) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.p2pConflictResolve(handle, keepId, dropId, secure: secure);
 }
 
 
