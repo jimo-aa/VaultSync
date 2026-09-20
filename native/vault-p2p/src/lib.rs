@@ -8,6 +8,7 @@
 pub mod channel;
 pub mod engine;
 pub mod identity;
+pub mod orders;
 pub mod peers;
 pub mod proto;
 

@@ -417,8 +417,8 @@ class _EmbedDialogState extends ConsumerState<_EmbedDialog> {
   }
 
   Future<void> _loadFiles() async {
-    final files = await _collectFiles(
-        ref.read(vaultEngineProvider), widget.handle);
+    final files =
+        await _collectFiles(ref.read(vaultEngineProvider), widget.handle);
     if (!mounted) return;
     setState(() {
       _files = files;
@@ -468,9 +468,8 @@ class _EmbedDialogState extends ConsumerState<_EmbedDialog> {
 
   Future<void> _pickOutput() async {
     final image = _imagePath;
-    final base = image == null
-        ? 'image.png'
-        : image.split(RegExp(r'[\\/]')).last;
+    final base =
+        image == null ? 'image.png' : image.split(RegExp(r'[\\/]')).last;
     final suggested = base.toLowerCase().endsWith('.png')
         ? '${base.substring(0, base.length - 4)}.stego.png'
         : '$base.stego.png';
@@ -662,8 +661,8 @@ class _EmbedDialogState extends ConsumerState<_EmbedDialog> {
   Widget _fieldLabel(String text) => Padding(
         padding: const EdgeInsets.only(top: 12, bottom: 6),
         child: Text(text,
-            style: const TextStyle(
-                fontSize: 12.5, fontWeight: FontWeight.w500)),
+            style:
+                const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
       );
 }
 
@@ -684,8 +683,7 @@ class _ExtractDialogState extends ConsumerState<_ExtractDialog> {
   bool _busy = false;
   String? _error;
 
-  bool get _canSubmit =>
-      !_busy && _imagePath != null && _destPath != null;
+  bool get _canSubmit => !_busy && _imagePath != null && _destPath != null;
 
   Future<void> _pickImage() async {
     final file = await openFile(acceptedTypeGroups: const [_kPngGroup]);
@@ -814,7 +812,7 @@ class _ExtractDialogState extends ConsumerState<_ExtractDialog> {
   Widget _fieldLabel(String text) => Padding(
         padding: const EdgeInsets.only(top: 12, bottom: 6),
         child: Text(text,
-            style: const TextStyle(
-                fontSize: 12.5, fontWeight: FontWeight.w500)),
+            style:
+                const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
       );
 }

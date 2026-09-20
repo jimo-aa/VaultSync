@@ -25,17 +25,20 @@ class VaultEntry {
   bool get isSyncConflict =>
       !isFolder && name.contains('.conflict-') && name.endsWith('）') == false;
 
-  factory VaultEntry.fromJson(Map<String, dynamic> json, {bool isFolder = false}) =>
+  factory VaultEntry.fromJson(Map<String, dynamic> json,
+          {bool isFolder = false}) =>
       VaultEntry(
         id: (json['id'] as num).toInt(),
         name: (json['name'] as String?) ?? '',
         isFolder: isFolder,
         size: (json['size'] as num?)?.toInt() ?? 0,
-        tags: ((json['tags'] as List?) ?? const []).whereType<String>().toList(),
+        tags:
+            ((json['tags'] as List?) ?? const []).whereType<String>().toList(),
         modifiedMs: (json['modifiedMs'] as num?)?.toInt(),
       );
 
-  factory VaultEntry.folder({required int id, required String name}) => VaultEntry(
+  factory VaultEntry.folder({required int id, required String name}) =>
+      VaultEntry(
         id: id,
         name: name,
         isFolder: true,
@@ -57,13 +60,15 @@ class VaultListing {
   factory VaultListing.fromJson(Map<String, dynamic> json) {
     final folders = ((json['folders'] as List?) ?? const [])
         .whereType<Map>()
-        .map((m) => VaultEntry.fromJson(Map<String, dynamic>.from(m), isFolder: true))
+        .map((m) =>
+            VaultEntry.fromJson(Map<String, dynamic>.from(m), isFolder: true))
         .toList();
     final files = ((json['files'] as List?) ?? const [])
         .whereType<Map>()
         .map((m) => VaultEntry.fromJson(Map<String, dynamic>.from(m)))
         .toList();
-    folders.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    folders
+        .sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     files.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return VaultListing(folders: folders, files: files);
   }

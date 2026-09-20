@@ -35,8 +35,8 @@ class DeviceController extends Notifier<DeviceState> {
   Future<void> refresh() async {
     final handle = _handle;
     if (handle == null) {
-      state = DeviceState(
-          error: VsL10n.orNull?.stateDeviceNeedUnlock ?? '请先解锁');
+      state =
+          DeviceState(error: VsL10n.orNull?.stateDeviceNeedUnlock ?? '请先解锁');
       return;
     }
     state = const DeviceState(loading: true);
@@ -50,4 +50,5 @@ class DeviceController extends Notifier<DeviceState> {
   }
 }
 
-final deviceProvider = NotifierProvider<DeviceController, DeviceState>(DeviceController.new);
+final deviceProvider =
+    NotifierProvider<DeviceController, DeviceState>(DeviceController.new);

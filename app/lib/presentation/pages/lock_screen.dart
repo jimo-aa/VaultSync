@@ -211,8 +211,12 @@ class _LockScreenState extends ConsumerState<LockScreen>
                               child: GestureDetector(
                                 onTap: () =>
                                     setState(() => _obscure = !_obscure),
-                                child: AppIcon(_obscure ? 'eye' : 'eye-off',
-                                    size: 17, color: v.text3),
+                                child: Semantics(
+                                  button: true,
+                                  label: l.lockScreenTogglePwVisibility,
+                                  child: AppIcon(_obscure ? 'eye' : 'eye-off',
+                                      size: 17, color: v.text3),
+                                ),
                               ),
                             ),
                           ),

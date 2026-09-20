@@ -87,8 +87,8 @@ class AppTheme {
           side: WidgetStateProperty.all(BorderSide(color: v.border)),
           shape: WidgetStateProperty.all(RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(DesignTokens.rMd))),
-          padding: WidgetStateProperty.all(
-              const EdgeInsets.symmetric(vertical: 5)),
+          padding:
+              WidgetStateProperty.all(const EdgeInsets.symmetric(vertical: 5)),
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
@@ -129,7 +129,9 @@ class AppTheme {
       checkboxTheme: CheckboxThemeData(
         side: BorderSide(color: v.border, width: 1.5),
         fillColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected) ? v.blue : Colors.transparent),
+            states.contains(WidgetState.selected)
+                ? v.blue
+                : Colors.transparent),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
       ),
       radioTheme: RadioThemeData(
@@ -163,8 +165,7 @@ class AppTheme {
         filled: true,
         fillColor: v.bg,
         isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         hintStyle: t(13, color: v.text3),
         labelStyle: t(12.5, color: v.text2, w: FontWeight.w500),
         border: OutlineInputBorder(
@@ -197,7 +198,6 @@ class VsShortcut {
       HardwareKeyboard.instance.isControlPressed ||
       HardwareKeyboard.instance.isMetaPressed;
 }
-
 
 /// 无转场构建器（见 pageTransitionsTheme 注释）。
 class _NoPageTransitionsBuilder extends PageTransitionsBuilder {

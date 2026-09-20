@@ -9,6 +9,13 @@
 //!   的文件携带发送方 FSKey（仅经 E2E 信道），使密文块可原样复用（加密块=同步块=传输块）。
 //! - `FileEntry.vc`：per-file 向量时钟（device_id → 计数），因果识别与冲突判定（docs/05-03 §6.2）。
 //! - `IndexData.tombstones`：删除墓碑，同步时传播删除语义（删除优先，docs/05-03 §6.2）。
+//!
+//! P5-4 密钥轮换扩展（同样 serde default，旧索引可读）：
+//! - `Folder.fskey`：文件夹 FSK 覆盖（hex）。None = 按 MK 派生 `HKDF(MK,"fsk/<id>")`；
+//!   Some = 轮换写入的**随机** FSK'（语义与 `FileEntry.fskey` 对称，见 docs/07 §二 FSK 行）。
+//! - `IndexData.staging`：轮换中「暂存容器」标记（file_id → 随机 tag），是轮换的崩溃恢复锚点：
+//!   密钥与标记在同一次索引提交中生效，读路径据此把「标记指向的暂存容器」与「正式容器」判开
+//!   （详见 `vault.rs::Vault::rotate_containers` 的阶段说明）。
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
@@ -29,6 +36,11 @@ pub struct Folder {
     /// 与文件夹名一样不进倒排索引（搜索只返回文件），serde default 保证旧索引可读。
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 文件夹 FSK 覆盖（hex，32B；P5-4 密钥轮换）。None = 按 MK 派生 `HKDF(MK,"fsk/<id>")`；
+    /// Some = 轮换后写入的随机 FSK'。**随机而非派生**：MK 泄露场景下派生值可被重算出来，
+    /// 随机值才真正切断旧密钥路径（docs/07 §二）。serde default 保证旧索引可读。
+    #[serde(default)]
+    pub fskey: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +86,11 @@ struct IndexData {
     /// 已删除文件墓碑（同步删除语义）
     #[serde(default)]
     tombstones: BTreeMap<u64, Tombstone>,
+    /// 轮换中的暂存容器标记：file_id → 暂存文件名里的随机 tag（P5-4）。
+    /// 标记与「新 FSKey / 新 FSK 覆盖」在同一次索引落盘中提交，故「标记指向的暂存文件存在」
+    /// 恰好等价于「该文件当前的密文是索引中当前密钥的产物」。serde default 保证旧索引可读。
+    #[serde(default)]
+    staging: BTreeMap<u64, String>,
     next_id: u64,
 }
 
@@ -151,6 +168,7 @@ impl VaultIndex {
             shares: BTreeMap::new(),
             search: HashMap::new(),
             tombstones: BTreeMap::new(),
+            staging: BTreeMap::new(),
             next_id: 1,
         };
         d.folders.insert(
@@ -159,6 +177,7 @@ impl VaultIndex {
                 name: String::new(),
                 parent: 0,
                 tags: Vec::new(),
+                fskey: None,
             },
         );
         Self { d, search_key }
@@ -249,6 +268,7 @@ impl VaultIndex {
                 name: name.to_string(),
                 parent,
                 tags: Vec::new(),
+                fskey: None,
             },
         );
         Ok(id)
@@ -316,6 +336,8 @@ impl VaultIndex {
 
     pub fn remove_file(&mut self, id: u64) -> Result<FileEntry, &'static str> {
         let e = self.d.files.remove(&id).ok_or("file not found")?;
+        // 轮换标记随条目一并清除：否则 id 被同步复用时读路径会指向陈旧暂存容器
+        self.d.staging.remove(&id);
         self.deindex_name(id, &e.name);
         for t in &e.tags {
             self.deindex_name(id, t);
@@ -519,6 +541,8 @@ impl VaultIndex {
         let now = now_ms();
         // 摄取完成即把墓碑清掉（该 id 复活）
         self.d.tombstones.remove(&id);
+        // 对端 id 可能与本机已删条目的 id 重合：清掉陈旧轮换标记（新容器由 ingest 直接落正式路径）
+        self.d.staging.remove(&id);
         if id >= self.d.next_id {
             self.d.next_id = id + 1;
         }
@@ -594,6 +618,111 @@ impl VaultIndex {
             .get(&id)
             .map(|f| f.modified_ms)
             .ok_or("file not found")
+    }
+
+    // ==== P5-4 密钥轮换支撑（docs/07 §二/§三）====
+
+    /// 文件夹 FSK 覆盖（hex）；None = 按 MK 派生。不存在的 id 返回 Err（调用方据此校验）。
+    pub fn folder_fsk(&self, folder_id: u64) -> Result<Option<String>, &'static str> {
+        self.d
+            .folders
+            .get(&folder_id)
+            .map(|f| f.fskey.clone())
+            .ok_or("folder not found")
+    }
+
+    pub fn set_folder_fskey(
+        &mut self,
+        folder_id: u64,
+        fskey_hex: &str,
+    ) -> Result<(), &'static str> {
+        let f = self
+            .d
+            .folders
+            .get_mut(&folder_id)
+            .ok_or("folder not found")?;
+        f.fskey = Some(fskey_hex.to_string());
+        Ok(())
+    }
+
+    /// 写入文件 FSKey 覆盖（轮换后的随机 FSKey；语义同同步携带的覆盖）。
+    pub fn set_file_fskey(&mut self, file_id: u64, fskey_hex: &str) -> Result<(), &'static str> {
+        let f = self.d.files.get_mut(&file_id).ok_or("file not found")?;
+        f.fskey = Some(fskey_hex.to_string());
+        Ok(())
+    }
+
+    /// 全部文件夹 id（含根）。
+    pub fn folder_ids(&self) -> Vec<u64> {
+        self.d.folders.keys().copied().collect()
+    }
+
+    /// 全部文件 id（BTreeMap 序，天然稳定）。
+    pub fn all_file_ids(&self) -> Vec<u64> {
+        self.d.files.keys().copied().collect()
+    }
+
+    /// 文件夹**直属**文件 id（不含子文件夹）。FSK 只保护直属文件：子文件夹的 FSK 由 MK 独立
+    /// 派生，父文件夹 FSK 泄露不影响它们（docs/07 §二 FSK 行的影响域即「该文件夹全部文件」）。
+    pub fn files_direct(&self, folder: u64) -> Vec<u64> {
+        self.d
+            .files
+            .iter()
+            .filter(|(_, f)| f.folder == folder)
+            .map(|(k, _)| *k)
+            .collect()
+    }
+
+    /// 标记「该文件的暂存容器（tag）是当前索引密钥的产物」。
+    pub fn mark_staging(&mut self, file_id: u64, tag: &str) {
+        self.d.staging.insert(file_id, tag.to_string());
+    }
+
+    pub fn staging_tag(&self, file_id: u64) -> Option<String> {
+        self.d.staging.get(&file_id).cloned()
+    }
+
+    /// 清除指定文件的轮换标记（只清本轮涉及的文件：其它待生效文件的标记仍指向其暂存容器）。
+    pub fn clear_staging(&mut self, file_ids: &[u64]) {
+        for id in file_ids {
+            self.d.staging.remove(id);
+        }
+    }
+
+    /// 重挂搜索密钥并**重建**倒排索引（MK 全库轮换用）。
+    ///
+    /// 倒排索引的键是 `HMAC(搜索密钥, 词)`，密钥更换后旧令牌既无法解密也无法转换，只能重建：
+    /// 文件名与标签令牌在此重算，内容采样令牌由调用方在轮换时从解密出的明文里取得
+    ///（`content`：file_id → 令牌；与 `import_file` 同一采样规则）。
+    pub fn rebase_search_key(
+        &mut self,
+        search_key: [u8; KEY_LEN],
+        content: &BTreeMap<u64, Vec<String>>,
+    ) {
+        self.search_key = search_key;
+        self.d.search.clear();
+        let entries: Vec<(u64, String, Vec<String>)> = self
+            .d
+            .files
+            .iter()
+            .map(|(id, f)| (*id, f.name.clone(), f.tags.clone()))
+            .collect();
+        for (id, name, tags) in entries {
+            let mut tokens = tokenize(&name);
+            for t in &tags {
+                tokens.extend(tokenize(t));
+            }
+            if let Some(extra) = content.get(&id) {
+                tokens.extend(extra.iter().cloned());
+            }
+            self.index_tokens(id, &tokens);
+        }
+    }
+
+    /// 作废全部分享令牌（MK 轮换时调用）：分享只存令牌的 HMAC（明文不落盘），
+    /// 搜索密钥更换后无法迁移，保留只会留下永远校验失败的死条目。
+    pub fn clear_shares(&mut self) {
+        self.d.shares.clear();
     }
 
     pub fn peek_next_id(&self) -> u64 {
@@ -738,6 +867,7 @@ impl VaultIndex {
             name: String::new(),
             parent: 0,
             tags: Vec::new(),
+            fskey: None,
         });
         Ok(Self { d, search_key })
     }
@@ -891,5 +1021,124 @@ mod tests {
             ix.consume_share(sh2, "nope").unwrap_err(),
             "share token mismatch"
         );
+    }
+
+    /// 手工封一个 VSIX v2 索引块（用给定 JSON 原文），用于构造「旧版本引擎写出的索引」。
+    fn seal_index_json(json: &str, key: &[u8; KEY_LEN]) -> Vec<u8> {
+        let mut nonce = [0u8; vault_crypto::AES_GCM_NONCE_LEN];
+        nonce.copy_from_slice(&vault_crypto::random_bytes(vault_crypto::AES_GCM_NONCE_LEN));
+        let ct =
+            vault_crypto::aead::aead_encrypt_with_aad(key, &nonce, json.as_bytes(), INDEX_MAGIC)
+                .expect("aead");
+        let mut out = Vec::new();
+        out.extend_from_slice(INDEX_MAGIC);
+        out.extend_from_slice(&INDEX_FORMAT_VER.to_le_bytes());
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ct[vault_crypto::AES_GCM_NONCE_LEN..]);
+        out
+    }
+
+    /// P5-4 向后兼容：P4 时代的索引 JSON（Folder 无 fskey、IndexData 无 staging）必须可读。
+    #[test]
+    fn legacy_index_without_fskey_and_staging_loads() {
+        let k = key();
+        let legacy = serde_json::json!({
+            "folders": {
+                "0": {"name": "", "parent": 0, "tags": []},
+                "1": {"name": "归档", "parent": 0, "tags": ["旧"]}
+            },
+            "files": {
+                "1": {"folder": 1, "name": "a.txt", "size": 3, "tags": ["旧"],
+                      "created_ms": 1, "modified_ms": 2}
+            },
+            "shares": {},
+            "search": {},
+            "next_id": 2
+        })
+        .to_string();
+        let blob = seal_index_json(&legacy, &k);
+        let ix = VaultIndex::from_encrypted(&blob, &k, k).expect("legacy index must load");
+        assert!(ix
+            .list_children(ROOT_FOLDER)
+            .expect("list")
+            .contains("归档"));
+        assert_eq!(ix.file_folder(1).expect("folder"), 1);
+        // 新字段缺省：无 FSK 覆盖、无轮换标记
+        assert_eq!(ix.folder_fsk(1).expect("row"), None);
+        assert_eq!(ix.staging_tag(1), None);
+        assert_eq!(ix.file_fskey(1).expect("fskey"), None);
+    }
+
+    /// P5-4 索引字段：FSK 覆盖 / FSKey 覆盖 / 轮换标记的落盘往返，以及删除条目清标记。
+    #[test]
+    fn fsk_override_staging_and_roundtrip() {
+        let k = key();
+        let mut ix = VaultIndex::new(k);
+        let f = ix.mkdir(ROOT_FOLDER, "A").expect("mkdir");
+        assert_eq!(ix.folder_fsk(ROOT_FOLDER).expect("root"), None);
+        assert!(ix.set_folder_fskey(9999, "ab").is_err());
+        let fsk_hex = vault_crypto::hex_encode(&vault_crypto::random_key());
+        ix.set_folder_fskey(f, &fsk_hex).expect("set fsk");
+
+        let id = ix.add_file(f, "a.txt", 1, &[]).expect("add");
+        let fkey_hex = vault_crypto::hex_encode(&vault_crypto::random_key());
+        ix.set_file_fskey(id, &fkey_hex).expect("set fskey");
+        assert!(ix.set_file_fskey(id + 999, &fkey_hex).is_err());
+        ix.mark_staging(id, "tag1");
+        assert_eq!(ix.staging_tag(id), Some("tag1".into()));
+        assert_eq!(ix.files_direct(f), vec![id]);
+        assert_eq!(ix.all_file_ids(), vec![id]);
+
+        let blob = ix.to_encrypted(&k).expect("enc");
+        let mut ix2 = VaultIndex::from_encrypted(&blob, &k, k).expect("dec");
+        assert_eq!(ix2.folder_fsk(f).expect("row"), Some(fsk_hex));
+        assert_eq!(ix2.file_fskey(id).expect("row"), Some(fkey_hex));
+        assert_eq!(ix2.staging_tag(id), Some("tag1".into()));
+        assert!(ix2.folder_ids().contains(&ROOT_FOLDER) && ix2.folder_ids().contains(&f));
+
+        // 删除条目必须同时清掉轮换标记（否则 id 复用时读路径会指向陈旧暂存文件）
+        ix2.remove_file(id).expect("rm");
+        assert_eq!(ix2.staging_tag(id), None);
+        assert!(ix2.files_direct(f).is_empty());
+    }
+
+    /// P5-4 搜索密钥重挂：倒排索引以新密钥重建，旧密钥算出的令牌不再命中。
+    #[test]
+    fn rebase_search_key_rebuilds_inverted_index() {
+        let k_old = key();
+        let mut ix = VaultIndex::new(k_old);
+        let id = ix
+            .add_file(0, "文档.txt", 1, &tokenize("文档.txt"))
+            .expect("add");
+        ix.set_tags(id, vec!["报告".into()]).expect("tags");
+        assert!(ix.search("文档").contains("文档"));
+
+        let k_new = key();
+        let mut content: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+        content.insert(id, tokenize("季度财务"));
+        ix.rebase_search_key(k_new, &content);
+
+        // 新搜索密钥下：文件名 / 标签 / 内容采样令牌三类都可检索
+        assert!(ix.search("文档").contains("文档"));
+        assert!(ix.search("报告").contains("文档"));
+        assert!(ix.search("财务").contains("文档"));
+        // 旧搜索密钥算出的令牌不在倒排表里（旧令牌无法迁移）
+        let stale = vault_crypto::hmac_sha256_hex(&k_old, "文档".as_bytes());
+        assert!(!ix.d.search.contains_key(&stale));
+        let fresh = vault_crypto::hmac_sha256_hex(&k_new, "文档".as_bytes());
+        assert!(ix.d.search.contains_key(&fresh));
+    }
+
+    /// P5-4 分享令牌作废：清空后 consume 一律找不到条目。
+    #[test]
+    fn clear_shares_invalidates_tokens() {
+        let mut ix = VaultIndex::new(key());
+        let fid = ix.add_file(0, "s.txt", 1, &[]).expect("add");
+        let sh = ix
+            .create_share(fid, ix.hmac_token("tok"), 3600, 1)
+            .expect("share");
+        assert!(ix.consume_share(sh, "tok").is_ok());
+        ix.clear_shares();
+        assert_eq!(ix.consume_share(sh, "tok").unwrap_err(), "share not found");
     }
 }

@@ -872,6 +872,12 @@ abstract class AppLocalizations {
   /// **'VaultSync 保险箱'**
   String get lockScreenTitle;
 
+  /// No description provided for @lockScreenTogglePwVisibility.
+  ///
+  /// In zh, this message translates to:
+  /// **'显示 / 隐藏主密码'**
+  String get lockScreenTogglePwVisibility;
+
   /// No description provided for @lockScreenUnlock.
   ///
   /// In zh, this message translates to:
@@ -1202,6 +1208,12 @@ abstract class AppLocalizations {
   /// **'销毁'**
   String get securityDestroyPhrase;
 
+  /// No description provided for @securityDestroyQueued.
+  ///
+  /// In zh, this message translates to:
+  /// **'已向 {n} 台已配对设备签发销毁指令并进入投递队列：对端下次上线、处理任何其他消息之前执行。'**
+  String securityDestroyQueued(int n);
+
   /// No description provided for @securityDestroyRunning.
   ///
   /// In zh, this message translates to:
@@ -1292,6 +1304,36 @@ abstract class AppLocalizations {
   /// **'文件完整性'**
   String get securityDetectIntegrity;
 
+  /// No description provided for @securityDetectIntegrityFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'异常 · {failed} / {files} 个容器校验失败'**
+  String securityDetectIntegrityFailed(int failed, int files);
+
+  /// No description provided for @securityDetectIntegrityFailedRead.
+  ///
+  /// In zh, this message translates to:
+  /// **'完整性扫描失败：无法读取保险箱'**
+  String get securityDetectIntegrityFailedRead;
+
+  /// No description provided for @securityDetectIntegrityNotScanned.
+  ///
+  /// In zh, this message translates to:
+  /// **'尚未扫描 · 点击卡片逐块重算'**
+  String get securityDetectIntegrityNotScanned;
+
+  /// No description provided for @securityDetectIntegrityOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'正常 · {checked} / {files} 个容器逐块校验通过'**
+  String securityDetectIntegrityOk(int checked, int files);
+
+  /// No description provided for @securityDetectIntegrityScanning.
+  ///
+  /// In zh, this message translates to:
+  /// **'扫描中…（逐块重算，耗时与数据量成正比）'**
+  String get securityDetectIntegrityScanning;
+
   /// No description provided for @securityDetectIntegritySub.
   ///
   /// In zh, this message translates to:
@@ -1369,6 +1411,72 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'刷新'**
   String get securityRefresh;
+
+  /// No description provided for @securityRekeyDo.
+  ///
+  /// In zh, this message translates to:
+  /// **'开始轮换'**
+  String get securityRekeyDo;
+
+  /// No description provided for @securityRekeyDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'主密钥已轮换 · 请用主密码重新解锁（既有分享已作废）'**
+  String get securityRekeyDone;
+
+  /// No description provided for @securityRekeyFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换失败：{err}'**
+  String securityRekeyFailed(String err);
+
+  /// No description provided for @securityRekeyNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换会全量重写索引与所有容器（耗时与数据量成正比），并以新 salt 重新包装 KEK_pwd（已绑定的生物识别副本同步重新包装）。向量时钟不推进，因此不会自动传播到已配对设备；既有阅后即焚分享令牌一并作废。完成后需用主密码重新解锁。'**
+  String get securityRekeyNote;
+
+  /// No description provided for @securityRekeyNow.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换 MK'**
+  String get securityRekeyNow;
+
+  /// No description provided for @securityRekeyPhrase.
+  ///
+  /// In zh, this message translates to:
+  /// **'输入「轮换」以确认'**
+  String get securityRekeyPhrase;
+
+  /// No description provided for @securityRekeyPhraseWord.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换'**
+  String get securityRekeyPhraseWord;
+
+  /// No description provided for @securityRekeyPw.
+  ///
+  /// In zh, this message translates to:
+  /// **'主密码'**
+  String get securityRekeyPw;
+
+  /// No description provided for @securityRekeySub.
+  ///
+  /// In zh, this message translates to:
+  /// **'MK 泄露时的应急路径：新 MK 重写索引与全部容器（逐块）'**
+  String get securityRekeySub;
+
+  /// No description provided for @securityRekeyTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'主密钥全库轮换'**
+  String get securityRekeyTitle;
+
+  /// No description provided for @securityRekeyWrongPw.
+  ///
+  /// In zh, this message translates to:
+  /// **'主密码错误'**
+  String get securityRekeyWrongPw;
 
   /// No description provided for @securityStegoDisable.
   ///
@@ -1801,6 +1909,66 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'设置'**
   String get settingsTitle;
+
+  /// No description provided for @settingsUpdateCheck.
+  ///
+  /// In zh, this message translates to:
+  /// **'检查更新'**
+  String get settingsUpdateCheck;
+
+  /// No description provided for @settingsUpdateChecking.
+  ///
+  /// In zh, this message translates to:
+  /// **'检查中…'**
+  String get settingsUpdateChecking;
+
+  /// No description provided for @settingsUpdateDownload.
+  ///
+  /// In zh, this message translates to:
+  /// **'下载并安装'**
+  String get settingsUpdateDownload;
+
+  /// No description provided for @settingsUpdateNotConfigured.
+  ///
+  /// In zh, this message translates to:
+  /// **'未配置 · 需清单地址与发布公钥（fail-closed）'**
+  String get settingsUpdateNotConfigured;
+
+  /// No description provided for @settingsUpdateNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'清单签名覆盖清单原始字节，安装包下载后再用清单内的 sha256 复核；任一校验失败即拒绝。当前仓库未附带发布服务器与签名密钥，配置前该功能保持禁用。'**
+  String get settingsUpdateNote;
+
+  /// No description provided for @settingsUpdatePubkey.
+  ///
+  /// In zh, this message translates to:
+  /// **'发布公钥'**
+  String get settingsUpdatePubkey;
+
+  /// No description provided for @settingsUpdatePubkeySub.
+  ///
+  /// In zh, this message translates to:
+  /// **'内置的 Ed25519 公钥（hex，32 字节）——只接受该密钥签名的清单'**
+  String get settingsUpdatePubkeySub;
+
+  /// No description provided for @settingsUpdateTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'更新通道'**
+  String get settingsUpdateTitle;
+
+  /// No description provided for @settingsUpdateUrl.
+  ///
+  /// In zh, this message translates to:
+  /// **'更新清单地址'**
+  String get settingsUpdateUrl;
+
+  /// No description provided for @settingsUpdateUrlSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'发布方托管的 latest.json（必须 https）；同目录 latest.json.sig 为 Ed25519 签名'**
+  String get settingsUpdateUrlSub;
 
   /// No description provided for @settingsVersionLabel.
   ///
@@ -3106,6 +3274,72 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'已重命名 · 加密元数据已更新'**
   String get vaultPageRenamed;
+
+  /// No description provided for @vaultPageRotateFileDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'密钥已轮换 · 容器已重写'**
+  String get vaultPageRotateFileDone;
+
+  /// No description provided for @vaultPageRotateFileSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'以全新随机 FSKey 重写该文件容器'**
+  String get vaultPageRotateFileSub;
+
+  /// No description provided for @vaultPageRotateFileTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换密钥'**
+  String get vaultPageRotateFileTitle;
+
+  /// No description provided for @vaultPageRotateFolderDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件夹密钥已轮换 · 直属文件容器已重写'**
+  String get vaultPageRotateFolderDone;
+
+  /// No description provided for @vaultPageRotateFolderSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'新 FSK 覆盖 + 逐文件重写直属文件容器'**
+  String get vaultPageRotateFolderSub;
+
+  /// No description provided for @vaultPageRotateFolderTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换文件夹密钥'**
+  String get vaultPageRotateFolderTitle;
+
+  /// No description provided for @vaultPageRotateKey.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换密钥'**
+  String get vaultPageRotateKey;
+
+  /// No description provided for @vaultPageRotateNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'轮换后旧密钥路径即失效（新密钥为随机值，不再由 MK 派生）。这是本机轮换：向量时钟未推进，不会自动传播到已配对设备，对端保留其自身可读副本；文件夹轮换只覆盖直属文件，不含子文件夹。'**
+  String get vaultPageRotateNote;
+
+  /// No description provided for @vaultPageRotateStart.
+  ///
+  /// In zh, this message translates to:
+  /// **'开始轮换'**
+  String get vaultPageRotateStart;
+
+  /// No description provided for @vaultPageRotateTargetFile.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件'**
+  String get vaultPageRotateTargetFile;
+
+  /// No description provided for @vaultPageRotateTargetFolder.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件夹'**
+  String get vaultPageRotateTargetFolder;
 
   /// No description provided for @vaultPageSave.
   ///

@@ -197,15 +197,50 @@ class FakeEngine implements VaultEngine {
           Object sessionHandle, int fileId, int ttlSecs, int maxOpens) =>
       Future.value(null);
 
+  @override
+  Future<Map<String, dynamic>?> verifyAll(Object sessionHandle) =>
+      Future.value(null);
 
   @override
-  Future<Map<String, dynamic>?> auditList(Object sessionHandle) => Future.value(null);
+  Future<Map<String, dynamic>?> destroyQueueAll(
+          Object sessionHandle, int delaySecs) =>
+      Future.value(null);
 
   @override
-  Future<Map<String, dynamic>?> auditVerify(Object sessionHandle) => Future.value(null);
+  Future<Map<String, dynamic>?> pendingOrders(Object sessionHandle) =>
+      Future.value(null);
 
   @override
-  Future<String?> auditExport(Object sessionHandle, String dest) => Future.value(null);
+  Future<int> cancelOrders(Object sessionHandle) => Future.value(0);
+
+  @override
+  Future<String?> rememberPeerAddr(
+          Object sessionHandle, String deviceId, String addr) =>
+      Future.value(null);
+
+  @override
+  Future<String?> rotateFileKey(Object sessionHandle, int fileId) =>
+      Future.value(null);
+
+  @override
+  Future<String?> rotateFolderKeys(Object sessionHandle, int folderId) =>
+      Future.value(null);
+
+  @override
+  Future<String?> rotateMk(Object sessionHandle, String password) =>
+      Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> auditList(Object sessionHandle) =>
+      Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> auditVerify(Object sessionHandle) =>
+      Future.value(null);
+
+  @override
+  Future<String?> auditExport(Object sessionHandle, String dest) =>
+      Future.value(null);
 
   @override
   Future<String?> destroyLocal(Object sessionHandle, {bool secure = true}) =>
@@ -215,10 +250,12 @@ class FakeEngine implements VaultEngine {
   Future<bool> stegoEnabled(Object sessionHandle) => Future.value(false);
 
   @override
-  Future<String?> stegoSetEnabled(Object sessionHandle, bool on) => Future.value(null);
+  Future<String?> stegoSetEnabled(Object sessionHandle, bool on) =>
+      Future.value(null);
 
   @override
-  Future<int> stegoCapacity(Object sessionHandle, String imagePath) => Future.value(0);
+  Future<int> stegoCapacity(Object sessionHandle, String imagePath) =>
+      Future.value(0);
 
   @override
   Future<String?> stegoEmbed(
@@ -296,6 +333,43 @@ void main() {
         .unlock(FakeEngine.disguisePassword);
     final d = container2.read(sessionProvider) as SessionUnlocked;
     expect(d.disguise, isTrue);
+  });
+
+  testWidgets('无障碍：锁屏关键控件暴露语义标签（P5-8 走查）', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    // 必须在测试体内 dispose：框架在 teardown 之前校验句柄已释放
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          vaultEngineProvider.overrideWithValue(FakeEngine()),
+          sharedPreferencesProvider.overrideWithValue(prefs),
+        ],
+        child: Consumer(
+          builder: (context, ref, _) => MaterialApp.router(
+            routerConfig: ref.watch(appRouterProvider),
+            locale: const Locale('zh'),
+            localizationsDelegates: const [
+              AppLocalizations.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            supportedLocales: AppLocalizations.supportedLocales,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 700)); // 转盘为无限动画
+
+    // 按钮级：VsButton / VsIconButton 均带语义标签（P4-7 起内建）
+    // 用 RegExp：显式 label 会与子级文本合并，精确匹配不可靠
+    expect(find.bySemanticsLabel(RegExp('解锁')), findsWidgets);
+    expect(find.bySemanticsLabel(RegExp('生物识别')), findsWidgets);
+    // 密码可见性开关：此前是裸 GestureDetector，P5-8 补语义
+    expect(find.bySemanticsLabel(RegExp('显示 / 隐藏主密码')), findsOneWidget);
+    semantics.dispose();
   });
 
   test('PasswordPolicy：门槛与强度评级', () {

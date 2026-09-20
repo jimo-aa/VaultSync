@@ -9,6 +9,7 @@
 pub mod aead;
 pub mod kdf;
 pub mod random;
+pub mod sig;
 
 pub use aead::{
     aead_decrypt, aead_decrypt_with_aad, aead_encrypt, aead_encrypt_with_aad, AES_GCM_NONCE_LEN,

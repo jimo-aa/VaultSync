@@ -135,8 +135,20 @@ impl Keystore {
         Self::from_bytes(path, &data)
     }
 
+    /// 原子写：tmp → fsync → rename。
+    ///
+    /// 保险箱头部是**唯一**能解封 MK 的地方，直接覆盖写一旦中途断电就会留下半截头部
+    /// （旧密码、新密码都打不开）。MK 全库轮换会两次经过这里，故必须是原子的。
     pub fn save(&self) -> Result<(), &'static str> {
-        std::fs::write(&self.path, self.to_bytes()).map_err(|_| "cannot write vault file")
+        let tmp = self.path.with_extension("vsvb.tmp");
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp).map_err(|_| "cannot write vault file")?;
+            f.write_all(&self.to_bytes())
+                .map_err(|_| "cannot write vault file")?;
+            f.sync_all().map_err(|_| "cannot sync vault file")?;
+        }
+        std::fs::rename(&tmp, &self.path).map_err(|_| "cannot commit vault file")
     }
 
     /// keystore 文件是否已存在。

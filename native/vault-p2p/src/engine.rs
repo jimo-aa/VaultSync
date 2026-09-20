@@ -4,7 +4,7 @@
 //! 断点续传幂等 + 限速）/ 冲突解决（删除优先 + 多版本副本 + 向量时钟）/ 远程销毁（签名 + 延迟语义）。
 //!
 //! 密钥红线：FSKey 仅经 E2E 信道携带给已配对对端；中继只见不透明 Noise 帧。
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, Seek, Write as IoWrite};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ use vault_vault::vault::Vault;
 
 use crate::channel::{psk_from_code, subkey, Role, SecureChannel};
 use crate::identity::Identity;
+use crate::orders::{OrderRec, OrderStore};
 use crate::peers::{PeerRec, PeerStore};
 use crate::proto::{delete_sign_body, destroy_sign_body, hello_sign_body, ManifestItem, Msg};
 
@@ -30,6 +31,17 @@ const RELAY_MAGIC: &str = "VSR1";
 /// 远程销毁的本机擦除回调（由宿主 vault-core 注入：删保险箱文件 + 数据目录）。
 pub type WipeFn = Box<dyn Fn() -> Result<(), String> + Send>;
 
+/// 销毁指令被拒的原因（docs/08 §四.3：破坏性信令必须验签后执行）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderReject {
+    /// 签名不合法或载荷被篡改：不执行、记事件、断开且不回执（不给伪造者任何回执）。
+    BadSignature,
+    /// `target` 不是本机 device_id：不执行、回执 Error（多半是投递到了错误设备）。
+    TargetMismatch,
+    /// 载荷不是一枚合法的销毁指令帧。
+    Malformed,
+}
+
 struct Invite {
     psk: [u8; 32],
     expires_ms: u64,
@@ -40,6 +52,49 @@ struct ArmedDestroy {
     target: String,
 }
 
+/// 本机所发销毁指令的对端回执。
+enum AckOutcome {
+    /// 对端已验签、核对目标并接受（延迟武装或立即擦除）。
+    Ack,
+    /// 对端回执 Error（如 target 不符）：保留在队列，等下次上线重投。
+    Rejected(String),
+}
+
+/// 「提前到达的业务消息」上限：发起端在 Hello 后立刻发 SyncReq，可能在销毁指令的 ACK 之前
+/// 到达，需要暂存而不是当成协议错误。设上限避免对端用消息洪水撑爆内存。
+const MAX_EARLY_MSGS: usize = 32;
+
+/// 会话内消息暂存：投递/等待 ACK 期间提前到达的业务消息存放于此，
+/// 由调用方紧接着的正常读取取走（消息不丢、顺序不变）。
+#[derive(Default)]
+struct EarlyMsgs(VecDeque<Msg>);
+
+impl EarlyMsgs {
+    fn pop(&mut self) -> Option<Msg> {
+        self.0.pop_front()
+    }
+
+    fn push(&mut self, m: Msg) -> Result<(), String> {
+        if self.0.len() >= MAX_EARLY_MSGS {
+            return Err("too many interleaved messages".into());
+        }
+        self.0.push_back(m);
+        Ok(())
+    }
+}
+
+/// 由 TCP 观测地址 + Hello 声明的监听端口拼出可回拨地址。
+/// 端口 0 = 对端（旧端）未声明 → 回退用观测到的源端口（尽力而为）；地址非 IP（不可能）则放弃。
+fn dialable_addr(observed: Option<std::net::SocketAddr>, peer_port: u16) -> Option<String> {
+    let obs = observed?;
+    let port = if peer_port == 0 {
+        obs.port()
+    } else {
+        peer_port
+    };
+    Some(format!("{}:{port}", obs.ip()))
+}
+
 pub struct EngineInner {
     ident: Identity,
     device_name: String,
@@ -47,6 +102,8 @@ pub struct EngineInner {
     /// 与会话共享的保险箱槽位（None = 会话已锁定）。
     vault_slot: Arc<Mutex<Option<Vault>>>,
     peers: Mutex<PeerStore>,
+    /// 离线设备的销毁指令待投递队列（AEAD 落盘，键 HKDF(MK,"p2p-orders")）。
+    orders: Mutex<OrderStore>,
     invite: Mutex<Option<Invite>>,
     events: Mutex<Vec<String>>,
     armed: Mutex<Option<ArmedDestroy>>,
@@ -117,6 +174,7 @@ impl P2pEngine {
         };
 
         let peers = PeerStore::load_or_new(&p2p_dir, mk)?;
+        let orders = OrderStore::load_or_new(&p2p_dir, mk)?;
         let engine = Self {
             inner: Arc::new(EngineInner {
                 ident,
@@ -124,6 +182,7 @@ impl P2pEngine {
                 data_dir: data_dir.clone(),
                 vault_slot,
                 peers: Mutex::new(peers),
+                orders: Mutex::new(orders),
                 invite: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 armed: Mutex::new(None),
@@ -202,6 +261,7 @@ impl P2pEngine {
     }
 
     /// 主动连接新设备完成配对：PSK 握手证明持有邀请码，握手哈希双向签名绑定身份。
+    /// 配对成功同时登记对端监听地址（本次拨出的 `addr` 即可回拨地址）。
     pub fn pair_join(&self, addr: &str, code: &str) -> Result<serde_json::Value, String> {
         let psk = psk_from_code(code);
         let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
@@ -211,7 +271,7 @@ impl P2pEngine {
         let mut ch =
             SecureChannel::handshake(&mut stream, Role::Initiator, &self.inner.ident, Some(&psk))
                 .map_err(|e| e.to_string())?;
-        let (peer_id, peer_name, peer_pub) = self.hello(&mut ch, &mut stream)?;
+        let (peer_id, peer_name, peer_pub, _peer_port) = self.hello(&mut ch, &mut stream)?;
         send_json(&mut ch, &mut stream, &Msg::PairReq).map_err(|e| e.to_string())?;
         let resp: Msg = recv_json(&mut ch, &mut stream).map_err(|e| e.to_string())?;
         match resp {
@@ -230,6 +290,7 @@ impl P2pEngine {
                     pub_hex: peer_pub,
                     paired_ms: now_ms(),
                     counter: 0,
+                    addr: Some(addr.to_string()),
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -249,12 +310,12 @@ impl P2pEngine {
     }
 
     /// Hello 交换 + 身份核验：签名覆盖 hh‖x25519；信道静态密钥 = 声明的 X25519 公钥；
-    /// device_id 派生自声明的 Ed25519 公钥。
+    /// device_id 派生自声明的 Ed25519 公钥。返回值末位为对端声明的监听端口（0 = 旧端未声明）。
     fn hello<S: std::io::Read + std::io::Write>(
         &self,
         ch: &mut SecureChannel,
         stream: &mut S,
-    ) -> Result<(String, String, String), &'static str> {
+    ) -> Result<(String, String, String, u16), &'static str> {
         let hh = *ch.handshake_hash();
         let x25519_hex = hex_encode(&self.inner.ident.x25519_pub());
         let sig = self.inner.ident.sign(&hello_sign_body(&hh, &x25519_hex));
@@ -267,17 +328,19 @@ impl P2pEngine {
                 pub_hex: self.inner.ident.public_hex(),
                 x25519_hex,
                 sig,
+                port: self.port(),
             },
         )?;
         let resp: Msg = recv_json(ch, stream)?;
-        let (device_id, name, pub_hex, x25519_hex, sig) = match resp {
+        let (device_id, name, pub_hex, x25519_hex, sig, port) = match resp {
             Msg::Hello {
                 device_id,
                 name,
                 pub_hex,
                 x25519_hex,
                 sig,
-            } => (device_id, name, pub_hex, x25519_hex, sig),
+                port,
+            } => (device_id, name, pub_hex, x25519_hex, sig, port),
             Msg::Error { msg } => return Err(leak_str(&msg)),
             _ => return Err("expected hello"),
         };
@@ -290,7 +353,7 @@ impl P2pEngine {
         if Identity::device_id_of(&pub_hex).as_deref() != Some(device_id.as_str()) {
             return Err("device id mismatch");
         }
-        Ok((device_id, name, pub_hex))
+        Ok((device_id, name, pub_hex, port))
     }
 
     fn listener_loop(&self, listener: TcpListener) {
@@ -317,7 +380,7 @@ impl P2pEngine {
                     }
                     let _ = std::thread::Builder::new()
                         .name("vsync-conn".into())
-                        .spawn(move || eng.handle_conn(stream));
+                        .spawn(move || eng.handle_conn(stream, false));
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(200));
@@ -327,8 +390,14 @@ impl P2pEngine {
         }
     }
 
-    fn handle_conn(&self, mut stream: TcpStream) {
+    fn handle_conn(&self, mut stream: TcpStream, relayed: bool) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+        // 投递/等待 ACK 期间提前到达的业务消息暂存区（本连接的其余读取从这里取）
+        let mut early = EarlyMsgs::default();
+        // 对端拨入时的**监听**地址：IP 取自 TCP 源地址，端口取自 Hello 声明（旧端未声明时为 0，
+        // 回退用观测到的源端口——那只在"对端同样从该端口监听"时才对，属尽力而为）。
+        // 经中继接入时源地址是中继自身，绝不能当成对端地址回拨，故 relayed 一律不记。
+        let observed = stream.peer_addr().ok();
         let pending_psk: Option<[u8; 32]> = self
             .inner
             .invite
@@ -354,7 +423,7 @@ impl P2pEngine {
             // 配对成功即消费邀请码（一次性）
             *self.inner.invite.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
-        let (peer_id, peer_name, peer_pub) = match self.hello(&mut ch, &mut stream) {
+        let (peer_id, peer_name, peer_pub, peer_port) = match self.hello(&mut ch, &mut stream) {
             Ok(h) => h,
             Err(e) => {
                 self.log(&format!("hello failed: {e}"));
@@ -363,6 +432,9 @@ impl P2pEngine {
         };
         if is_pairing {
             let mut peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+            // 本次观测不到可回拨地址时，保留旧记录里的地址（重新配对不该丢掉已知地址）
+            let addr = dialable_addr(observed, peer_port)
+                .or_else(|| peers.get(&peer_id).and_then(|p| p.addr));
             let _ = peers.upsert(
                 &peer_id,
                 PeerRec {
@@ -370,6 +442,7 @@ impl P2pEngine {
                     pub_hex: peer_pub.clone(),
                     paired_ms: now_ms(),
                     counter: 0,
+                    addr,
                 },
             );
             self.log(&format!("paired with {peer_id} ({peer_name})"));
@@ -392,12 +465,31 @@ impl P2pEngine {
                 self.log("rejected unregistered device");
                 return;
             }
+            // 高优先级信令：已登记对端拨入后、进入业务消息循环之前先投递本机队列中发给它的
+            // 销毁指令（docs/08 §四.2）。未登记设备在上方已断开，不投递。
+            if let Err(e) =
+                self.deliver_pending_orders(&mut ch, &mut stream, &peer_id, &peer_pub, &mut early)
+            {
+                self.log(&format!("order delivery aborted: {e}"));
+                return;
+            }
+        }
+        if !relayed {
+            // 记录可回拨地址（离线销毁指令投递的前提，docs/05-06 §5.1）。
+            // 位置在登记/核验之后：`PeerStore::set_addr` 对未登记对端一律拒绝，
+            // 不会因为"看到过某个源地址"就凭空建条目。
+            if let Some(addr) = dialable_addr(observed, peer_port) {
+                self.remember_peer_addr(&peer_id, &addr).ok();
+            }
         }
 
         loop {
-            let msg: Msg = match recv_json(&mut ch, &mut stream) {
-                Ok(m) => m,
-                Err(_) => return,
+            let msg: Msg = match early.pop() {
+                Some(m) => m,
+                None => match recv_json(&mut ch, &mut stream) {
+                    Ok(m) => m,
+                    Err(_) => return,
+                },
             };
             match msg {
                 Msg::PairReq => {
@@ -464,35 +556,29 @@ impl P2pEngine {
                     ts_ms,
                     sig,
                 } => {
-                    let body = destroy_sign_body(&target, delay_ms, ts_ms);
-                    if !Identity::verify(&peer_pub, &body, &sig) {
-                        self.log("destroy command signature invalid");
-                        return;
-                    }
-                    if target != self.device_id() {
-                        let _ = send_json(
-                            &mut ch,
-                            &mut stream,
-                            &Msg::Error {
-                                msg: "destroy target mismatch".into(),
-                            },
-                        );
-                        return;
-                    }
-                    if delay_ms == 0 {
-                        self.log("remote destroy: immediate wipe");
-                        let _ = send_json(&mut ch, &mut stream, &Msg::DestroyAck);
-                        self.execute_wipe();
-                        return;
-                    }
-                    *self.inner.armed.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some(ArmedDestroy {
-                            deadline: Instant::now() + Duration::from_millis(delay_ms),
-                            target,
-                        });
-                    self.log(&format!("remote destroy armed for {delay_ms}ms"));
-                    if send_json(&mut ch, &mut stream, &Msg::DestroyAck).is_err() {
-                        return;
+                    // 高优先级指令：对端公钥验签 + target 必须等于本机 device_id（docs/08 §四.3）
+                    match self.apply_order(&peer_pub, &target, delay_ms, ts_ms, &sig) {
+                        Ok(true) => {
+                            if send_json(&mut ch, &mut stream, &Msg::DestroyAck).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(false) => {
+                            // 已立即擦除：先把 ACK 送出（对端据此从队列移除），再断开
+                            let _ = send_json(&mut ch, &mut stream, &Msg::DestroyAck);
+                            return;
+                        }
+                        Err(OrderReject::TargetMismatch) => {
+                            let _ = send_json(
+                                &mut ch,
+                                &mut stream,
+                                &Msg::Error {
+                                    msg: "destroy target mismatch".into(),
+                                },
+                            );
+                            return;
+                        }
+                        Err(_) => return, // 验签失败 / 载荷非法：不执行、不回执、断开
                     }
                 }
                 Msg::Error { msg } => {
@@ -564,6 +650,301 @@ impl P2pEngine {
         }
     }
 
+    // ==== 高优先级信令：销毁指令的校验 / 执行 / 投递（docs/05-06 §5.1、docs/08 §四.2）====
+    //
+    // 执行判定只认「对端长期身份签名 + target == 本机 device_id」，**不认**任何本机队列标记；
+    // 队列只是"待投递的字节"，即使队列文件被替换/注入，伪造者也拿不到对端私钥。
+
+    /// 校验并执行一条销毁指令。
+    ///
+    /// 返回 `Ok(true)` = 已验证并武装延迟擦除（会话可继续）；`Ok(false)` = 已验证并**已立即擦除**
+    /// （调用方必须终止会话）；`Err(_)` = 拒绝，且**未**执行任何擦除动作。
+    fn apply_order(
+        &self,
+        peer_pub: &str,
+        target: &str,
+        delay_ms: u64,
+        ts_ms: u64,
+        sig: &str,
+    ) -> Result<bool, OrderReject> {
+        if peer_pub.is_empty()
+            || !Identity::verify(peer_pub, &destroy_sign_body(target, delay_ms, ts_ms), sig)
+        {
+            // 不打印公钥/签名内容，只记录判定结果
+            self.log("destroy order rejected: signature invalid");
+            return Err(OrderReject::BadSignature);
+        }
+        if target != self.device_id() {
+            self.log("destroy order rejected: target mismatch");
+            return Err(OrderReject::TargetMismatch);
+        }
+        if delay_ms == 0 {
+            self.log("destroy order accepted: immediate wipe");
+            self.execute_wipe();
+            return Ok(false);
+        }
+        *self.inner.armed.lock().unwrap_or_else(|e| e.into_inner()) = Some(ArmedDestroy {
+            deadline: Instant::now() + Duration::from_millis(delay_ms),
+            target: target.to_string(),
+        });
+        self.log(&format!("destroy order accepted: armed for {delay_ms}ms"));
+        Ok(true)
+    }
+
+    /// 投递帧路径：载荷为 `Msg::DestroyCmd` 的 JSON 原文（队列条目 `payload` 即此格式）。
+    /// 与线上路径共用 `apply_order`，保证"收到的字节"与"验签/执行所用字段"同源。
+    pub fn apply_order_payload(&self, peer_pub: &str, payload: &str) -> Result<bool, OrderReject> {
+        match serde_json::from_str::<Msg>(payload) {
+            Ok(Msg::DestroyCmd {
+                target,
+                delay_ms,
+                ts_ms,
+                sig,
+            }) => self.apply_order(peer_pub, &target, delay_ms, ts_ms, &sig),
+            _ => {
+                self.log("destroy order rejected: malformed payload");
+                Err(OrderReject::Malformed)
+            }
+        }
+    }
+
+    /// 读取下一条消息（先取暂存区）；期间收到的销毁指令（对端上线后投递的高优先级信令）
+    /// 就地处理并回 ACK。`Err` = 会话必须中止（本机已擦除 / 指令非法 / 读失败）。
+    fn recv_with_orders(
+        &self,
+        ch: &mut SecureChannel,
+        stream: &mut TcpStream,
+        peer_pub: &str,
+        early: &mut EarlyMsgs,
+    ) -> Result<Msg, String> {
+        loop {
+            let msg: Msg = match early.pop() {
+                Some(m) => m,
+                None => recv_json(ch, stream).map_err(|e| e.to_string())?,
+            };
+            match msg {
+                Msg::DestroyCmd {
+                    target,
+                    delay_ms,
+                    ts_ms,
+                    sig,
+                } => match self.apply_order(peer_pub, &target, delay_ms, ts_ms, &sig) {
+                    Ok(true) => {
+                        send_json(ch, stream, &Msg::DestroyAck).map_err(|e| e.to_string())?;
+                    }
+                    Ok(false) => {
+                        let _ = send_json(ch, stream, &Msg::DestroyAck);
+                        return Err("local wipe executed by remote order".into());
+                    }
+                    Err(OrderReject::TargetMismatch) => {
+                        let _ = send_json(
+                            ch,
+                            stream,
+                            &Msg::Error {
+                                msg: "destroy target mismatch".into(),
+                            },
+                        );
+                        return Err("incoming destroy order target mismatch".into());
+                    }
+                    Err(e) => return Err(format!("incoming destroy order rejected: {e:?}")),
+                },
+                other => return Ok(other),
+            }
+        }
+    }
+
+    /// 等待本机所发销毁指令的 ACK；期间若收到对端投递的指令（双向同时上线）按同一路径处理
+    /// 并回 ACK，收到业务消息则暂存到 `early`（发起端 SyncReq 可能早于 ACK 到达）。
+    /// 只从信道读、不从 `early` 取：投递发生在本连接的第一次读取之前，此时 `early` 必为空。
+    /// `Err` = 会话必须中止。
+    fn await_order_ack(
+        &self,
+        ch: &mut SecureChannel,
+        stream: &mut TcpStream,
+        peer_pub: &str,
+        early: &mut EarlyMsgs,
+    ) -> Result<AckOutcome, String> {
+        loop {
+            let msg: Msg = recv_json(ch, stream).map_err(|e| e.to_string())?;
+            match msg {
+                Msg::DestroyAck => return Ok(AckOutcome::Ack),
+                Msg::Error { msg } => return Ok(AckOutcome::Rejected(msg)),
+                Msg::DestroyCmd {
+                    target,
+                    delay_ms,
+                    ts_ms,
+                    sig,
+                } => match self.apply_order(peer_pub, &target, delay_ms, ts_ms, &sig) {
+                    Ok(true) => {
+                        send_json(ch, stream, &Msg::DestroyAck).map_err(|e| e.to_string())?;
+                    }
+                    Ok(false) => {
+                        let _ = send_json(ch, stream, &Msg::DestroyAck);
+                        return Err("local wipe executed by remote order".into());
+                    }
+                    Err(OrderReject::TargetMismatch) => {
+                        let _ = send_json(
+                            ch,
+                            stream,
+                            &Msg::Error {
+                                msg: "destroy target mismatch".into(),
+                            },
+                        );
+                        return Err("incoming destroy order target mismatch".into());
+                    }
+                    Err(e) => return Err(format!("incoming destroy order rejected: {e:?}")),
+                },
+                other => early.push(other)?,
+            }
+        }
+    }
+
+    /// 投递本机队列中发给该对端的全部销毁指令。
+    ///
+    /// 时机固定：**信道建立（Hello 核验）之后、清单交换之前**（docs/08 §四.2「先于一切业务消息」）。
+    /// 无队列条目时**不做任何 I/O**，正常同步路径零额外往返。
+    /// 收到 ACK 才从队列移除；对端拒收或链路中断则保留，等下次上线重投（最终一致语义）。
+    /// `Err` = 会话必须中止（本机已擦除 / 对端投递来非法指令 / 链路已断）。
+    fn deliver_pending_orders(
+        &self,
+        ch: &mut SecureChannel,
+        stream: &mut TcpStream,
+        peer_id: &str,
+        peer_pub: &str,
+        early: &mut EarlyMsgs,
+    ) -> Result<usize, String> {
+        let orders = self
+            .inner
+            .orders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .list_for(peer_id);
+        let mut delivered = 0usize;
+        for o in orders {
+            // 投递队列里保存的帧原文（不重新序列化：投递字节 = 签名覆盖的字节）
+            if ch.send_msg(stream, o.payload.as_bytes()).is_err() {
+                self.log(&format!(
+                    "destroy order send failed for {peer_id}: kept in queue"
+                ));
+                break;
+            }
+            match self.await_order_ack(ch, stream, peer_pub, early)? {
+                AckOutcome::Ack => {
+                    let _ = self
+                        .inner
+                        .orders
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&o.peer_id, &o.target, o.issued_ms);
+                    delivered += 1;
+                    self.log(&format!(
+                        "destroy order delivered to {peer_id} (delay {}s)",
+                        o.delay_secs
+                    ));
+                }
+                AckOutcome::Rejected(msg) => {
+                    self.log(&format!(
+                        "destroy order rejected by {peer_id}: {msg} (kept in queue)"
+                    ));
+                    break;
+                }
+            }
+        }
+        Ok(delivered)
+    }
+
+    /// 记录对端已知监听地址（UI 兜底手填；未登记对端返回 Err）。日志不写地址本身（元数据最小化）。
+    pub fn remember_peer_addr(&self, device_id: &str, addr: &str) -> Result<(), &'static str> {
+        self.inner
+            .peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_addr(device_id, addr)?;
+        self.log(&format!("peer addr remembered: {device_id}"));
+        Ok(())
+    }
+
+    /// 全设备联动销毁的第一步：为**每一个已配对设备**各签发一条销毁指令并入队（离线设备下次
+    /// 上线后投递执行）。签名用本机长期身份，私钥不出引擎；立即返回，不尝试连接对端。
+    pub fn destroy_queue_all(&self, delay_secs: u64) -> Result<serde_json::Value, String> {
+        if self.inner.dead.load(Ordering::SeqCst) {
+            return Err("engine destroyed".into());
+        }
+        let peers = self
+            .inner
+            .peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .list();
+        let delay_ms = delay_secs.saturating_mul(1000);
+        let mut queued: Vec<String> = Vec::with_capacity(peers.len());
+        {
+            let mut store = self.inner.orders.lock().unwrap_or_else(|e| e.into_inner());
+            for (peer_id, _rec) in peers.iter() {
+                let ts = now_ms();
+                let sig = self
+                    .inner
+                    .ident
+                    .sign(&destroy_sign_body(peer_id, delay_ms, ts));
+                let payload = serde_json::to_string(&Msg::DestroyCmd {
+                    target: peer_id.clone(),
+                    delay_ms,
+                    ts_ms: ts,
+                    sig: sig.clone(),
+                })
+                .map_err(|e| e.to_string())?;
+                store
+                    .push(OrderRec {
+                        peer_id: peer_id.clone(),
+                        target: peer_id.clone(),
+                        delay_secs,
+                        issued_ms: ts,
+                        sig_hex: sig,
+                        payload,
+                    })
+                    .map_err(|e| e.to_string())?;
+                queued.push(peer_id.clone());
+            }
+        }
+        self.log(&format!(
+            "destroy orders queued: {} peer(s), delay {delay_secs}s",
+            queued.len()
+        ));
+        Ok(serde_json::json!({"queued": queued.len(), "peers": queued}))
+    }
+
+    /// 队列快照供 UI 展示（不含签名/载荷，避免把可用凭据暴露给展示层）。
+    pub fn pending_orders(&self) -> serde_json::Value {
+        let store = self.inner.orders.lock().unwrap_or_else(|e| e.into_inner());
+        let items: Vec<serde_json::Value> = store
+            .all()
+            .iter()
+            .map(|o| {
+                serde_json::json!({
+                    "peer": o.peer_id,
+                    "issuedMs": o.issued_ms,
+                    "delaySecs": o.delay_secs,
+                })
+            })
+            .collect();
+        serde_json::json!({"count": items.len(), "items": items})
+    }
+
+    /// 取消投递（清空本机队列）；返回被清掉的条数。已投递执行的指令不受影响（不可撤回）。
+    pub fn cancel_pending_orders(&self) -> usize {
+        let n = self
+            .inner
+            .orders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear()
+            .unwrap_or(0);
+        if n > 0 {
+            self.log(&format!("destroy orders cancelled: {n}"));
+        }
+        n
+    }
+
     /// 发起一次增量同步（直连地址）。
     pub fn sync_with(&self, addr: &str) -> Result<serde_json::Value, String> {
         self.run_sync(move || TcpStream::connect(addr).map_err(|e| e.to_string()))
@@ -581,7 +962,8 @@ impl P2pEngine {
     /// 响应端经中继接入：注册房间后进入既有连接处理流程（握手/核验/同步/销毁）。
     pub fn serve_relay_connection(&self, relay_addr: &str, room: &str) -> Result<(), String> {
         let stream = Self::dial_relay(relay_addr, room)?;
-        self.handle_conn(stream);
+        // relayed = true：源地址是中继的，不当作对端可回拨地址登记
+        self.handle_conn(stream, true);
         Ok(())
     }
 
@@ -617,7 +999,7 @@ impl P2pEngine {
         let mut ch =
             SecureChannel::handshake(&mut stream, Role::Initiator, &self.inner.ident, None)
                 .map_err(|e| e.to_string())?;
-        let (peer_id, _peer_name, peer_pub) = self
+        let (peer_id, _peer_name, peer_pub, _peer_port) = self
             .hello(&mut ch, &mut stream)
             .map_err(|e| e.to_string())?;
         let registered = self
@@ -630,6 +1012,11 @@ impl P2pEngine {
         if !registered {
             return Err("peer not paired with this vault".into());
         }
+
+        // 高优先级信令：握手完成、清单交换之前先把本机队列中发给该对端的销毁指令投递掉
+        //（docs/08 §四.2）。对端同样会在其 Hello 后投递，故用能顺带处理来件的读取路径。
+        let mut early = EarlyMsgs::default();
+        self.deliver_pending_orders(&mut ch, &mut stream, &peer_id, &peer_pub, &mut early)?;
 
         let local_items: Vec<ManifestItem> = {
             let slot = self
@@ -649,7 +1036,7 @@ impl P2pEngine {
             },
         )
         .map_err(|e| e.to_string())?;
-        let resp: Msg = recv_json(&mut ch, &mut stream).map_err(|e| e.to_string())?;
+        let resp: Msg = self.recv_with_orders(&mut ch, &mut stream, &peer_pub, &mut early)?;
         let peer_items = match resp {
             Msg::SyncResp { manifest } => manifest,
             Msg::Error { msg } => return Err(msg),
@@ -1257,7 +1644,7 @@ impl P2pEngine {
         let mut ch =
             SecureChannel::handshake(&mut stream, Role::Initiator, &self.inner.ident, None)
                 .map_err(|e| e.to_string())?;
-        let (_pid, _pn, ppub) = self
+        let (_pid, _pn, ppub, _port) = self
             .hello(&mut ch, &mut stream)
             .map_err(|e| e.to_string())?;
         let registered = self
@@ -1271,7 +1658,8 @@ impl P2pEngine {
             return Err("peer not paired".into());
         }
         let ts = now_ms();
-        let delay_ms = delay_secs * 1000;
+        // saturating：秒 → 毫秒，异常大的入参不得在调试构建里 panic（跨 FFI 边界 panic 会 abort）
+        let delay_ms = delay_secs.saturating_mul(1000);
         let sig = self
             .inner
             .ident
@@ -1287,7 +1675,9 @@ impl P2pEngine {
             },
         )
         .map_err(|e| e.to_string())?;
-        let ack: Msg = recv_json(&mut ch, &mut stream).map_err(|e| e.to_string())?;
+        // 对端也可能在 Hello 后立刻投递它队列中发给本机的指令，故走可顺带处理的读取路径
+        let mut early = EarlyMsgs::default();
+        let ack: Msg = self.recv_with_orders(&mut ch, &mut stream, &ppub, &mut early)?;
         match ack {
             Msg::DestroyAck => {
                 self.log(&format!("destroy command sent to {target}"));
@@ -1335,6 +1725,8 @@ impl P2pEngine {
             "peers": peers.list().iter().map(|(id, p)| serde_json::json!({
                 "deviceId": id, "name": p.name,
                 "fingerprint": crate::identity::Identity::fingerprint_of(&p.pub_hex),
+                // 可空：从未观测到/未手填过地址时为 null（UI 据此提示手填，见 remember_peer_addr）
+                "addr": p.addr,
             })).collect::<Vec<_>>(),
             "armedDestroy": armed.as_ref().map(|a| serde_json::json!({
                 "target": a.target,
@@ -1441,6 +1833,7 @@ pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn base64_roundtrip() {
@@ -1499,6 +1892,21 @@ mod tests {
         vault_path: PathBuf,
         slot: Arc<Mutex<Option<Vault>>>,
         engine: P2pEngine,
+        mk: [u8; KEY_LEN],
+        /// 擦除回调被调用次数（P5-5 投递/验签用例的断言点）。
+        wipes: Arc<AtomicUsize>,
+    }
+
+    /// 擦除回调：计数 + 真删数据目录与保险箱文件（与 vault-core 注入的语义一致）。
+    fn wipe_counter(wipes: Arc<AtomicUsize>, vp: PathBuf) -> WipeFn {
+        Box::new(move || {
+            wipes.fetch_add(1, Ordering::SeqCst);
+            let stem = vp.file_stem().unwrap().to_str().unwrap().to_string();
+            let data = vp.parent().unwrap().join(format!("{stem}.data"));
+            let _ = std::fs::remove_dir_all(&data);
+            let _ = std::fs::remove_file(&vp);
+            Ok(())
+        })
     }
 
     fn mk_dev(tag: &str) -> TestDev {
@@ -1507,21 +1915,49 @@ mod tests {
         std::fs::write(&vault_path, b"fake-header").unwrap();
         let mk = vault_crypto::random_key();
         let slot: Arc<Mutex<Option<Vault>>> = Arc::new(Mutex::new(None));
-        let vp = vault_path.clone();
-        let wipe: WipeFn = Box::new(move || {
-            let stem = vp.file_stem().unwrap().to_str().unwrap().to_string();
-            let data = vp.parent().unwrap().join(format!("{stem}.data"));
-            let _ = std::fs::remove_dir_all(&data);
-            let _ = std::fs::remove_file(&vp);
-            Ok(())
-        });
+        let wipes = Arc::new(AtomicUsize::new(0));
+        let wipe = wipe_counter(wipes.clone(), vault_path.clone());
         let engine = P2pEngine::new(&vault_path, &mk, tag, slot.clone(), wipe).unwrap();
         TestDev {
             dir,
             vault_path,
             slot,
             engine,
+            mk,
+            wipes,
         }
+    }
+
+    /// 在同一临时目录上重开引擎：读回同一份 peers.enc / orders.enc（落盘往返断言用）。
+    fn reopen(dev: &TestDev) -> P2pEngine {
+        P2pEngine::new(
+            &dev.vault_path,
+            &dev.mk,
+            "reopened",
+            dev.slot.clone(),
+            wipe_counter(dev.wipes.clone(), dev.vault_path.clone()),
+        )
+        .unwrap()
+    }
+
+    /// 直接写入对端表模拟「已配对」（配对流程由 e2e 用例覆盖）。
+    fn fake_peer(dev: &TestDev, id: &str, tag: char) {
+        dev.engine
+            .inner
+            .peers
+            .lock()
+            .unwrap()
+            .upsert(
+                id,
+                PeerRec {
+                    name: id.to_string(),
+                    pub_hex: tag.to_string().repeat(64),
+                    paired_ms: 1,
+                    counter: 0,
+                    addr: None,
+                },
+            )
+            .unwrap();
     }
 
     fn import(dev: &TestDev, name: &str, data: &[u8]) -> u64 {
@@ -1546,6 +1982,18 @@ mod tests {
 
     fn addr_of(dev: &TestDev) -> String {
         format!("127.0.0.1:{}", dev.engine.port())
+    }
+
+    /// 轮询等待（响应端投递/收 ACK 在监听线程里异步完成，断言前需等它落地）。
+    fn wait_until<F: Fn() -> bool>(cond: F, ms: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        cond()
     }
 
     #[test]
@@ -1631,21 +2079,7 @@ mod tests {
     fn unpair_removes_peer_and_logs_event() {
         let a = mk_dev("unpair-dev");
         // 直接写入对端表模拟「已配对」状态（配对流程由 e2e 用例覆盖）
-        a.engine
-            .inner
-            .peers
-            .lock()
-            .unwrap()
-            .upsert(
-                "vd-ghost",
-                PeerRec {
-                    name: "Ghost".into(),
-                    pub_hex: "cc".repeat(32),
-                    paired_ms: 1,
-                    counter: 0,
-                },
-            )
-            .unwrap();
+        fake_peer(&a, "vd-ghost", 'c');
         assert!(a.engine.unpair("vd-ghost").unwrap(), "已配对设备解绑成功");
         assert!(
             !a.engine.unpair("vd-ghost").unwrap(),
@@ -1722,5 +2156,310 @@ mod tests {
         assert_eq!(s["pulled"].as_array().unwrap().len(), 1);
         assert!(export_ok(&a, f, &data));
         let _ = server.join();
+    }
+
+    // ==== P5-5 全设备联动销毁：离线设备高优先级信令队列 ====
+
+    /// 单元 1：队列落盘往返（重开同一目录仍在）、`cancel_pending_orders` 生效、
+    /// `pending_orders` 结构正确、队列文件为密文。
+    #[test]
+    fn destroy_orders_queue_roundtrip_and_cancel() {
+        let a = mk_dev("qA");
+        fake_peer(&a, "vd-peer-1", 'a');
+        fake_peer(&a, "vd-peer-2", 'b');
+
+        // 入队：不依赖任何对端可达性（这正是离线设备场景）
+        let q = a.engine.destroy_queue_all(0).unwrap();
+        assert_eq!(q["queued"], serde_json::json!(2));
+        let peers = q["peers"].as_array().unwrap();
+        assert_eq!(peers.len(), 2);
+        assert!(peers.iter().any(|p| p == "vd-peer-1"));
+
+        // pending_orders 结构：{count, items:[{peer,issuedMs,delaySecs}]}，且不得含签名/载荷
+        let p = a.engine.pending_orders();
+        assert_eq!(p["count"], serde_json::json!(2));
+        let items = p["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        for it in items {
+            assert!(it["peer"].as_str().unwrap().starts_with("vd-peer-"));
+            assert!(it["issuedMs"].as_u64().unwrap() > 0);
+            assert_eq!(it["delaySecs"], serde_json::json!(0));
+            assert!(it.get("sig_hex").is_none() && it.get("payload").is_none());
+        }
+
+        // 重开同一目录：队列必须在（AEAD 落盘）
+        let reopened = reopen(&a);
+        assert_eq!(reopened.pending_orders()["count"], serde_json::json!(2));
+        // 队列文件不得明文出现对端 id（键 HKDF(MK,"p2p-orders") 封装）
+        let blob = std::fs::read(a.dir.path().join("qA.data/p2p/orders.enc")).unwrap();
+        let needle = b"vd-peer-1";
+        assert!(
+            !blob.windows(needle.len()).any(|w| w == needle.as_slice()),
+            "队列条目不得明文落盘"
+        );
+
+        // 取消投递（UI「取消投递」）：清空并持久化，重复调用幂等
+        assert_eq!(reopened.cancel_pending_orders(), 2);
+        assert_eq!(reopened.pending_orders()["count"], serde_json::json!(0));
+        assert_eq!(reopened.cancel_pending_orders(), 0);
+        assert_eq!(reopen(&a).pending_orders()["count"], serde_json::json!(0));
+
+        // 延迟语义：delay_secs 记入条目，且重复入队同目标只保留最新一条（不叠加）
+        let d1 = a.engine.destroy_queue_all(60).unwrap();
+        assert_eq!(d1["queued"], serde_json::json!(2));
+        assert_eq!(
+            a.engine.pending_orders()["items"][0]["delaySecs"],
+            serde_json::json!(60)
+        );
+        assert_eq!(a.engine.pending_orders()["count"], serde_json::json!(2));
+        assert_eq!(a.engine.cancel_pending_orders(), 2);
+
+        // 无已配对设备 → 空队列（不报错，UI 可提示"无设备可联动"）
+        let b = mk_dev("qB");
+        assert_eq!(
+            b.engine.destroy_queue_all(0).unwrap()["queued"],
+            serde_json::json!(0)
+        );
+        assert_eq!(b.engine.pending_orders()["count"], serde_json::json!(0));
+        assert_eq!(b.engine.cancel_pending_orders(), 0);
+    }
+
+    /// 单元 1b：`remember_peer_addr`（UI 兜底手填）与 `status().peers[].addr`。
+    #[test]
+    fn peer_addr_remember_and_status_exposes_it() {
+        let a = mk_dev("addrA");
+        fake_peer(&a, "vd-p1", 'a');
+        assert_eq!(
+            a.engine.status()["peers"][0]["addr"],
+            serde_json::json!(null)
+        );
+        a.engine
+            .remember_peer_addr("vd-p1", "192.168.1.7:4100")
+            .unwrap();
+        assert_eq!(
+            a.engine.status()["peers"][0]["addr"],
+            serde_json::json!("192.168.1.7:4100")
+        );
+        // 未登记对端不得被凭空创建
+        assert!(a
+            .engine
+            .remember_peer_addr("vd-nope", "10.0.0.1:1")
+            .is_err());
+        assert_eq!(a.engine.status()["peers"].as_array().unwrap().len(), 1);
+        // 重开后仍在
+        assert_eq!(
+            reopen(&a).status()["peers"][0]["addr"],
+            serde_json::json!("192.168.1.7:4100")
+        );
+    }
+
+    /// 单元 2：投递帧的验签路径——错误签名 / 错误 target / 非法载荷一律拒绝且**不擦除**；
+    /// 合法指令（延迟）只武装、合法指令（0 延迟）才擦除（阳性对照）。
+    #[test]
+    fn destroy_order_frame_rejected_when_signature_or_target_wrong() {
+        let a = mk_dev("ordA");
+        let b = mk_dev("ordB");
+        let c = mk_dev("ordC");
+        let a_pub = a.engine.inner.ident.public_hex();
+        let b_id = b.engine.device_id();
+        let a_id = a.engine.device_id();
+        let frame = |target: &str, delay_ms: u64, ts: u64, sig: &str| {
+            serde_json::to_string(&Msg::DestroyCmd {
+                target: target.to_string(),
+                delay_ms,
+                ts_ms: ts,
+                sig: sig.to_string(),
+            })
+            .unwrap()
+        };
+        let sign = |target: &str, delay_ms: u64, ts: u64| {
+            a.engine
+                .inner
+                .ident
+                .sign(&destroy_sign_body(target, delay_ms, ts))
+        };
+
+        // (1) 签名与签名体不符（同一把私钥签了别的内容）
+        let bad = a.engine.inner.ident.sign(b"vsync-destroy:vd-other:0:1");
+        assert_eq!(
+            b.engine
+                .apply_order_payload(&a_pub, &frame(&b_id, 0, 1, &bad)),
+            Err(OrderReject::BadSignature)
+        );
+        // (2) 第三者冒充（用另一把私钥签正确的签名体）
+        let rogue = Identity::generate();
+        let forged = rogue.sign(&destroy_sign_body(&b_id, 0, 1));
+        assert_eq!(
+            b.engine
+                .apply_order_payload(&a_pub, &frame(&b_id, 0, 1, &forged)),
+            Err(OrderReject::BadSignature)
+        );
+        // (3) 合法签名但目标不是本机
+        let sig_other = sign(&a_id, 0, 1);
+        assert_eq!(
+            b.engine
+                .apply_order_payload(&a_pub, &frame(&a_id, 0, 1, &sig_other)),
+            Err(OrderReject::TargetMismatch)
+        );
+        // (4) 载荷不是销毁指令 / 不是 JSON
+        assert_eq!(
+            b.engine.apply_order_payload(&a_pub, "{\"SyncDone\":null}"),
+            Err(OrderReject::Malformed)
+        );
+        assert_eq!(
+            b.engine.apply_order_payload(&a_pub, "not-json"),
+            Err(OrderReject::Malformed)
+        );
+
+        // 以上全部拒绝路径都不得触发擦除，也不得武装倒计时
+        assert_eq!(b.wipes.load(Ordering::SeqCst), 0, "验签/目标不符不得擦除");
+        assert!(b.vault_path.exists());
+        assert_eq!(b.engine.status()["armedDestroy"], serde_json::json!(null));
+        let ev = b.engine.status()["events"].clone().to_string();
+        assert!(ev.contains("signature invalid"), "{ev}");
+        assert!(ev.contains("target mismatch"), "{ev}");
+
+        // (5) 阳性对照：合法指令 delay>0 → 只武装，不擦除
+        let ts = now_ms();
+        let sig_delay = sign(&b_id, 60_000, ts);
+        assert_eq!(
+            b.engine
+                .apply_order_payload(&a_pub, &frame(&b_id, 60_000, ts, &sig_delay)),
+            Ok(true)
+        );
+        assert_eq!(b.wipes.load(Ordering::SeqCst), 0, "延迟销毁只武装");
+        assert_eq!(
+            b.engine.status()["armedDestroy"]["target"],
+            serde_json::json!(b_id)
+        );
+        assert!(b.engine.destroy_cancel(), "武装可取消");
+
+        // (6) 阳性对照：合法指令 delay=0 → 立即擦除（证明上面不是"永远拒绝"）
+        let ts = now_ms();
+        let sig_now = sign(&b_id, 0, ts);
+        assert_eq!(
+            b.engine
+                .apply_order_payload(&a_pub, &frame(&b_id, 0, ts, &sig_now)),
+            Ok(false)
+        );
+        assert_eq!(b.wipes.load(Ordering::SeqCst), 1);
+        assert!(!b.vault_path.exists());
+        assert!(!b.dir.path().join("ordB.data").exists());
+        // 未受影响的第三方设备不得被擦除
+        assert_eq!(c.wipes.load(Ordering::SeqCst), 0);
+        assert!(c.vault_path.exists());
+    }
+
+    /// 集成 A（方向：**B 拨 A**，A 为响应端）：覆盖"对端拨入时投递"分支。
+    ///
+    /// A 在 B 离线（不可达，A 侧不去连接）期间 `destroy_queue_all(0)` 入队 → B 上线主动向 A
+    /// 发起同步 → A 在 Hello 之后、清单交换之前投递 → B 验签后立即擦除 → A 收到 ACK 后队列清空。
+    #[test]
+    fn offline_destroy_order_delivered_when_peer_dials_in() {
+        let a = mk_dev("qdirA");
+        let b = mk_dev("qdirB");
+
+        // 配对：B 出邀请码，A 拨入 B（pair_join 方向记下 B 的地址）
+        let code = b.engine.pair_begin().unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        a.engine.pair_join(&addr_of(&b), &code).unwrap();
+        assert_eq!(
+            a.engine.status()["peers"][0]["addr"],
+            serde_json::json!(addr_of(&b)),
+            "pair_join 应记下拨出的对端地址（可回拨）"
+        );
+        assert_eq!(
+            b.engine.status()["peers"][0]["addr"],
+            serde_json::json!(addr_of(&a)),
+            "响应端应记下对端 Hello 声明的监听端口 + 源 IP"
+        );
+
+        // A 在 B 不可达时入队（不发起任何连接）
+        assert_eq!(
+            a.engine.destroy_queue_all(0).unwrap()["queued"],
+            serde_json::json!(1)
+        );
+        assert_eq!(a.engine.pending_orders()["count"], serde_json::json!(1));
+        assert_eq!(b.wipes.load(Ordering::SeqCst), 0);
+
+        // B 上线：主动向 A 发起一次同步（此方向 B 为发起端、A 为响应端）
+        let sync = b.engine.sync_with(&addr_of(&a));
+        println!("B sync result after remote wipe: {sync:?}");
+
+        // B 的擦除回调必须被调用，保险箱与数据目录必须消失
+        assert_eq!(
+            b.wipes.load(Ordering::SeqCst),
+            1,
+            "投递的销毁指令必须执行擦除"
+        );
+        assert!(!b.vault_path.exists());
+        assert!(!b.dir.path().join("qdirB.data").exists());
+        // A 侧队列清空（收到 ACK 才移除），且记住的地址未被清掉
+        assert!(
+            wait_until(
+                || a.engine.pending_orders()["count"] == serde_json::json!(0),
+                5000
+            ),
+            "A 队列应在收到 ACK 后清空，实际 {}",
+            a.engine.pending_orders()
+        );
+        assert_eq!(
+            a.engine.status()["peers"][0]["addr"],
+            serde_json::json!(addr_of(&b))
+        );
+        // 事件时间线：A 记投递、B 记执行
+        let ea = a.engine.status()["events"].clone().to_string();
+        let eb = b.engine.status()["events"].clone().to_string();
+        assert!(
+            ea.contains("destroy order delivered to"),
+            "A 事件缺投递记录: {ea}"
+        );
+        assert!(
+            eb.contains("destroy order accepted: immediate wipe"),
+            "B 事件缺执行记录: {eb}"
+        );
+    }
+
+    /// 集成 B（方向：**A 拨 B**，A 为发起端）：覆盖"我方主动 sync_with 时投递"分支。
+    /// 用 delay>0 避免擦除，从而断言"武装"而非"擦除"（投递语义与方向无关）。
+    #[test]
+    fn offline_destroy_order_delivered_when_we_dial_out() {
+        let a = mk_dev("qoutA");
+        let b = mk_dev("qoutB");
+        let code = b.engine.pair_begin().unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        a.engine.pair_join(&addr_of(&b), &code).unwrap();
+
+        // A 入队一条延迟 1 小时的销毁指令（不擦除，只武装）
+        assert_eq!(
+            a.engine.destroy_queue_all(3600).unwrap()["queued"],
+            serde_json::json!(1)
+        );
+
+        // A 主动拨 B：A 作为发起端在 Hello 后、清单交换前投递；B 回 ACK 后同步照常完成
+        let s = a.engine.sync_with(&addr_of(&b)).unwrap();
+        assert_eq!(s["pushed"].as_array().unwrap().len(), 0);
+
+        assert_eq!(b.wipes.load(Ordering::SeqCst), 0, "延迟销毁只武装不擦除");
+        assert_eq!(
+            b.engine.status()["armedDestroy"]["target"],
+            serde_json::json!(b.engine.device_id())
+        );
+        assert_eq!(a.engine.pending_orders()["count"], serde_json::json!(0));
+        let ea = a.engine.status()["events"].clone().to_string();
+        assert!(
+            ea.contains("destroy order delivered to"),
+            "A 事件缺投递记录: {ea}"
+        );
+        let eb = b.engine.status()["events"].clone().to_string();
+        assert!(
+            eb.contains("destroy order accepted: armed for"),
+            "B 事件缺武装记录: {eb}"
+        );
+        assert!(b.engine.destroy_cancel());
     }
 }

@@ -305,6 +305,33 @@ impl AuditLog {
         })
     }
 
+    /// 密钥轮换时的日志重加密：用 `old_mk` 读出条目、以 `new_mk` 重新加密落盘。
+    ///
+    /// 链哈希不依赖密钥（只覆盖条目内容），因此重加密后**链校验依然成立**，
+    /// 历史不会被切断——这正是 MK 全库轮换（docs/07 §三）里审计日志该有的行为：
+    /// 换密钥而不是丢历史。返回迁移的条目数。
+    pub fn rekey(
+        data_dir: &Path,
+        old_mk: &[u8; KEY_LEN],
+        new_mk: &[u8; KEY_LEN],
+    ) -> Result<usize, &'static str> {
+        // 旧文件不存在（如从未写过审计）→ 无需迁移
+        let path = data_dir.join(AUDIT_FILE);
+        if !path.exists() {
+            return Ok(0);
+        }
+        let old = Self::open_with_key(data_dir, &hkdf_sha256_derive(old_mk, AUDIT_KEY_INFO))?;
+        // 直接以新密钥构造落盘对象：**不要**用新密钥去 open（文件还在旧密钥下，必然解密失败）
+        let fresh = Self {
+            d: old.d,
+            path,
+            key: *hkdf_sha256_derive(new_mk, AUDIT_KEY_INFO),
+        };
+        let n = fresh.d.entries.len();
+        fresh.save()?;
+        Ok(n)
+    }
+
     fn save(&self) -> Result<(), &'static str> {
         let json = self.to_plaintext_json()?;
         let blob = encrypt_blob(&self.key, &json)?;
@@ -386,6 +413,33 @@ mod tests {
         let mut d: LogData = serde_json::from_slice(&log.to_plaintext_json().unwrap()).unwrap();
         mutate(&mut d);
         AuditLog::from_plaintext_json(&serde_json::to_vec(&d).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn rekey_preserves_chain_and_switches_key() {
+        let dir = std::env::temp_dir().join(format!("vsync_audit_rekey_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let old_mk = [3u8; KEY_LEN];
+        let new_mk = [4u8; KEY_LEN];
+
+        let mut log = AuditLog::open(&dir, &old_mk).expect("open");
+        log.append("session", "unlock").expect("a1");
+        log.append("vault", "import").expect("a2");
+        let head_before = log.head_hash();
+        drop(log);
+
+        let n = AuditLog::rekey(&dir, &old_mk, &new_mk).expect("rekey");
+        assert_eq!(n, 2);
+
+        // 新密钥可读、链仍连续、链头不变
+        let after = AuditLog::open(&dir, &new_mk).expect("open new");
+        assert_eq!(after.len(), 2);
+        assert!(after.verify().ok);
+        assert_eq!(after.head_hash(), head_before);
+        // 旧密钥不再可读
+        assert!(AuditLog::open(&dir, &old_mk).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

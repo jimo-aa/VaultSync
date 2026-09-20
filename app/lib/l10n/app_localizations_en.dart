@@ -470,6 +470,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get lockScreenTitle => 'VaultSync Vault';
 
   @override
+  String get lockScreenTogglePwVisibility => 'Show / hide master password';
+
+  @override
   String get lockScreenUnlock => 'Unlock';
 
   @override
@@ -667,6 +670,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get securityDestroyPhrase => 'destroy';
 
   @override
+  String securityDestroyQueued(int n) {
+    return 'Destroy orders signed and queued for $n paired device(s); each executes before any other message the next time it comes online.';
+  }
+
+  @override
   String get securityDestroyRunning => 'Wiping…';
 
   @override
@@ -724,6 +732,28 @@ class AppLocalizationsEn extends AppLocalizations {
   String get securityDetectIntegrity => 'File integrity';
 
   @override
+  String securityDetectIntegrityFailed(int failed, int files) {
+    return 'Alert · $failed / $files containers failed verification';
+  }
+
+  @override
+  String get securityDetectIntegrityFailedRead =>
+      'Integrity scan failed: the vault could not be read';
+
+  @override
+  String get securityDetectIntegrityNotScanned =>
+      'Not scanned yet · click the card to re-verify every chunk';
+
+  @override
+  String securityDetectIntegrityOk(int checked, int files) {
+    return 'OK · $checked / $files containers verified chunk by chunk';
+  }
+
+  @override
+  String get securityDetectIntegrityScanning =>
+      'Scanning… (per-chunk re-hash; time grows with data size)';
+
+  @override
   String get securityDetectIntegritySub =>
       'Per-chunk GCM authentication on every export and sync · rejected on failure';
 
@@ -767,6 +797,44 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get securityRefresh => 'Refresh';
+
+  @override
+  String get securityRekeyDo => 'Rotate now';
+
+  @override
+  String get securityRekeyDone =>
+      'Master key rotated · unlock again with your master password (existing shares invalidated)';
+
+  @override
+  String securityRekeyFailed(String err) {
+    return 'Rotation failed: $err';
+  }
+
+  @override
+  String get securityRekeyNote =>
+      'Rotation rewrites the index and all containers (time grows with data size) and re-wraps KEK_pwd under a fresh salt (a bound biometric copy is re-wrapped too). The vector clock is not advanced, so it does not propagate to paired devices; existing burn-after-reading share tokens are invalidated. You must unlock again with your master password afterwards.';
+
+  @override
+  String get securityRekeyNow => 'Rotate MK';
+
+  @override
+  String get securityRekeyPhrase => 'Type “rotate” to confirm';
+
+  @override
+  String get securityRekeyPhraseWord => 'rotate';
+
+  @override
+  String get securityRekeyPw => 'Master password';
+
+  @override
+  String get securityRekeySub =>
+      'Emergency path when the MK leaks: rewrite the index and every container under a new MK';
+
+  @override
+  String get securityRekeyTitle => 'Rotate master key';
+
+  @override
+  String get securityRekeyWrongPw => 'Wrong master password';
 
   @override
   String get securityStegoDisable => 'Disable';
@@ -1005,6 +1073,40 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsTitle => 'Settings';
+
+  @override
+  String get settingsUpdateCheck => 'Check for updates';
+
+  @override
+  String get settingsUpdateChecking => 'Checking…';
+
+  @override
+  String get settingsUpdateDownload => 'Download and install';
+
+  @override
+  String get settingsUpdateNotConfigured =>
+      'Not configured · needs a manifest URL and release key (fail-closed)';
+
+  @override
+  String get settingsUpdateNote =>
+      'The signature covers the manifest\'s raw bytes and the installer is re-checked against the sha256 inside the manifest; any failure rejects the update. This repository ships no release server or signing key, so the channel stays disabled until configured.';
+
+  @override
+  String get settingsUpdatePubkey => 'Release public key';
+
+  @override
+  String get settingsUpdatePubkeySub =>
+      'Pinned Ed25519 key (hex, 32 bytes) — only manifests signed by it are accepted';
+
+  @override
+  String get settingsUpdateTitle => 'Update channel';
+
+  @override
+  String get settingsUpdateUrl => 'Manifest URL';
+
+  @override
+  String get settingsUpdateUrlSub =>
+      'Publisher-hosted latest.json (https only); latest.json.sig next to it holds the Ed25519 signature';
 
   @override
   String get settingsVersionLabel => 'Version';
@@ -1790,6 +1892,43 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get vaultPageRenamed => 'Renamed · encrypted metadata updated';
+
+  @override
+  String get vaultPageRotateFileDone => 'Key rotated · container rewritten';
+
+  @override
+  String get vaultPageRotateFileSub =>
+      'Rewrite this file\'s container under a fresh random FSKey';
+
+  @override
+  String get vaultPageRotateFileTitle => 'Rotate file key';
+
+  @override
+  String get vaultPageRotateFolderDone =>
+      'Folder key rotated · direct file containers rewritten';
+
+  @override
+  String get vaultPageRotateFolderSub =>
+      'New FSK override + rewrite of the folder\'s own file containers';
+
+  @override
+  String get vaultPageRotateFolderTitle => 'Rotate folder key';
+
+  @override
+  String get vaultPageRotateKey => 'Rotate key';
+
+  @override
+  String get vaultPageRotateNote =>
+      'After rotation the old key path is dead (the new key is random, no longer derived from the MK). This is a local rotation: the vector clock is not advanced, so it does not propagate to paired devices and they keep their own readable copies. Rotating a folder covers its direct files only, not subfolders.';
+
+  @override
+  String get vaultPageRotateStart => 'Rotate now';
+
+  @override
+  String get vaultPageRotateTargetFile => 'File';
+
+  @override
+  String get vaultPageRotateTargetFolder => 'Folder';
 
   @override
   String get vaultPageSave => 'Save';

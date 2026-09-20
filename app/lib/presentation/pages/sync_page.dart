@@ -213,7 +213,8 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                     ),
                   ),
                   if (state.selfName.isNotEmpty)
-                    Text(l.syncPageSelfPeers(state.selfName, state.peers.length),
+                    Text(
+                        l.syncPageSelfPeers(state.selfName, state.peers.length),
                         style: TextStyle(fontSize: 12, color: v.text3)),
                 ],
               ),

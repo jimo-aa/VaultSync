@@ -40,6 +40,10 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
   /// P2P 状态快照（peers / events / alive）。
   SyncStatus? _status;
 
+  /// 全库完整性扫描结果（P5-2：真实逐块重算，而非「设计保证」）。
+  Map<String, dynamic>? _scan;
+  bool _scanning = false;
+
   /// 审计条目（倒序展示：最新在前）与本机链头。
   List<_AuditEntry> _entries = const [];
   String _head = '';
@@ -210,9 +214,9 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
     // 销毁后本机保险箱已不存在：立即回锁屏（路由守卫自动跳 /lock）。
     _notif.danger(l.securityDestroyDone);
     if (out.linked) {
-      // 如实说明：引擎无离线指令队列，其余设备无法由本机投递。
-      _notif.warning(out.peerCount > 0
-          ? l.securityDestroyPeersUndelivered(out.peerCount)
+      // 指令已入队：对端下次建立信道时投递并执行（收到 ACK 才出队）
+      _notif.warning(out.queued > 0
+          ? l.securityDestroyQueued(out.queued)
           : l.securityDestroyPeersNone);
     }
     ref.read(sessionProvider.notifier).lock();
@@ -221,6 +225,34 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
   // ---- 检测项 ----
 
   /// 六项检测（图标 / 语气 / 标题 / 副文案）。
+  /// 全库完整性扫描（P5-2）：逐块重算 + GCM 认证，放在引擎侧后台 Isolate。
+  Future<void> _runIntegrityScan() async {
+    final handle = _handle();
+    if (handle == null) return;
+    final l = AppLocalizations.of(context);
+    setState(() => _scanning = true);
+    final r = await ref.read(vaultEngineProvider).verifyAll(handle);
+    if (!mounted) return;
+    setState(() {
+      _scanning = false;
+      _scan = r ?? const {'files': 0, 'checked': 0, 'failed': <dynamic>[]};
+    });
+    final failed = (_scan?['failed'] as List?)?.length ?? 0;
+    if (r == null) {
+      ref
+          .read(notificationProvider.notifier)
+          .danger(l.securityDetectIntegrityFailedRead);
+    } else if (failed == 0) {
+      ref.read(notificationProvider.notifier).ok(l.securityDetectIntegrityOk(
+          (_scan!['checked'] as num?)?.toInt() ?? 0,
+          (_scan!['files'] as num?)?.toInt() ?? 0));
+    } else {
+      ref.read(notificationProvider.notifier).danger(
+          l.securityDetectIntegrityFailed(
+              failed, (_scan!['files'] as num?)?.toInt() ?? 0));
+    }
+  }
+
   List<_Detect> _detections(AppLocalizations l) {
     final status = _status;
     final events = status?.events ?? const <String>[];
@@ -251,10 +283,27 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
       ),
       _Detect(
         icon: 'shield',
-        tone: VsTone.ok,
+        tone: _scanning
+            ? VsTone.info
+            : _scan == null
+                ? VsTone.mute
+                : ((_scan!['failed'] as List?)?.isEmpty ?? true)
+                    ? VsTone.ok
+                    : VsTone.danger,
         title: l.securityDetectIntegrity,
-        sub: l.securityDetectIntegritySub,
-        badge: l.securityBadgeGuarantee,
+        sub: _scanning
+            ? l.securityDetectIntegrityScanning
+            : _scan == null
+                ? l.securityDetectIntegrityNotScanned
+                : ((_scan!['failed'] as List?)?.isEmpty ?? true)
+                    ? l.securityDetectIntegrityOk(
+                        (_scan!['checked'] as num?)?.toInt() ?? 0,
+                        (_scan!['files'] as num?)?.toInt() ?? 0)
+                    : l.securityDetectIntegrityFailed(
+                        (_scan!['failed'] as List).length,
+                        (_scan!['files'] as num?)?.toInt() ?? 0),
+        badge: _scan == null ? l.securityBadgeGuarantee : null,
+        onTap: _scanning ? null : _runIntegrityScan,
       ),
       _Detect(
         icon: 'key',
@@ -379,6 +428,8 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
               Expanded(child: _stegoCard(v, l)),
               const SizedBox(width: DesignTokens.sp3),
               Expanded(child: _wipeCard(v, l)),
+              const SizedBox(width: DesignTokens.sp3),
+              Expanded(child: _rekeyCard(v, l)),
             ],
           ),
         ),
@@ -388,7 +439,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
 
   /// 单张检测卡（原型 .detect：32px 圆角图标块 + 标题 + 副文案）。
   Widget _detectCard(VsScheme v, _Detect d) {
-    return Container(
+    final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
       decoration: BoxDecoration(
         color: v.surface,
@@ -428,6 +479,19 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
             ),
           ),
         ],
+      ),
+    );
+    // 可点击项（全库完整性扫描）：加悬停提示与语义标签，非可点击项原样返回。
+    if (d.onTap == null) return card;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: d.onTap,
+        child: Semantics(
+          button: true,
+          label: '${d.title} · ${d.sub}',
+          child: card,
+        ),
       ),
     );
   }
@@ -674,6 +738,60 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
     );
   }
 
+  /// 主密钥全库轮换卡（P5-4，docs/07 §三 的本地部分）。
+  Widget _rekeyCard(VsScheme v, AppLocalizations l) {
+    return VsCard(
+      borderColor: v.goldSoft,
+      child: Row(
+        children: [
+          const VsMicTile(icon: 'key', tone: VsTone.gold),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l.securityRekeyTitle,
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: v.text)),
+                const SizedBox(height: 2),
+                Text(l.securityRekeySub,
+                    style:
+                        TextStyle(fontSize: 12, color: v.text2, height: 1.45)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          VsButton(
+            label: l.securityRekeyNow,
+            small: true,
+            onPressed: _openRekey,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 主密钥轮换流程（强确认：主密码 + 确认短语；成功后立即回锁屏）。
+  Future<void> _openRekey() async {
+    final l = AppLocalizations.of(context);
+    final handle = _handle();
+    if (handle == null) {
+      _notif.warning(l.securityNeedUnlock);
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierColor: context.vs.backdrop,
+      builder: (_) => _RekeyDialog(handle: handle),
+    );
+    if (!mounted || ok != true) return;
+    _notif.danger(l.securityRekeyDone);
+    // 会话内的 MK 副本已陈旧：必须立即锁定并重新解锁
+    ref.read(sessionProvider.notifier).lock();
+  }
+
   // ---- 展示辅助 ----
 
   static const _kinds = ['all', 'vault', 'device', 'session', 'security'];
@@ -712,6 +830,7 @@ class _Detect {
     required this.title,
     required this.sub,
     this.badge,
+    this.onTap,
   });
 
   final String icon;
@@ -721,6 +840,160 @@ class _Detect {
 
   /// 设计保证类检测的附加徽章（无运行时扫描接口，只能标注机制）。
   final String? badge;
+
+  /// 可点击的检测项（目前只有全库完整性扫描）。
+  final VoidCallback? onTap;
+}
+
+/// 主密钥轮换弹窗：主密码 + 确认短语双把关（docs/07 §三 的强确认要求）。
+class _RekeyDialog extends ConsumerStatefulWidget {
+  const _RekeyDialog({required this.handle});
+
+  final Object handle;
+
+  @override
+  ConsumerState<_RekeyDialog> createState() => _RekeyDialogState();
+}
+
+class _RekeyDialogState extends ConsumerState<_RekeyDialog> {
+  final _pwCtl = TextEditingController();
+  final _phraseCtl = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _pwCtl.dispose();
+    _phraseCtl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final v = context.vs;
+    final l = AppLocalizations.of(context);
+    final phraseOk = _phraseCtl.text.trim() == l.securityRekeyPhraseWord;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 480,
+        decoration: BoxDecoration(
+          color: v.surface,
+          borderRadius: BorderRadius.circular(DesignTokens.rLg),
+          border: Border.all(color: v.goldSoft),
+          boxShadow: v.shadow3,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
+              child: Row(
+                children: [
+                  const VsMicTile(icon: 'key', tone: VsTone.gold),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(l.securityRekeyTitle,
+                        style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w600,
+                            color: v.text)),
+                  ),
+                  VsIconButton(
+                      icon: 'close',
+                      tooltip: l.securityDestroyCancel,
+                      onPressed: _busy
+                          ? null
+                          : () => Navigator.of(context).pop(false)),
+                ],
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    VsNote(l.securityRekeyNote, tone: VsTone.warn),
+                    const SizedBox(height: 14),
+                    Text(l.securityRekeyPw,
+                        style: const TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _pwCtl,
+                      obscureText: true,
+                      autofocus: true,
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(l.securityRekeyPhrase,
+                        style: const TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _phraseCtl,
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!, style: TextStyle(color: v.danger)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
+              decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: v.borderSoft))),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  VsButton(
+                      label: l.securityDestroyCancel,
+                      tone: VsBtnTone.ghost,
+                      onPressed: _busy
+                          ? null
+                          : () => Navigator.of(context).pop(false)),
+                  const SizedBox(width: 8),
+                  VsButton(
+                    label: _busy ? l.settingsUpdateChecking : l.securityRekeyDo,
+                    tone: VsBtnTone.gold,
+                    onPressed: !phraseOk || _busy || _pwCtl.text.isEmpty
+                        ? null
+                        : _submit,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submit() async {
+    final l = AppLocalizations.of(context);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final err = await ref
+        .read(vaultEngineProvider)
+        .rotateMk(widget.handle, _pwCtl.text);
+    if (!mounted) return;
+    if (err != null) {
+      setState(() {
+        _busy = false;
+        _error = l.securityRekeyFailed(err);
+      });
+      return;
+    }
+    Navigator.of(context).pop(true);
+  }
 }
 
 /// 一条审计记录（引擎 `auditList` entries[]）。
@@ -797,13 +1070,17 @@ class _DestroyOutcome {
     required this.destroyed,
     required this.linked,
     this.peerCount = 0,
+    this.queued = 0,
   });
 
   final bool destroyed;
 
-  /// 是否选择了「全设备联动销毁」（引擎无离线指令队列，实际只擦了本机）。
+  /// 是否选择了「全设备联动销毁」。
   final bool linked;
   final int peerCount;
+
+  /// 已入队的销毁指令条数（每台已配对设备一条）。
+  final int queued;
 }
 
 /// 紧急销毁弹窗（原型 #ov-gwipe）：模式二选一 + 延迟销毁说明 + 先导出审计 + 确认短语。
@@ -869,7 +1146,8 @@ class _DestroyDialogState extends ConsumerState<_DestroyDialog> {
           .ok(l.securityDestroyExported(loc.path));
     }
 
-    // 2) 全设备联动：引擎当前无离线指令队列，二次确认后只擦本机（如实说明）。
+    // 2) 全设备联动：先把签名指令入队（离线设备下次上线时投递），再擦本机。
+    var queued = 0;
     if (_mode == _WipeMode.all) {
       final ok = await showVsModal<bool>(
         context: context,
@@ -896,6 +1174,13 @@ class _DestroyDialogState extends ConsumerState<_DestroyDialog> {
         if (mounted) setState(() => _busy = false);
         return;
       }
+      // 入队：每台已配对设备一份签名指令，投递与执行由对端在建立信道时完成
+      final r = await ref
+          .read(vaultEngineProvider)
+          // 延迟 0 = 对端下次上线即刻执行（docs/05-06 §5.1 高优先级队列语义）
+          .destroyQueueAll(widget.handle, 0);
+      queued = (r?['queued'] as num?)?.toInt() ?? 0;
+      if (!mounted) return;
     }
 
     // 3) 本机加密擦除（销毁成功即保险箱不存在，调用方须立即回锁）。
@@ -914,6 +1199,7 @@ class _DestroyDialogState extends ConsumerState<_DestroyDialog> {
       destroyed: true,
       linked: _mode == _WipeMode.all,
       peerCount: widget.peerCount,
+      queued: queued,
     ));
   }
 

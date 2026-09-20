@@ -344,6 +344,59 @@ class _VaultPageState extends ConsumerState<VaultPage> {
     await _ctl.refresh();
   }
 
+  /// 密钥轮换（P5-4，docs/07 §二）：单文件换 FSKey；文件夹换 FSK + 重写直属文件容器。
+  /// 语义如实告知：这是**本机**轮换，不会自动传播到已配对设备。
+  Future<void> _rotateKey(VaultEntry e) async {
+    final l = AppLocalizations.of(context);
+    final ok = await showVsModal<bool>(
+      context: context,
+      title: e.isFolder
+          ? l.vaultPageRotateFolderTitle
+          : l.vaultPageRotateFileTitle,
+      sub: e.isFolder ? l.vaultPageRotateFolderSub : l.vaultPageRotateFileSub,
+      icon: 'key',
+      micTone: VsTone.gold,
+      body: (ctx) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          VsKv.text([
+            (
+              e.isFolder
+                  ? l.vaultPageRotateTargetFolder
+                  : l.vaultPageRotateTargetFile,
+              e.name.isEmpty ? l.vaultPageUnnamed : e.name
+            ),
+            if (!e.isFolder) ('大小', fmtSize(e.size)),
+          ]),
+          VsNote(l.vaultPageRotateNote, tone: VsTone.warn),
+          const VsNote('轮换逐块重写容器，期间请勿中断应用。', tone: VsTone.info),
+        ],
+      ),
+      actions: (ctx) => [
+        VsButton(
+            label: l.vaultPageCancel,
+            tone: VsBtnTone.ghost,
+            onPressed: () => Navigator.pop(ctx, false)),
+        VsButton(
+            label: l.vaultPageRotateStart,
+            tone: VsBtnTone.primary,
+            onPressed: () => Navigator.pop(ctx, true)),
+      ],
+    );
+    if (ok != true) return;
+    final engine = ref.read(vaultEngineProvider);
+    final err = e.isFolder
+        ? await engine.rotateFolderKeys(_handle!, e.id)
+        : await engine.rotateFileKey(_handle!, e.id);
+    _notify(
+        err == null ? NotifGrade.ok : NotifGrade.danger,
+        err ??
+            (e.isFolder
+                ? l.vaultPageRotateFolderDone
+                : l.vaultPageRotateFileDone));
+    await _ctl.refresh();
+  }
+
   /// 预览（原型 `#ov-preview`）：大画面占位 + 说明。
   /// 引擎不提供明文预览通道（明文不出引擎层），故此处只展示密文缩略图与提示。
   Future<void> _preview(VaultEntry f) async {
@@ -604,6 +657,8 @@ class _VaultPageState extends ConsumerState<VaultPage> {
       ],
       VsCtxEntry(l.vaultPageRename, 'edit', () => _rename(e)),
       VsCtxEntry(l.vaultPageTags, 'tag', () => _setTags(e)),
+      const VsCtxEntry.sep(),
+      VsCtxEntry(l.vaultPageRotateKey, 'key', () => _rotateKey(e)),
       const VsCtxEntry.sep(),
       VsCtxEntry(l.vaultPageWipe, 'trash', () => _delete(e), danger: true),
     ]);

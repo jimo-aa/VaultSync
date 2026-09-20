@@ -40,12 +40,21 @@ pub struct ChunkRef {
 #[derive(Serialize, Deserialize)]
 pub enum Msg {
     /// 握手后第一条：声明身份，对 hh‖x25519 签名（把 Noise 静态密钥绑定到 Ed25519 身份）。
+    ///
+    /// `port`（P5-5 新增）= 发送方**监听**端口，用于对端登记可回拨地址（离线销毁指令投递）。
+    /// 对端拨入时 TCP 源端口是临时端口，不是对端监听端口，只靠 `peer_addr()` 会得到
+    /// 无法回拨的地址，故必须由 Hello 显式声明。该字段**不在签名体内**：
+    /// 信道本身已认证加密（Noise XX，`remote_is` 已核对静态密钥），伪造者无法进入信道；
+    /// 且该值只影响"往哪拨"，不影响任何执行判定（销毁指令另有签名与 target 核对）。
+    /// `#[serde(default)]`：旧端不发该字段 → 0（未知），接收端回退用观测到的源端口。
     Hello {
         device_id: String,
         name: String,
         pub_hex: String,
         x25519_hex: String,
         sig: String,
+        #[serde(default)]
+        port: u16,
     },
     /// 配对：发起端（已配对设备）请求登记；响应端凭 PSK 信任。
     PairReq,

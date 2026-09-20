@@ -12,6 +12,8 @@ class SettingsState {
     this.bioBound = false,
     this.bioLoading = false,
     this.disguiseReady = false,
+    this.updateManifestUrl = '',
+    this.updatePubkeyHex = '',
   });
 
   /// 自动落锁空闲分钟数；0 = 关闭自动落锁。
@@ -29,6 +31,10 @@ class SettingsState {
   /// 伪装保险箱文件是否已存在（存在才可能凭伪装密码进入伪空间）。
   final bool disguiseReady;
 
+  /// 更新通道（P5-7）：清单地址与内置发布公钥。任一为空即视为未配置（fail-closed）。
+  final String updateManifestUrl;
+  final String updatePubkeyHex;
+
   SettingsState copyWith({
     int? autoLockMinutes,
     bool? decoyEnabled,
@@ -36,6 +42,8 @@ class SettingsState {
     bool? bioBound,
     bool? bioLoading,
     bool? disguiseReady,
+    String? updateManifestUrl,
+    String? updatePubkeyHex,
   }) =>
       SettingsState(
         autoLockMinutes: autoLockMinutes ?? this.autoLockMinutes,
@@ -44,6 +52,8 @@ class SettingsState {
         bioBound: bioBound ?? this.bioBound,
         bioLoading: bioLoading ?? this.bioLoading,
         disguiseReady: disguiseReady ?? this.disguiseReady,
+        updateManifestUrl: updateManifestUrl ?? this.updateManifestUrl,
+        updatePubkeyHex: updatePubkeyHex ?? this.updatePubkeyHex,
       );
 }
 
@@ -51,6 +61,8 @@ class SettingsController extends Notifier<SettingsState> {
   static const kAutoLock = 'settings.autolock.minutes';
   static const kDecoy = 'settings.decoy.enabled';
   static const kAutoSync = 'settings.sync.autosync';
+  static const kUpdateUrl = 'settings.update.url';
+  static const kUpdatePubkey = 'settings.update.pubkey';
 
   @override
   SettingsState build() {
@@ -59,6 +71,8 @@ class SettingsController extends Notifier<SettingsState> {
       autoLockMinutes: prefs.getInt(kAutoLock) ?? 5,
       decoyEnabled: prefs.getBool(kDecoy) ?? false,
       autoSync: prefs.getBool(kAutoSync) ?? true,
+      updateManifestUrl: prefs.getString(kUpdateUrl) ?? '',
+      updatePubkeyHex: prefs.getString(kUpdatePubkey) ?? '',
     );
   }
 
@@ -75,6 +89,18 @@ class SettingsController extends Notifier<SettingsState> {
   Future<void> setAutoSync(bool enabled) async {
     state = state.copyWith(autoSync: enabled);
     await ref.read(sharedPreferencesProvider).setBool(kAutoSync, enabled);
+  }
+
+  Future<void> setUpdateChannel({String? url, String? pubkeyHex}) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    if (url != null) {
+      state = state.copyWith(updateManifestUrl: url);
+      await prefs.setString(kUpdateUrl, url);
+    }
+    if (pubkeyHex != null) {
+      state = state.copyWith(updatePubkeyHex: pubkeyHex);
+      await prefs.setString(kUpdatePubkey, pubkeyHex);
+    }
   }
 
   /// 刷新生物识别绑定状态（需引擎可用）。

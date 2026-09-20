@@ -138,6 +138,34 @@ late StegoSetEnabledDart _stegoSetEnabled;
 late StegoCapacityDart _stegoCapacity;
 late StegoEmbedDart _stegoEmbed;
 late StegoExtractDart _stegoExtract;
+// P5-7 更新通道：清单验签与文件哈希（纯函数，无需会话）
+typedef VerifyManifestC = Pointer<Utf8> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef VerifyManifestDart = Pointer<Utf8> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef FileSha256C = Pointer<Utf8> Function(Pointer<Utf8>);
+// P5-4 轮换 / P5-5 销毁队列（每函数独立 typedef）
+typedef RotateKeyC = Int32 Function(Pointer<Void>, Int64);
+typedef RotateKeyDart = int Function(Pointer<Void>, int);
+typedef RotateMkC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef RotateMkDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef DestroyQueueAllC = Pointer<Utf8> Function(Pointer<Void>, Uint64);
+typedef DestroyQueueAllDart = Pointer<Utf8> Function(Pointer<Void>, int);
+typedef PendingOrdersC = Pointer<Utf8> Function(Pointer<Void>);
+typedef PendingOrdersDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef RememberAddrC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef RememberAddrDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+late RotateKeyDart _rotateFileKey;
+late RotateKeyDart _rotateFolderKeys;
+late RotateMkDart _rotateMk;
+late DestroyQueueAllDart _destroyQueueAll;
+late PendingOrdersDart _pendingOrders;
+late RememberAddrDart _rememberAddr;
+typedef FileSha256Dart = Pointer<Utf8> Function(Pointer<Utf8>);
+late VerifyManifestDart _verifyManifest;
+late FileSha256Dart _fileSha256;
 
 /// 最小 PNG 生成器（8 位 RGB，无过滤）：隐写往返断言用，避免引入图像依赖。
 Uint8List makePng(int w, int h) {
@@ -310,6 +338,22 @@ void main(List<String> args) {
       lib.lookupFunction<StegoEmbedC, StegoEmbedDart>('vault_core_stego_embed');
   _stegoExtract = lib.lookupFunction<StegoExtractC, StegoExtractDart>(
       'vault_core_stego_extract');
+  _verifyManifest = lib.lookupFunction<VerifyManifestC, VerifyManifestDart>(
+      'vault_core_verify_update_manifest');
+  _fileSha256 =
+      lib.lookupFunction<FileSha256C, FileSha256Dart>('vault_core_file_sha256');
+  _rotateFileKey = lib.lookupFunction<RotateKeyC, RotateKeyDart>(
+      'vault_core_vault_rotate_file_key');
+  _rotateFolderKeys = lib.lookupFunction<RotateKeyC, RotateKeyDart>(
+      'vault_core_vault_rotate_folder_keys');
+  _rotateMk =
+      lib.lookupFunction<RotateMkC, RotateMkDart>('vault_core_rotate_mk');
+  _destroyQueueAll = lib.lookupFunction<DestroyQueueAllC, DestroyQueueAllDart>(
+      'vault_core_p2p_destroy_queue_all');
+  _pendingOrders = lib.lookupFunction<PendingOrdersC, PendingOrdersDart>(
+      'vault_core_p2p_pending_orders');
+  _rememberAddr = lib.lookupFunction<RememberAddrC, RememberAddrDart>(
+      'vault_core_p2p_remember_addr');
   _p2pDestroyArm = lib.lookupFunction<P2pDestroyArmC, P2pDestroyArmDart>(
       'vault_core_p2p_destroy_arm');
 
@@ -644,6 +688,28 @@ void main(List<String> args) {
   if (postUnpair.address != 0) _free(postUnpair);
   check(_p2pUnpair(hA, n('vd-0000000000000000')) == 0, 'P4 解绑不存在的设备仍返回 0（幂等）');
 
+  // ===== P5-7 更新通道：清单验签（拒绝路径）与安装包哈希 =====
+  final vm = _verifyManifest(n('{"version":"9.9.9"}'),
+      n('00'.padRight(128, '0')), n('11'.padRight(64, '0')));
+  final vmStr = vm.address == 0 ? '' : vm.toDartString();
+  if (vm.address != 0) _free(vm);
+  check(vmStr.contains('"ok": false') || vmStr.contains('"ok":false'),
+      'P5 伪造清单签名被拒（fail-closed）');
+
+  final hashDir = Directory.systemTemp.createTempSync('vsync_hash_');
+  final hashFile = '${hashDir.path}${Platform.pathSeparator}abc.bin';
+  File(hashFile).writeAsBytesSync([0x61, 0x62, 0x63]);
+  final hp = n(hashFile);
+  final gotHash = _fileSha256(hp);
+  final gotHashStr = gotHash.address == 0 ? '' : gotHash.toDartString();
+  if (gotHash.address != 0) _free(gotHash);
+  check(
+      gotHashStr ==
+          'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      'P5 安装包 SHA-256 与 FIPS 向量一致（"abc"）');
+  calloc.free(hp);
+  hashDir.deleteSync(recursive: true);
+
   // ===== P5-1 审计日志：链式写入 / 校验 / 加密导出 =====
   final p5dir = Directory.systemTemp.createTempSync('vsync_p5_');
   final vaultP5 = '${p5dir.path}${Platform.pathSeparator}p5.vsvb';
@@ -720,6 +786,74 @@ void main(List<String> args) {
   check(File(stegoDest).readAsStringSync() == File(p5src).readAsStringSync(),
       'P5 隐写往返内容逐字节一致');
   check(File(pngOut).lengthSync() > 0, 'P5 载体图片可读');
+
+  // ===== P5-4 密钥轮换（docs/07 §二/§三）=====
+  final rotDest = '${p5dir.path}${Platform.pathSeparator}after-rotate.txt';
+  final rd = n(rotDest);
+  check(_rotateFileKey(hP, p5Id) == 0, 'P5 单文件 FSKey 轮换');
+  check(_vaultExport(hP, p5Id, rd) == 0, 'P5 轮换后仍可导出（索引覆盖生效）');
+  check(File(rotDest).readAsStringSync() == File(p5src).readAsStringSync(),
+      'P5 单文件轮换不改变内容');
+  calloc.free(rd);
+  check(_rotateFolderKeys(hP, 0) == 0, 'P5 文件夹 FSK 轮换（根）');
+  final rd3 = n(rotDest);
+  check(_vaultExport(hP, p5Id, rd3) == 0, 'P5 文件夹轮换后文件仍可导出');
+  calloc.free(rd3);
+
+  // 全库 MK 轮换：轮换后必须能用同一主密码重新解锁，且内容逐字节一致
+  int auditCountOf(Pointer<Void> h) {
+    final j = _auditList(h);
+    if (j.address == 0) return -1;
+    final str = j.toDartString();
+    _free(j);
+    return int.tryParse(
+            RegExp(r'"count": ?(\d+)').firstMatch(str)?.group(1) ?? '0') ??
+        -1;
+  }
+
+  final auditBefore = auditCountOf(hP);
+  check(_rotateMk(hP, pw) == 0, 'P5 MK 全库轮换（新 MK + 新 salt 重包装）');
+  final sAfter =
+      runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultP5, 'pw-1234');
+  check(sAfter.status == 0 && sAfter.handle != 0, 'P5 轮换后可凭同一主密码解锁');
+  if (sAfter.status != 0 || sAfter.handle == 0) {
+    // 解锁失败时句柄可能是哨兵值：**不要**拿它当指针用（会踩内存），直接结束本节
+    _lock(hP);
+    p5dir.deleteSync(recursive: true);
+    print('DONE  failures=$fails（MK 轮换后无法解锁，后续 P5 断言跳过）');
+    exitCode = 1;
+    return;
+  }
+  final hAfter = Pointer<Void>.fromAddress(sAfter.handle);
+  final reDest = '${p5dir.path}${Platform.pathSeparator}after-rekey.txt';
+  final rd2 = n(reDest);
+  check(_vaultExport(hAfter, p5Id, rd2) == 0, 'P5 轮换后文件仍可导出');
+  check(File(reDest).readAsStringSync() == File(p5src).readAsStringSync(),
+      'P5 全库轮换后内容逐字节一致');
+  calloc.free(rd2);
+  final auditAfter = auditCountOf(hAfter);
+  check(auditBefore > 0 && auditAfter >= 1,
+      'P5 MK 轮换后新会话可写新审计链（旧链 $auditBefore 条已改名保留、随轮换不可解）');
+  final rotated = Directory('${p5dir.path}${Platform.pathSeparator}p5.data')
+      .listSync()
+      .whereType<File>()
+      .any((f) => f.path.contains('audit.enc.rotated-'));
+  check(rotated, 'P5 旧审计链文件已改名保留（未删除，可由持有旧 MK 的备份取证）');
+  _lock(hAfter);
+
+  // ===== P5-5 销毁指令队列（无对端：应报 0 且不误记地址）=====
+  final qJson = _destroyQueueAll(hP, 0);
+  final qStr = qJson.address == 0 ? '' : qJson.toDartString();
+  if (qJson.address != 0) _free(qJson);
+  check(qStr.contains('"queued": 0') || qStr.contains('"queued":0'),
+      'P5 无已配对设备时队列为空（不伪造投递）');
+  final poJson = _pendingOrders(hP);
+  final poStr = poJson.address == 0 ? '' : poJson.toDartString();
+  if (poJson.address != 0) _free(poJson);
+  check(poStr.contains('"count": 0') || poStr.contains('"count":0'),
+      'P5 待投递队列为 0');
+  check(_rememberAddr(hP, n('vd-0000000000000000'), n('127.0.0.1:1')) != 0,
+      'P5 未登记对端拒绝记地址（不凭空建条目）');
 
   // ===== P5-5 紧急销毁：本机（保险箱头部 + 数据目录） =====
   final p5DataDir = '${p5dir.path}${Platform.pathSeparator}p5.data';

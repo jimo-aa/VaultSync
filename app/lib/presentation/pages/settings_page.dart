@@ -7,6 +7,7 @@ import '../../core/security/password_policy.dart';
 import '../../l10n/app_localizations.dart';
 import '../../core/theme/design_tokens.dart';
 import '../../service/engine_service.dart';
+import '../../service/update_service.dart';
 import '../../state/app_theme_controller.dart';
 import '../../state/locale_controller.dart';
 import '../../state/notification_controller.dart';
@@ -32,16 +33,69 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   int _open = -1; // 手风琴展开索引（-1 全收起；对应原型默认首项展开）
 
+  // 更新通道（P5-7）：两项配置 + 检查结果
+  late final TextEditingController _updateUrlCtl;
+  late final TextEditingController _updatePkCtl;
+  bool _checkingUpdate = false;
+  bool _updateAvailable = false;
+  bool _updateFailed = false;
+  String? _updateMsg;
+  UpdateManifest? _pendingUpdate;
+
   @override
   void initState() {
     super.initState();
     _open = 0;
+    final cfg = ref.read(settingsProvider);
+    _updateUrlCtl = TextEditingController(text: cfg.updateManifestUrl);
+    _updatePkCtl = TextEditingController(text: cfg.updatePubkeyHex);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         ref.read(settingsProvider.notifier).refreshBio();
         ref.read(settingsProvider.notifier).refreshDisguise();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _updateUrlCtl.dispose();
+    _updatePkCtl.dispose();
+    super.dispose();
+  }
+
+  /// 检查更新（P5-7）：清单签名与安装包哈希都在引擎侧校验，未配置即禁用。
+  Future<void> _checkUpdate() async {
+    setState(() {
+      _checkingUpdate = true;
+      _updateMsg = null;
+      _updateAvailable = false;
+      _updateFailed = false;
+    });
+    final cfg = ref.read(settingsProvider);
+    final r = await ref.read(updateServiceProvider).check(
+          manifestUrl: cfg.updateManifestUrl,
+          publicKeyHex: cfg.updatePubkeyHex,
+          currentVersion: _kAppVersion,
+        );
+    if (!mounted) return;
+    setState(() {
+      _checkingUpdate = false;
+      _updateAvailable = r.isAvailable;
+      _updateFailed = r.status == 'error';
+      _pendingUpdate = r.manifest;
+      _updateMsg = r.isAvailable
+          ? '发现 v${r.manifest!.version}${r.manifest!.notes.isEmpty ? '' : ' · ${r.manifest!.notes}'}'
+          : r.message;
+    });
+  }
+
+  Future<void> _downloadUpdate() async {
+    final m = _pendingUpdate;
+    if (m == null) return;
+    final err = await ref.read(updateServiceProvider).downloadAndLaunch(m);
+    _notify(err == null ? NotifGrade.ok : NotifGrade.danger,
+        err ?? '安装包已校验并启动安装程序（v${m.version}）');
   }
 
   /// 当前会话句柄（仅解锁态可用；伪装空间返回 null 以禁止敏感操作）。
@@ -147,12 +201,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 dropdownColor: v.surface,
                 decoration: const InputDecoration(),
                 items: [
-                  DropdownMenuItem(
-                      value: 0, child: Text(l.settingsNever)),
-                  DropdownMenuItem(
-                      value: 1, child: Text(l.settingsMinutes(1))),
-                  DropdownMenuItem(
-                      value: 5, child: Text(l.settingsMinutes(5))),
+                  DropdownMenuItem(value: 0, child: Text(l.settingsNever)),
+                  DropdownMenuItem(value: 1, child: Text(l.settingsMinutes(1))),
+                  DropdownMenuItem(value: 5, child: Text(l.settingsMinutes(5))),
                   DropdownMenuItem(
                       value: 15, child: Text(l.settingsMinutes(15))),
                   DropdownMenuItem(
@@ -268,8 +319,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ],
                     onChanged: (val) {
                       if (val == null) return;
-                      ref.read(localeControllerProvider.notifier).set(
-                          val == 'system' ? null : Locale(val));
+                      ref
+                          .read(localeControllerProvider.notifier)
+                          .set(val == 'system' ? null : Locale(val));
                     },
                   ),
                 ),
@@ -278,19 +330,105 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ],
           ),
         ),
+        // 更新通道（P5-7）：清单签名在引擎侧校验；未配置即 fail-closed
+        VsAccordion(
+          icon: 'down',
+          title: l.settingsUpdateTitle,
+          sub: (settings.updateManifestUrl.isEmpty ||
+                  settings.updatePubkeyHex.isEmpty)
+              ? l.settingsUpdateNotConfigured
+              : settings.updateManifestUrl,
+          open: _open == 6,
+          onToggle: () => setState(() => _open = _open == 6 ? -1 : 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              VsSettingRow(
+                title: l.settingsUpdateUrl,
+                sub: l.settingsUpdateUrlSub,
+                trailing: SizedBox(
+                  width: 320,
+                  child: TextField(
+                    controller: _updateUrlCtl,
+                    style: TextStyle(fontSize: 12.5, color: v.text),
+                    decoration: const InputDecoration(
+                        hintText: 'https://…/latest.json'),
+                    onSubmitted: (t) => ref
+                        .read(settingsProvider.notifier)
+                        .setUpdateChannel(url: t.trim()),
+                  ),
+                ),
+              ),
+              VsSettingRow(
+                title: l.settingsUpdatePubkey,
+                sub: l.settingsUpdatePubkeySub,
+                trailing: SizedBox(
+                  width: 320,
+                  child: TextField(
+                    controller: _updatePkCtl,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: DesignTokens.monoFamily,
+                        color: v.text),
+                    decoration: const InputDecoration(hintText: '64 位 hex'),
+                    onSubmitted: (t) => ref
+                        .read(settingsProvider.notifier)
+                        .setUpdateChannel(pubkeyHex: t.trim()),
+                  ),
+                ),
+                last: true,
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  VsButton(
+                    label: _checkingUpdate
+                        ? l.settingsUpdateChecking
+                        : l.settingsUpdateCheck,
+                    small: true,
+                    onPressed: _checkingUpdate ? null : _checkUpdate,
+                  ),
+                  const SizedBox(width: 10),
+                  if (_pendingUpdate != null && _updateAvailable)
+                    VsButton(
+                      label: l.settingsUpdateDownload,
+                      tone: VsBtnTone.primary,
+                      small: true,
+                      onPressed: _downloadUpdate,
+                    ),
+                ],
+              ),
+              if (_updateMsg != null) ...[
+                const SizedBox(height: 10),
+                Text(_updateMsg!,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        color: _updateAvailable
+                            ? v.gold
+                            : _updateFailed
+                                ? v.danger
+                                : v.text2)),
+              ],
+              const SizedBox(height: 12),
+              VsNote(l.settingsUpdateNote, tone: VsTone.info),
+            ],
+          ),
+        ),
         // 关于
         VsAccordion(
           icon: 'info',
           title: l.settingsAbout,
           sub: l.settingsAboutSub,
-          open: _open == 6,
-          onToggle: () => setState(() => _open = _open == 6 ? -1 : 6),
+          open: _open == 7,
+          onToggle: () => setState(() => _open = _open == 7 ? -1 : 7),
           child: Padding(
             padding: const EdgeInsets.only(bottom: 0),
             child: VsKv.text([
               (l.settingsVersionLabel, l.settingsVersionValue(_kAppVersion)),
-              (l.settingsEngineLabel,
-                  ref.read(vaultCoreBridgeProvider).coreVersion()),
+              (
+                l.settingsEngineLabel,
+                ref.read(vaultCoreBridgeProvider).coreVersion()
+              ),
               (l.settingsDesignDocLabel, 'docs/03-前端设计.md'),
             ]),
           ),
@@ -328,9 +466,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       _notify(NotifGrade.warning, l.settingsNeedUnlock);
       return;
     }
-    final err = await ref
-        .read(vaultEngineProvider)
-        .bindBio(handle, bind: value);
+    final err =
+        await ref.read(vaultEngineProvider).bindBio(handle, bind: value);
     await ref.read(settingsProvider.notifier).refreshBio();
     if (err != null) {
       _notify(NotifGrade.danger, err);
@@ -357,8 +494,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Future<void> _showPasswordDialog() async {
     final handle = _handle();
     if (handle == null) {
-      _notify(NotifGrade.warning,
-          AppLocalizations.of(context).settingsNeedUnlock);
+      _notify(
+          NotifGrade.warning, AppLocalizations.of(context).settingsNeedUnlock);
       return;
     }
     await showDialog<void>(
@@ -476,7 +613,8 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
                     ),
                   ),
                   VsIconButton(
-                      icon: 'close', onPressed: () => Navigator.of(context).pop()),
+                      icon: 'close',
+                      onPressed: () => Navigator.of(context).pop()),
                 ],
               ),
             ),
@@ -537,8 +675,7 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
                       const SizedBox(height: 12),
                       Align(
                         alignment: Alignment.centerLeft,
-                        child: Text(_error!,
-                            style: TextStyle(color: v.danger)),
+                        child: Text(_error!, style: TextStyle(color: v.danger)),
                       ),
                     ],
                   ],
@@ -547,16 +684,17 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
             ),
             Container(
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
-              decoration:
-                  BoxDecoration(border: Border(top: BorderSide(color: v.borderSoft))),
+              decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: v.borderSoft))),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   VsButton(
                       label: l.settingsCancel,
                       tone: VsBtnTone.ghost,
-                      onPressed:
-                          _submitting ? null : () => Navigator.of(context).pop()),
+                      onPressed: _submitting
+                          ? null
+                          : () => Navigator.of(context).pop()),
                   const SizedBox(width: 8),
                   VsButton(
                       label: _submitting
@@ -576,7 +714,7 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
   Widget _fieldLabel(String text) => Padding(
         padding: const EdgeInsets.only(top: 12, bottom: 6),
         child: Text(text,
-            style: const TextStyle(
-                fontSize: 12.5, fontWeight: FontWeight.w500)),
+            style:
+                const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
       );
 }

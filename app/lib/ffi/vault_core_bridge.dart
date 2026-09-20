@@ -4,6 +4,7 @@
 /// 经 cargo 编译并拷贝到产物目录；加载失败时由上层回退 Stub。
 library;
 
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -125,6 +126,18 @@ abstract class VaultCoreBridge {
   /// 解除与指定设备的配对（幂等：该设备本就不存在亦成功）。
   int p2pUnpair(Object sessionHandle, String deviceId);
 
+  /// 为每个已配对设备签发并入队销毁指令；返回 JSON {"queued","peers"}。
+  String? destroyQueueAll(Object sessionHandle, int delaySecs);
+
+  /// 待投递队列快照 JSON {"count","items"}。
+  String? pendingOrders(Object sessionHandle);
+
+  /// 清空待投递队列，返回清除条数（负值为错误码）。
+  int cancelOrders(Object sessionHandle);
+
+  /// 记录 / 更新对端监听地址（配对时自动记录；手填兜底）。
+  int rememberPeerAddr(Object sessionHandle, String deviceId, String addr);
+
   // ==== P5-1 审计日志 / P5-5 紧急销毁（JSON 结果为引擎分配字符串）====
 
   /// 审计条目列表 JSON：{"count","head","entries":[{seq,tsMs,kind,detail,prevHash,hash}]}。
@@ -138,6 +151,25 @@ abstract class VaultCoreBridge {
 
   /// 紧急销毁 · 本机：销毁保险箱头部与整个数据目录；secure=1 先单次覆写。
   int destroyLocal(Object sessionHandle, {bool secure = true});
+
+  /// 全库完整性校验 JSON：{"files","checked","failed":[{id,name,reason}]}。
+  String? vaultVerifyAll(Object sessionHandle);
+
+  /// 单文件 FSKey 轮换（docs/07 §二）：其余文件不受影响。
+  int rotateFileKey(Object sessionHandle, int fileId);
+
+  /// 文件夹 FSK 轮换：新 FSK 覆盖 + 重写该文件夹直属文件容器。
+  int rotateFolderKeys(Object sessionHandle, int folderId);
+
+  /// MK 全库轮换（需主密码重新包装；成功后必须立即 lock 并重新解锁）。
+  int rotateMk(Object sessionHandle, String password);
+
+  /// 校验更新清单签名（覆盖清单原始字节），返回 {"ok":bool}。
+  Map<String, dynamic>? verifyUpdateManifest(
+      String manifest, String sigHex, String publicKeyHex);
+
+  /// 文件 SHA-256（hex）；失败返回 null。更新包下载后复核用。
+  String? fileSha256(String path);
 
   // ==== P5-3 隐写术（docs/05-05）====
 
@@ -216,6 +248,16 @@ typedef _P2pUnpairC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _AuditListC = Pointer<Utf8> Function(Pointer<Void>);
 typedef _AuditExportC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _DestroyLocalC = Int32 Function(Pointer<Void>, Int32);
+typedef _VerifyAllC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _VerifyManifestC = Pointer<Utf8> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _FileSha256C = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DestroyQueueAllC = Pointer<Utf8> Function(Pointer<Void>, Uint64);
+typedef _PendingOrdersC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _RememberAddrC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _RotateKeyC = Int32 Function(Pointer<Void>, Int64);
+typedef _RotateMkC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _StegoStatusC = Int32 Function(Pointer<Void>);
 typedef _StegoSetEnabledC = Int32 Function(Pointer<Void>, Int32);
 typedef _StegoCapacityC = Int64 Function(Pointer<Void>, Pointer<Utf8>);
@@ -347,6 +389,36 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
     _destroyLocal =
         _lib.lookupFunction<_DestroyLocalC, int Function(Pointer<Void>, int)>(
             'vault_core_destroy_local');
+    _destroyQueueAll = _lib.lookupFunction<
+        _DestroyQueueAllC,
+        Pointer<Utf8> Function(
+            Pointer<Void>, int)>('vault_core_p2p_destroy_queue_all');
+    _pendingOrders = _lib.lookupFunction<_PendingOrdersC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_p2p_pending_orders');
+    _cancelOrders =
+        _lib.lookupFunction<_HandleFnC, int Function(Pointer<Void>)>(
+            'vault_core_p2p_cancel_orders');
+    _rememberAddr = _lib.lookupFunction<
+        _RememberAddrC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_p2p_remember_addr');
+    _rotateFileKey =
+        _lib.lookupFunction<_RotateKeyC, int Function(Pointer<Void>, int)>(
+            'vault_core_vault_rotate_file_key');
+    _rotateFolderKeys =
+        _lib.lookupFunction<_RotateKeyC, int Function(Pointer<Void>, int)>(
+            'vault_core_vault_rotate_folder_keys');
+    _rotateMk = _lib.lookupFunction<_RotateMkC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_rotate_mk');
+    _verifyManifest = _lib.lookupFunction<
+        _VerifyManifestC,
+        Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_verify_update_manifest');
+    _fileSha256 = _lib.lookupFunction<_FileSha256C,
+        Pointer<Utf8> Function(Pointer<Utf8>)>('vault_core_file_sha256');
+    _vaultVerifyAll =
+        _lib.lookupFunction<_VerifyAllC, Pointer<Utf8> Function(Pointer<Void>)>(
+            'vault_core_vault_verify_all');
     _stegoStatus =
         _lib.lookupFunction<_StegoStatusC, int Function(Pointer<Void>)>(
             'vault_core_stego_status');
@@ -427,6 +499,18 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final Pointer<Utf8> Function(Pointer<Void>) _auditVerify;
   late final int Function(Pointer<Void>, Pointer<Utf8>) _auditExport;
   late final int Function(Pointer<Void>, int) _destroyLocal;
+  late final Pointer<Utf8> Function(Pointer<Void>) _vaultVerifyAll;
+  late final Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
+      _verifyManifest;
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _fileSha256;
+  late final Pointer<Utf8> Function(Pointer<Void>, int) _destroyQueueAll;
+  late final Pointer<Utf8> Function(Pointer<Void>) _pendingOrders;
+  late final int Function(Pointer<Void>) _cancelOrders;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      _rememberAddr;
+  late final int Function(Pointer<Void>, int) _rotateFileKey;
+  late final int Function(Pointer<Void>, int) _rotateFolderKeys;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _rotateMk;
   late final int Function(Pointer<Void>) _stegoStatus;
   late final int Function(Pointer<Void>, int) _stegoSetEnabled;
   late final int Function(Pointer<Void>, Pointer<Utf8>) _stegoCapacity;
@@ -764,6 +848,79 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       _takeJson(_p2pStatus(_handle(sessionHandle)));
 
   @override
+  Map<String, dynamic>? verifyUpdateManifest(
+      String manifest, String sigHex, String publicKeyHex) {
+    final m = _toNative(manifest);
+    final s = _toNative(sigHex);
+    final k = _toNative(publicKeyHex);
+    try {
+      final j = _takeJson(_verifyManifest(m, s, k));
+      if (j == null) return null;
+      return jsonDecode(j) as Map<String, dynamic>;
+    } finally {
+      calloc.free(m);
+      calloc.free(s);
+      calloc.free(k);
+    }
+  }
+
+  @override
+  String? fileSha256(String path) {
+    final p = _toNative(path);
+    try {
+      return _takeJson(_fileSha256(p));
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  @override
+  String? destroyQueueAll(Object sessionHandle, int delaySecs) =>
+      _takeJson(_destroyQueueAll(_handle(sessionHandle), delaySecs));
+
+  @override
+  String? pendingOrders(Object sessionHandle) =>
+      _takeJson(_pendingOrders(_handle(sessionHandle)));
+
+  @override
+  int cancelOrders(Object sessionHandle) =>
+      _cancelOrders(_handle(sessionHandle));
+
+  @override
+  int rememberPeerAddr(Object sessionHandle, String deviceId, String addr) {
+    final d = _toNative(deviceId);
+    final a = _toNative(addr);
+    try {
+      return _rememberAddr(_handle(sessionHandle), d, a);
+    } finally {
+      calloc.free(d);
+      calloc.free(a);
+    }
+  }
+
+  @override
+  int rotateFileKey(Object sessionHandle, int fileId) =>
+      _rotateFileKey(_handle(sessionHandle), fileId);
+
+  @override
+  int rotateFolderKeys(Object sessionHandle, int folderId) =>
+      _rotateFolderKeys(_handle(sessionHandle), folderId);
+
+  @override
+  int rotateMk(Object sessionHandle, String password) {
+    final p = _toNative(password);
+    try {
+      return _rotateMk(_handle(sessionHandle), p);
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  @override
+  String? vaultVerifyAll(Object sessionHandle) =>
+      _takeJson(_vaultVerifyAll(_handle(sessionHandle)));
+
+  @override
   String? auditList(Object sessionHandle) =>
       _takeJson(_auditList(_handle(sessionHandle)));
 
@@ -992,6 +1149,48 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
 
   @override
   int p2pUnpair(Object sessionHandle, String deviceId) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  @override
+  Map<String, dynamic>? verifyUpdateManifest(
+          String manifest, String sigHex, String publicKeyHex) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? fileSha256(String path) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? destroyQueueAll(Object sessionHandle, int delaySecs) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? pendingOrders(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int cancelOrders(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int rememberPeerAddr(Object sessionHandle, String deviceId, String addr) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int rotateFileKey(Object sessionHandle, int fileId) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int rotateFolderKeys(Object sessionHandle, int folderId) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int rotateMk(Object sessionHandle, String password) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? vaultVerifyAll(Object sessionHandle) =>
       throw UnsupportedError('stub: native not linked');
 
   @override

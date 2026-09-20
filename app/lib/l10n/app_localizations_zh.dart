@@ -447,6 +447,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get lockScreenTitle => 'VaultSync 保险箱';
 
   @override
+  String get lockScreenTogglePwVisibility => '显示 / 隐藏主密码';
+
+  @override
   String get lockScreenUnlock => '解锁';
 
   @override
@@ -634,6 +637,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get securityDestroyPhrase => '销毁';
 
   @override
+  String securityDestroyQueued(int n) {
+    return '已向 $n 台已配对设备签发销毁指令并进入投递队列：对端下次上线、处理任何其他消息之前执行。';
+  }
+
+  @override
   String get securityDestroyRunning => '销毁中…';
 
   @override
@@ -689,6 +697,25 @@ class AppLocalizationsZh extends AppLocalizations {
   String get securityDetectIntegrity => '文件完整性';
 
   @override
+  String securityDetectIntegrityFailed(int failed, int files) {
+    return '异常 · $failed / $files 个容器校验失败';
+  }
+
+  @override
+  String get securityDetectIntegrityFailedRead => '完整性扫描失败：无法读取保险箱';
+
+  @override
+  String get securityDetectIntegrityNotScanned => '尚未扫描 · 点击卡片逐块重算';
+
+  @override
+  String securityDetectIntegrityOk(int checked, int files) {
+    return '正常 · $checked / $files 个容器逐块校验通过';
+  }
+
+  @override
+  String get securityDetectIntegrityScanning => '扫描中…（逐块重算，耗时与数据量成正比）';
+
+  @override
   String get securityDetectIntegritySub => '随导出/同步逐块 GCM 校验 · 认证失败即拒绝';
 
   @override
@@ -728,6 +755,42 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get securityRefresh => '刷新';
+
+  @override
+  String get securityRekeyDo => '开始轮换';
+
+  @override
+  String get securityRekeyDone => '主密钥已轮换 · 请用主密码重新解锁（既有分享已作废）';
+
+  @override
+  String securityRekeyFailed(String err) {
+    return '轮换失败：$err';
+  }
+
+  @override
+  String get securityRekeyNote =>
+      '轮换会全量重写索引与所有容器（耗时与数据量成正比），并以新 salt 重新包装 KEK_pwd（已绑定的生物识别副本同步重新包装）。向量时钟不推进，因此不会自动传播到已配对设备；既有阅后即焚分享令牌一并作废。完成后需用主密码重新解锁。';
+
+  @override
+  String get securityRekeyNow => '轮换 MK';
+
+  @override
+  String get securityRekeyPhrase => '输入「轮换」以确认';
+
+  @override
+  String get securityRekeyPhraseWord => '轮换';
+
+  @override
+  String get securityRekeyPw => '主密码';
+
+  @override
+  String get securityRekeySub => 'MK 泄露时的应急路径：新 MK 重写索引与全部容器（逐块）';
+
+  @override
+  String get securityRekeyTitle => '主密钥全库轮换';
+
+  @override
+  String get securityRekeyWrongPw => '主密码错误';
 
   @override
   String get securityStegoDisable => '停用';
@@ -951,6 +1014,39 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsTitle => '设置';
+
+  @override
+  String get settingsUpdateCheck => '检查更新';
+
+  @override
+  String get settingsUpdateChecking => '检查中…';
+
+  @override
+  String get settingsUpdateDownload => '下载并安装';
+
+  @override
+  String get settingsUpdateNotConfigured => '未配置 · 需清单地址与发布公钥（fail-closed）';
+
+  @override
+  String get settingsUpdateNote =>
+      '清单签名覆盖清单原始字节，安装包下载后再用清单内的 sha256 复核；任一校验失败即拒绝。当前仓库未附带发布服务器与签名密钥，配置前该功能保持禁用。';
+
+  @override
+  String get settingsUpdatePubkey => '发布公钥';
+
+  @override
+  String get settingsUpdatePubkeySub =>
+      '内置的 Ed25519 公钥（hex，32 字节）——只接受该密钥签名的清单';
+
+  @override
+  String get settingsUpdateTitle => '更新通道';
+
+  @override
+  String get settingsUpdateUrl => '更新清单地址';
+
+  @override
+  String get settingsUpdateUrlSub =>
+      '发布方托管的 latest.json（必须 https）；同目录 latest.json.sig 为 Ed25519 签名';
 
   @override
   String get settingsVersionLabel => '版本';
@@ -1704,6 +1800,40 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get vaultPageRenamed => '已重命名 · 加密元数据已更新';
+
+  @override
+  String get vaultPageRotateFileDone => '密钥已轮换 · 容器已重写';
+
+  @override
+  String get vaultPageRotateFileSub => '以全新随机 FSKey 重写该文件容器';
+
+  @override
+  String get vaultPageRotateFileTitle => '轮换密钥';
+
+  @override
+  String get vaultPageRotateFolderDone => '文件夹密钥已轮换 · 直属文件容器已重写';
+
+  @override
+  String get vaultPageRotateFolderSub => '新 FSK 覆盖 + 逐文件重写直属文件容器';
+
+  @override
+  String get vaultPageRotateFolderTitle => '轮换文件夹密钥';
+
+  @override
+  String get vaultPageRotateKey => '轮换密钥';
+
+  @override
+  String get vaultPageRotateNote =>
+      '轮换后旧密钥路径即失效（新密钥为随机值，不再由 MK 派生）。这是本机轮换：向量时钟未推进，不会自动传播到已配对设备，对端保留其自身可读副本；文件夹轮换只覆盖直属文件，不含子文件夹。';
+
+  @override
+  String get vaultPageRotateStart => '开始轮换';
+
+  @override
+  String get vaultPageRotateTargetFile => '文件';
+
+  @override
+  String get vaultPageRotateTargetFolder => '文件夹';
 
   @override
   String get vaultPageSave => '保存';

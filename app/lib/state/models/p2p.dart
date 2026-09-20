@@ -60,17 +60,24 @@ class Peer {
     required this.deviceId,
     required this.name,
     this.fingerprint = '',
+    this.addr,
   });
 
   final String deviceId;
   final String name;
   final String fingerprint;
 
+  /// 对端上次可达的监听地址（配对/同步时记录；空表示未知，远程销毁需手填）。
+  final String? addr;
+
   factory Peer.fromJson(Map<String, dynamic> json) => Peer(
         deviceId: (json['deviceId'] as String?) ?? '',
         name: (json['name'] as String?) ??
             (VsL10n.orNull?.stateUnknownDevice ?? '未知设备'),
         fingerprint: (json['fingerprint'] as String?) ?? '',
+        addr: (json['addr'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['addr'] as String).trim(),
       );
 }
 
@@ -107,9 +114,12 @@ class SyncStatus {
             .map((m) => Peer.fromJson(Map<String, dynamic>.from(m)))
             .toList(),
         armedDestroy: json['armedDestroy'] is Map
-            ? ArmedDestroy.fromJson(Map<String, dynamic>.from(json['armedDestroy'] as Map))
+            ? ArmedDestroy.fromJson(
+                Map<String, dynamic>.from(json['armedDestroy'] as Map))
             : null,
-        events: ((json['events'] as List?) ?? const []).whereType<String>().toList(),
+        events: ((json['events'] as List?) ?? const [])
+            .whereType<String>()
+            .toList(),
       );
 }
 

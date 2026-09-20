@@ -204,6 +204,121 @@ pub fn change_password(
     ks.save().map_err(CoreError::Io)
 }
 
+/// MK 全库轮换（docs/07 §三 在单机范围内的可用部分）。
+///
+/// 流程：校验密码 → 生成 MK'（CSPRNG，永不派生自密码）→ 全库重加密
+/// （索引键 / 各文件夹 FSK' / 每文件 FSKey'，由 `vault-vault::rekey_all` 保证
+/// 容器暂存与索引原子提交）→ 新 salt 下用 KEK_pwd 与（若已绑定）原 KEK_bio
+/// 重新包装 MK' → 原子覆盖保险箱头部。
+///
+/// 返回 `(生物识别副本是否一并换过, 重写的文件数)`。
+///
+/// **调用方责任**：本函数**不更新** `session.mk`（会话内的 MK 副本仍是旧的），
+/// 成功后必须立即 `vault_core_lock` 并用主密码重新解锁；重新解锁前不要继续使用该会话。
+///
+/// 已知窗口：`rekey_all` 完成后到头部落盘之间存在极短窗口（一次原子 rename），
+/// 期间断电会留下「数据已用 MK'、头部仍包旧 MK」的不可解状态。彻底消除需要
+/// 在头部加「轮换进行中」标志位与恢复路径（记入 LOG 待办）。
+///
+/// 副作用（docs/07 未写但必须说明）：索引倒排的搜索令牌与阅后即焚分享令牌都由 MK 派生，
+/// 轮换后前者随新 MK 重建、后者无法迁移故一并作废。
+pub fn rotate_mk(
+    session: &Session,
+    password: &str,
+    store: Option<&dyn SecureStore>,
+) -> Result<(bool, usize), CoreError> {
+    if session.disguise {
+        return Err(CoreError::Internal("disguise session cannot rotate MK"));
+    }
+    let mut ks = Keystore::load(&session.vault_path).map_err(CoreError::Format)?;
+    // 强确认：必须持有当前 MK 的会话 + 正确的主密码（用于重新包装 MK'）
+    let kek = argon2id_derive(password, &ks.salt, &ks.argon).map_err(CoreError::Internal)?;
+    match unwrap_mk(&kek, &ks.mk_wrap_pwd) {
+        Some(mk) if mk == *session.mk => {}
+        _ => return Err(CoreError::WrongPassword(0)),
+    }
+
+    // 先记审计：此刻旧 MK 仍有效，这条会随旧链一起被归档（持有旧 MK 者可事后核对）
+    session.audit("security", "MK rotation started (whole-vault rekey)");
+
+    let mk_new = random_key();
+    // 数据面：索引 + 全部容器（含每文件新 FSKey 与各文件夹新 FSK 覆盖）
+    let rewritten = session.with_vault(|v| v.rekey_all(&mk_new).map_err(CoreError::Internal))?;
+
+    // 数据面已换钥：此后**任何**失败都必须把数据面滚回旧 MK。否则「数据用 MK'、头部仍包旧 MK」
+    // 会让保险箱彻底打不开（冒烟测试第一版就命中了这个状态，故此处必须回滚）。
+    let complete = (|| -> Result<(usize, bool), CoreError> {
+        // 审计日志的密钥同样派生自 MK，轮换后旧链对新 MK 不可解。
+        // 这里不做原地重加密（`AuditLog::rekey` 有单测且自身正确，但接入本流程后新会话读不到，
+        // 未能定位到原因——见 LOG 隐患）：改为把旧链文件改名保留（不可解 = 密码学销毁，
+        // 但文件不丢，持有旧 MK 的备份仍可事后取证），新会话的首次操作会起一条新链。
+        let data_dir = session.data_dir();
+        let audit_path = data_dir.join("audit.enc");
+        let audit_moved = session.with_audit(|log| log.len()).unwrap_or(0);
+
+        // 控制面：新 salt 下重新包装 MK'
+        // **verifier 必须同步更新**：它是 HKDF(MK,"verifier")，锁死在头部，
+        // 不同步会让下一次解锁判定为「wrapped 副本被调包」而拒绝解封（冒烟抓到过）。
+        ks.verifier = verifier_of(&mk_new);
+        ks.salt = random_salt();
+        let kek_new =
+            argon2id_derive(password, &ks.salt, &ks.argon).map_err(CoreError::Internal)?;
+        ks.mk_wrap_pwd = wrap_mk(&mk_new, &kek_new)?;
+
+        let mut bio_rewrapped = false;
+        if ks.mk_wrap_bio.is_some() {
+            match store {
+                Some(st) => match kek_bio::load(st, &session.vault_path) {
+                    // 安全区里的 KEK_bio 可读 → 无需再次刷指纹即可包装 MK'
+                    Ok(Some(kek_bio_key)) => {
+                        ks.mk_wrap_bio = Some(wrap_mk(&mk_new, &kek_bio_key)?);
+                        bio_rewrapped = true;
+                    }
+                    // 安全区不可用 / 无后端：主密码路径不受影响，生物路径失效
+                    _ => ks.mk_wrap_bio = None,
+                },
+                None => ks.mk_wrap_bio = None,
+            }
+        }
+
+        ks.save().map_err(CoreError::Io)?;
+        // 提交点之后才动旧链：改名失败不影响已完成的轮换（旧链仍可被旧 MK 解开）
+        if audit_path.exists() {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            std::fs::rename(
+                &audit_path,
+                data_dir.join(format!("audit.enc.rotated-{ts}")),
+            )
+            .map_err(|_| CoreError::Io("cannot archive rotated audit chain"))?;
+        }
+        Ok((audit_moved, bio_rewrapped))
+    })();
+
+    let (audit_moved, bio_rewrapped) = match complete {
+        Ok(v) => v,
+        Err(e) => {
+            // 回滚数据面到旧 MK。审计文件此时尚未改名（改名在 ks.save() 之后），
+            // 因此回滚不需要额外处理审计。
+            if session
+                .with_vault(|v| v.rekey_all(&session.mk).map_err(CoreError::Internal))
+                .is_err()
+            {
+                return Err(CoreError::Internal(
+                    "MK rotation failed and rollback failed: vault requires the new MK",
+                ));
+            }
+            return Err(e);
+        }
+    };
+    // 轮换完成事件写不进新链（本次会话的 MK 已是旧的、旧链刚被改名归档）；
+    // 新会话的首次操作会起一条新链，届时由 UI 提示「已轮换」由审计链之外的通知承担。
+    let _ = (audit_moved, bio_rewrapped, rewritten);
+    Ok((bio_rewrapped, rewritten))
+}
+
 /// 查询保险箱文件是否存在（首次运行判定）。
 pub fn vault_exists(path: &Path) -> bool {
     Keystore::exists(path)

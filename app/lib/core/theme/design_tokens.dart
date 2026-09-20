@@ -73,11 +73,13 @@ abstract final class DesignTokens {
   static const monoFamily = 'Consolas';
 
   static const display = TextStyle(fontSize: 32, fontWeight: FontWeight.w600);
-  static const h1 = TextStyle(fontSize: 21, fontWeight: FontWeight.w600, letterSpacing: 0.01);
+  static const h1 =
+      TextStyle(fontSize: 21, fontWeight: FontWeight.w600, letterSpacing: 0.01);
   static const h2 = TextStyle(fontSize: 18, fontWeight: FontWeight.w600);
   static const body = TextStyle(fontSize: 13.5);
   static const caption = TextStyle(fontSize: 12);
-  static const mono = TextStyle(fontSize: 12, fontFamily: monoFamily, letterSpacing: 0.01);
+  static const mono =
+      TextStyle(fontSize: 12, fontFamily: monoFamily, letterSpacing: 0.01);
 }
 
 /// 语义色系扩展：组件经 `Theme.of(context).vs` 读取，亮暗主题各一份。
@@ -172,7 +174,8 @@ class VsScheme extends ThemeExtension<VsScheme> {
       BoxShadow(offset: Offset(0, 8), blurRadius: 28, color: Color(0x6B000000)),
     ],
     shadow3: [
-      BoxShadow(offset: Offset(0, 18), blurRadius: 56, color: Color(0x8C000000)),
+      BoxShadow(
+          offset: Offset(0, 18), blurRadius: 56, color: Color(0x8C000000)),
     ],
   );
 
@@ -207,7 +210,8 @@ class VsScheme extends ThemeExtension<VsScheme> {
       BoxShadow(offset: Offset(0, 8), blurRadius: 28, color: Color(0x211A2333)),
     ],
     shadow3: [
-      BoxShadow(offset: Offset(0, 18), blurRadius: 56, color: Color(0x331A2333)),
+      BoxShadow(
+          offset: Offset(0, 18), blurRadius: 56, color: Color(0x331A2333)),
     ],
   );
 
@@ -215,8 +219,9 @@ class VsScheme extends ThemeExtension<VsScheme> {
   VsScheme copyWith({Brightness? brightness}) => this;
 
   @override
-  VsScheme lerp(VsScheme? other, double t) =>
-      other == null || t == 0 ? this : (t == 1 ? other : _lerped(this, other, t));
+  VsScheme lerp(VsScheme? other, double t) => other == null || t == 0
+      ? this
+      : (t == 1 ? other : _lerped(this, other, t));
 
   static VsScheme _lerped(VsScheme a, VsScheme b, double t) {
     Color c(Color x, Color y) => Color.lerp(x, y, t)!;

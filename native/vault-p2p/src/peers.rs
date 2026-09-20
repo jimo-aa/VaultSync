@@ -14,6 +14,11 @@ pub struct PeerRec {
     pub paired_ms: u64,
     /// 本机向该对端发送信令的累计计数（保留字段，时钟位即设备 ID）。
     pub counter: u64,
+    /// 对端最近一次已知监听地址（`ip:port`），供离线销毁指令自动投递（docs/05-06 §5.1）。
+    /// `#[serde(default)]`：P5-5 之前的 peers.enc 没有该字段，旧盘必须仍可读。
+    /// 该值只是"尽力"可达地址（局域网直连）；经中继接入时的源地址不写入（见引擎注释）。
+    #[serde(default)]
+    pub addr: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -59,6 +64,16 @@ impl PeerStore {
 
     pub fn upsert(&mut self, device_id: &str, rec: PeerRec) -> Result<(), &'static str> {
         self.d.peers.insert(device_id.to_string(), rec);
+        self.save()
+    }
+
+    /// 记录/更新对端已知监听地址（UI 兜底手填或配对时观测所得）；未登记的对端不新建条目。
+    pub fn set_addr(&mut self, device_id: &str, addr: &str) -> Result<(), &'static str> {
+        let rec = self.d.peers.get_mut(device_id).ok_or("unknown peer")?;
+        if rec.addr.as_deref() == Some(addr) {
+            return Ok(()); // 幂等：地址未变不落盘
+        }
+        rec.addr = Some(addr.to_string());
         self.save()
     }
 
@@ -109,6 +124,7 @@ mod tests {
                 pub_hex: "aa".repeat(32),
                 paired_ms: 1,
                 counter: 0,
+                addr: None,
             },
         )
         .unwrap();
@@ -129,6 +145,7 @@ mod tests {
             pub_hex: tag.to_string().repeat(64),
             paired_ms: 1,
             counter: 0,
+            addr: None,
         };
         let mut st = PeerStore::load_or_new(dir.path(), &mk).unwrap();
         st.upsert("vd-a", rec("A", 'a')).unwrap();
@@ -152,5 +169,52 @@ mod tests {
         assert_eq!(st2.list().len(), 1);
         assert!(st2.get("vd-a").is_none());
         assert!(st2.get("vd-b").is_some());
+    }
+
+    /// P5-5：旧 peers.enc（无 addr 字段）必须仍可解析；新字段缺省为 None。
+    #[test]
+    fn legacy_peer_json_without_addr_still_reads() {
+        let rec: PeerRec =
+            serde_json::from_str(r#"{"name":"Old","pub_hex":"ab","paired_ms":7,"counter":3}"#)
+                .unwrap();
+        assert!(rec.addr.is_none());
+        assert_eq!(rec.paired_ms, 7);
+        // 反向：带 addr 的也有序化/反序列化一致
+        let mut rec2 = rec.clone();
+        rec2.addr = Some("10.0.0.5:41000".into());
+        let s = serde_json::to_string(&rec2).unwrap();
+        assert!(s.contains("\"addr\":\"10.0.0.5:41000\""));
+        assert_eq!(serde_json::from_str::<PeerRec>(&s).unwrap().addr, rec2.addr);
+    }
+
+    #[test]
+    fn set_addr_persists_and_rejects_unknown_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mk = vault_crypto::random_key();
+        let mut st = PeerStore::load_or_new(dir.path(), &mk).unwrap();
+        // 未登记对端不得被凭空创建
+        assert!(st.set_addr("vd-ghost", "10.0.0.9:1234").is_err());
+        assert!(st.get("vd-ghost").is_none());
+
+        st.upsert(
+            "vd-b",
+            PeerRec {
+                name: "B".into(),
+                pub_hex: "b".repeat(64),
+                paired_ms: 1,
+                counter: 0,
+                addr: None,
+            },
+        )
+        .unwrap();
+        st.set_addr("vd-b", "10.0.0.9:1234").unwrap();
+        st.set_addr("vd-b", "10.0.0.9:1234").unwrap(); // 幂等
+        st.set_addr("vd-b", "10.0.0.9:2233").unwrap(); // 覆盖
+        drop(st);
+        let st2 = PeerStore::load_or_new(dir.path(), &mk).unwrap();
+        assert_eq!(
+            st2.get("vd-b").unwrap().addr.as_deref(),
+            Some("10.0.0.9:2233")
+        );
     }
 }

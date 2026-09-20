@@ -30,7 +30,8 @@ class NotificationState {
   final int unread;
 
   NotificationState copyWith({List<AppNotification>? items, int? unread}) =>
-      NotificationState(items: items ?? this.items, unread: unread ?? this.unread);
+      NotificationState(
+          items: items ?? this.items, unread: unread ?? this.unread);
 }
 
 /// 通知中心：全局单例状态 + 事件流。
@@ -48,8 +49,10 @@ class NotificationController extends Notifier<NotificationState> {
   }
 
   void add(NotifGrade grade, String message) {
-    final n = AppNotification(grade: grade, message: message, ts: DateTime.now());
-    state = state.copyWith(items: [n, ...state.items], unread: state.unread + 1);
+    final n =
+        AppNotification(grade: grade, message: message, ts: DateTime.now());
+    state =
+        state.copyWith(items: [n, ...state.items], unread: state.unread + 1);
     _stream.add(n);
   }
 

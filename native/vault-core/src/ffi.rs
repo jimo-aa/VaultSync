@@ -886,6 +886,295 @@ pub unsafe extern "C" fn vault_core_stego_extract(
     }
 }
 
+// ==== P5-5 全设备联动销毁：离线设备高优先级信令队列（docs/05-06 §5.1）====
+
+/// 为**每一个**已配对设备各签发一条销毁指令并入队（离线设备下次上线时投递）。
+/// 返回 JSON {"queued":N,"peers":["vd-…"]}。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_destroy_queue_all(
+    handle: *mut Session,
+    delay_secs: u64,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let v = engine
+            .destroy_queue_all(delay_secs)
+            .map_err(|_| ERR_INTERNAL)?;
+        let n = v.get("queued").and_then(|x| x.as_u64()).unwrap_or(0);
+        session.audit(
+            "security",
+            &format!("destroy queue all peers={n} delay={delay_secs}s"),
+        );
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 队列快照 JSON {"count":N,"items":[{peer,issuedMs,delaySecs}]}。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_pending_orders(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        Ok(engine.pending_orders())
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 清空待投递队列，返回清除条数。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_cancel_orders(handle: *mut Session) -> i32 {
+    let run = || -> Result<i32, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let n = engine.cancel_pending_orders();
+        if n > 0 {
+            session.audit("security", &format!("destroy queue cleared orders={n}"));
+        }
+        i32::try_from(n).map_err(|_| ERR_INTERNAL)
+    };
+    run().unwrap_or_else(|e| -e)
+}
+
+/// 记录 / 更新对端监听地址（配对时自动记录；此接口是手填兜底）。
+///
+/// # Safety
+/// `handle` 有效；`device_id`、`addr` 为合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_remember_addr(
+    handle: *mut Session,
+    device_id: *const c_char,
+    addr: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let id = unsafe { cstr(device_id) }?;
+        let a = unsafe { cstr(addr) }?;
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine
+            .remember_peer_addr(id, a)
+            .map_err(|_| ERR_INVALID_ARG)?;
+        session.audit("device", &format!("peer addr updated peer={id}"));
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+// ==== P5-4 密钥轮换（docs/07）====
+
+/// 单文件 FSKey 轮换：以全新随机 FSKey 重写该文件容器（其余文件不受影响）。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_rotate_file_key(
+    handle: *mut Session,
+    file_id: i64,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        session
+            .with_vault(|v| {
+                v.rotate_file_key(file_id as u64)
+                    .map(|_| ())
+                    .map_err(CoreError::Internal)
+            })
+            .map_err(|e| map_err(&e))?;
+        unsafe { audit_op(handle, "security", &format!("rotate file key id={file_id}")) };
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 文件夹 FSK 轮换：新 FSK 覆盖 + 重写该文件夹直属文件的容器。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_rotate_folder_keys(
+    handle: *mut Session,
+    folder_id: i64,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        let n = session
+            .with_vault(|v| {
+                v.rotate_folder_keys(folder_id as u64)
+                    .map_err(CoreError::Internal)
+            })
+            .map_err(|e| map_err(&e))?;
+        unsafe {
+            audit_op(
+                handle,
+                "security",
+                &format!("rotate folder keys folder={folder_id} files={n}"),
+            )
+        };
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// MK 全库轮换（强确认：需重新输入主密码）。成功后**必须**立即 lock 并重新解锁
+/// （会话内的 MK 副本已陈旧）。既有阅后即焚分享一并作废。
+///
+/// # Safety
+/// `handle` 有效；`password` 为合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_rotate_mk(
+    handle: *mut Session,
+    password: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let pwd = unsafe { cstr(password) }?;
+        let session = unsafe { &*handle };
+        let store = open_os_store();
+        let store_ref: Option<&dyn crate::platform_store::SecureStore> = store
+            .as_ref()
+            .map(|s| s as &dyn crate::platform_store::SecureStore);
+        service::rotate_mk(session, pwd, store_ref).map_err(|e| map_err(&e))?;
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+// ==== P5-7 更新清单验签与安装包哈希（客户端分发通道；发布方离线签名）====
+
+/// 校验更新清单签名：`manifest` 为**清单原始字节**（服务端下发的那份），
+/// `sig_hex` 为其 Ed25519 签名，`pubkey_hex` 为客户端内置的发布公钥。
+/// 返回 JSON `{"ok":true}` / `{"ok":false}`（不区分格式错与签名错，
+/// 客户端对两者都必须按「不可信」处理）。
+///
+/// # Safety
+/// 三个参数均为合法 UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_verify_update_manifest(
+    manifest: *const c_char,
+    sig_hex: *const c_char,
+    pubkey_hex: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let msg = unsafe { cstr(manifest) }?;
+        let sig = unsafe { cstr(sig_hex) }?;
+        let pk = unsafe { cstr(pubkey_hex) }?;
+        let ok = vault_crypto::sig::verify_hex(pk, msg.as_bytes(), sig);
+        Ok(serde_json::json!({ "ok": ok }))
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 计算文件 SHA-256（hex）：下载完成后校验安装包与清单里声明的 sha256。
+/// 失败返回 null。
+///
+/// # Safety
+/// `path` 为合法 UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_file_sha256(path: *const c_char) -> *mut c_char {
+    let run = || -> Result<String, i32> {
+        let p = unsafe { cstr(path) }?;
+        vault_crypto::sig::sha256_file_hex(std::path::Path::new(p)).map_err(|_| ERR_IO)
+    };
+    match run() {
+        Ok(hex) => match std::ffi::CString::new(hex) {
+            Ok(c) => c.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// ==== P5-2 全库完整性校验（安全中心「文件完整性」的真实数据源）====
+
+/// 全库完整性校验：逐个容器重算块哈希并与密文清单比对（含 GCM 认证）。
+/// 返回 JSON `{"files":N,"checked":M,"failed":[{"id","name","reason"}]}`。
+/// 无失败项时也返回结果（UI 据此显示「正常 · M / N 校验通过」）。
+///
+/// 注意：逐块重算，耗时与数据量成正比；调用方应放在后台 Isolate 并提示扫描中。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_verify_all(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        let manifest = session
+            .with_vault(|v| v.sync_manifest().map_err(CoreError::Internal))
+            .map_err(|e| map_err(&e))?;
+        let items: Vec<serde_json::Value> =
+            serde_json::from_str(&manifest).map_err(|_| ERR_INTERNAL)?;
+        let mut checked = 0usize;
+        let mut failed: Vec<serde_json::Value> = Vec::new();
+        for it in items {
+            // 墓碑条目（deletedMs）没有容器，跳过
+            if it.get("deletedMs").is_some() {
+                continue;
+            }
+            let id = it.get("id").and_then(|x| x.as_u64()).unwrap_or(0);
+            let name = it
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            match session.with_vault(|v| v.verify_file(id).map_err(CoreError::Internal)) {
+                Ok(()) => checked += 1,
+                Err(e) => failed.push(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    // CoreError 已 derive(Debug)，内部原因（块哈希不匹配 / GCM 失败）原样带出
+                    "reason": format!("{e:?}"),
+                })),
+            }
+        }
+        let files = checked + failed.len();
+        if !failed.is_empty() {
+            session.audit(
+                "security",
+                &format!("integrity scan failed={}/{}", failed.len(), files),
+            );
+        }
+        Ok(serde_json::json!({
+            "files": files,
+            "checked": checked,
+            "failed": failed,
+        }))
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 // ==== P5-1 审计日志 / P5-5 紧急销毁（docs/05-06）====
 // 审计日志密钥派生自 MK，随会话打开/销毁；失败不阻断业务（见 Session::audit）。
 

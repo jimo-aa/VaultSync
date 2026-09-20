@@ -180,6 +180,13 @@
       }
     }
   },
+  "@securityDestroyQueued": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "@securityDetectAuditBroken": {
     "placeholders": {
       "at": {
@@ -224,10 +231,37 @@
       }
     }
   },
+  "@securityDetectIntegrityFailed": {
+    "placeholders": {
+      "failed": {
+        "type": "int"
+      },
+      "files": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectIntegrityOk": {
+    "placeholders": {
+      "checked": {
+        "type": "int"
+      },
+      "files": {
+        "type": "int"
+      }
+    }
+  },
   "@securityDetectSignalOk": {
     "placeholders": {
       "n": {
         "type": "int"
+      }
+    }
+  },
+  "@securityRekeyFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
       }
     }
   },
@@ -778,6 +812,7 @@
   "lockScreenRecoveryInfo": "MK 由 CSPRNG 生成且不被密码反推，无法凭记忆恢复；重置需已配对设备授权（P5 接入），或使用伪装入口进入伪空间。",
   "lockScreenTagline": "YOUR DATA · EVERYWHERE · ENCRYPTED",
   "lockScreenTitle": "VaultSync 保险箱",
+  "lockScreenTogglePwVisibility": "显示 / 隐藏主密码",
   "lockScreenUnlock": "解锁",
   "navDevices": "设备",
   "navSecurity": "安全中心",
@@ -833,6 +868,7 @@
   "securityDestroyPeersNone": "全设备联动：当前无已配对设备，仅本机执行加密擦除",
   "securityDestroyPeersUndelivered": "全设备联动未完成投递：本机已擦除，{n} 台已配对设备需各自在线时由对端设备页发起销毁",
   "securityDestroyPhrase": "销毁",
+  "securityDestroyQueued": "已向 {n} 台已配对设备签发销毁指令并进入投递队列：对端下次上线、处理任何其他消息之前执行。",
   "securityDestroyRunning": "销毁中…",
   "securityDestroySub": "本地 / 远程 / 全设备联动 · 加密擦除",
   "securityDestroyTitle": "紧急销毁",
@@ -848,6 +884,11 @@
   "securityDetectDeviceOk": "已配对 {n} 台 · 无未授权访问记录",
   "securityDetectDeviceWarn": "注意 · {event}",
   "securityDetectIntegrity": "文件完整性",
+  "securityDetectIntegrityFailed": "异常 · {failed} / {files} 个容器校验失败",
+  "securityDetectIntegrityFailedRead": "完整性扫描失败：无法读取保险箱",
+  "securityDetectIntegrityNotScanned": "尚未扫描 · 点击卡片逐块重算",
+  "securityDetectIntegrityOk": "正常 · {checked} / {files} 个容器逐块校验通过",
+  "securityDetectIntegrityScanning": "扫描中…（逐块重算，耗时与数据量成正比）",
   "securityDetectIntegritySub": "随导出/同步逐块 GCM 校验 · 认证失败即拒绝",
   "securityDetectMemory": "内存泄漏扫描",
   "securityDetectMemorySub": "密钥与明文缓冲全链路 Zeroizing · MK 不出引擎",
@@ -861,6 +902,17 @@
   "securityOverallOk": "整体状态：正常",
   "securityOverallWarn": "整体状态：注意",
   "securityRefresh": "刷新",
+  "securityRekeyDo": "开始轮换",
+  "securityRekeyDone": "主密钥已轮换 · 请用主密码重新解锁（既有分享已作废）",
+  "securityRekeyFailed": "轮换失败：{err}",
+  "securityRekeyNote": "轮换会全量重写索引与所有容器（耗时与数据量成正比），并以新 salt 重新包装 KEK_pwd（已绑定的生物识别副本同步重新包装）。向量时钟不推进，因此不会自动传播到已配对设备；既有阅后即焚分享令牌一并作废。完成后需用主密码重新解锁。",
+  "securityRekeyNow": "轮换 MK",
+  "securityRekeyPhrase": "输入「轮换」以确认",
+  "securityRekeyPhraseWord": "轮换",
+  "securityRekeyPw": "主密码",
+  "securityRekeySub": "MK 泄露时的应急路径：新 MK 重写索引与全部容器（逐块）",
+  "securityRekeyTitle": "主密钥全库轮换",
+  "securityRekeyWrongPw": "主密码错误",
   "securityStegoDisable": "停用",
   "securityStegoDisabled": "隐写术引擎已停用",
   "securityStegoEnable": "启用",
@@ -933,6 +985,16 @@
   "settingsThemeSub": "深色为默认 · 对应原型 data-theme",
   "settingsThemeSystem": "跟随系统",
   "settingsTitle": "设置",
+  "settingsUpdateCheck": "检查更新",
+  "settingsUpdateChecking": "检查中…",
+  "settingsUpdateDownload": "下载并安装",
+  "settingsUpdateNotConfigured": "未配置 · 需清单地址与发布公钥（fail-closed）",
+  "settingsUpdateNote": "清单签名覆盖清单原始字节，安装包下载后再用清单内的 sha256 复核；任一校验失败即拒绝。当前仓库未附带发布服务器与签名密钥，配置前该功能保持禁用。",
+  "settingsUpdatePubkey": "发布公钥",
+  "settingsUpdatePubkeySub": "内置的 Ed25519 公钥（hex，32 字节）——只接受该密钥签名的清单",
+  "settingsUpdateTitle": "更新通道",
+  "settingsUpdateUrl": "更新清单地址",
+  "settingsUpdateUrlSub": "发布方托管的 latest.json（必须 https）；同目录 latest.json.sig 为 Ed25519 签名",
   "settingsVersionLabel": "版本",
   "settingsVersionValue": "VaultSync {version} · 端到端加密多设备同步",
   "settingsViewDocs": "查看在线文档",
@@ -1149,6 +1211,17 @@
   "vaultPageRenameFileSub": "修改加密元数据中的文件名",
   "vaultPageRenameFolderSub": "修改加密元数据中的文件夹名",
   "vaultPageRenamed": "已重命名 · 加密元数据已更新",
+  "vaultPageRotateFileDone": "密钥已轮换 · 容器已重写",
+  "vaultPageRotateFileSub": "以全新随机 FSKey 重写该文件容器",
+  "vaultPageRotateFileTitle": "轮换密钥",
+  "vaultPageRotateFolderDone": "文件夹密钥已轮换 · 直属文件容器已重写",
+  "vaultPageRotateFolderSub": "新 FSK 覆盖 + 逐文件重写直属文件容器",
+  "vaultPageRotateFolderTitle": "轮换文件夹密钥",
+  "vaultPageRotateKey": "轮换密钥",
+  "vaultPageRotateNote": "轮换后旧密钥路径即失效（新密钥为随机值，不再由 MK 派生）。这是本机轮换：向量时钟未推进，不会自动传播到已配对设备，对端保留其自身可读副本；文件夹轮换只覆盖直属文件，不含子文件夹。",
+  "vaultPageRotateStart": "开始轮换",
+  "vaultPageRotateTargetFile": "文件",
+  "vaultPageRotateTargetFolder": "文件夹",
   "vaultPageSave": "保存",
   "vaultPageSearching": "搜索「{query}」",
   "vaultPageSelectedCount": "已选 {n} 项",

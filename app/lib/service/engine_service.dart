@@ -384,6 +384,83 @@ class VaultEngine {
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
+  /// 为每个已配对设备签发并入队销毁指令（离线设备下次上线时投递）。
+  Future<Map<String, dynamic>?> destroyQueueAll(
+      Object sessionHandle, int delaySecs) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _destroyQueueAllSync(h, delaySecs))
+        : _bridge.destroyQueueAll(sessionHandle, delaySecs);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 待投递销毁指令队列快照。
+  Future<Map<String, dynamic>?> pendingOrders(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _pendingOrdersSync(h))
+        : _bridge.pendingOrders(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 清空待投递队列，返回清除条数。
+  Future<int> cancelOrders(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final n = isNative
+        ? await Isolate.run(() => _cancelOrdersSync(h))
+        : _bridge.cancelOrders(sessionHandle);
+    return n < 0 ? 0 : n;
+  }
+
+  /// 记录 / 更新对端监听地址。
+  Future<String?> rememberPeerAddr(
+      Object sessionHandle, String deviceId, String addr) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _rememberAddrSync(h, deviceId, addr))
+        : _bridge.rememberPeerAddr(sessionHandle, deviceId, addr);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 单文件 FSKey 轮换（docs/07 §二）。
+  Future<String?> rotateFileKey(Object sessionHandle, int fileId) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _rotateKeySync(h, fileId, false))
+        : _bridge.rotateFileKey(sessionHandle, fileId);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 文件夹 FSK 轮换（重写该文件夹直属文件容器）。
+  Future<String?> rotateFolderKeys(Object sessionHandle, int folderId) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _rotateKeySync(h, folderId, true))
+        : _bridge.rotateFolderKeys(sessionHandle, folderId);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// MK 全库轮换（docs/07 §三）：需主密码重新包装；成功后调用方必须立即 lock。
+  Future<String?> rotateMk(Object sessionHandle, String password) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _rotateMkSync(h, password))
+        : _bridge.rotateMk(sessionHandle, password);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 全库完整性校验（逐块重算 + GCM 认证）。耗时与数据量成正比。
+  Future<Map<String, dynamic>?> verifyAll(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _verifyAllSync(h))
+        : _bridge.vaultVerifyAll(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
   /// 隐写引擎开关（会话级）
   Future<bool> stegoEnabled(Object sessionHandle) async {
     final h = sessionHandle as int;
@@ -663,6 +740,50 @@ String? _p2pStatusSync(int handle) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return null;
   return lib.p2pStatus(handle);
+}
+
+String? _destroyQueueAllSync(int handle, int delaySecs) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.destroyQueueAll(handle, delaySecs);
+}
+
+String? _pendingOrdersSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.pendingOrders(handle);
+}
+
+int _cancelOrdersSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return -VaultStatus.internal;
+  return lib.cancelOrders(handle);
+}
+
+int _rememberAddrSync(int handle, String deviceId, String addr) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.rememberPeerAddr(handle, deviceId, addr);
+}
+
+int _rotateKeySync(int handle, int id, bool folder) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return folder
+      ? lib.rotateFolderKeys(handle, id)
+      : lib.rotateFileKey(handle, id);
+}
+
+int _rotateMkSync(int handle, String password) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.rotateMk(handle, password);
+}
+
+String? _verifyAllSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.vaultVerifyAll(handle);
 }
 
 String? _auditListSync(int handle) {

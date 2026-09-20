@@ -223,8 +223,8 @@ class SyncController extends Notifier<SyncState> {
     final json = await engine.sync(handle, addr);
     if (!ref.mounted) return;
     if (json == null) {
-      state = state.copyWith(
-          running: false, error: _l?.stateSyncFailed ?? '同步失败');
+      state =
+          state.copyWith(running: false, error: _l?.stateSyncFailed ?? '同步失败');
       notif.danger(_l?.stateSyncFailed ?? '同步失败');
       return;
     }
@@ -232,8 +232,7 @@ class SyncController extends Notifier<SyncState> {
     state = state.copyWith(running: false, lastSummary: summary, error: null);
     final l = _l;
     notif.ok(summary.conflicts.isEmpty
-        ? (l?.stateSyncDone(
-                summary.pulled.length, summary.pushed.length) ??
+        ? (l?.stateSyncDone(summary.pulled.length, summary.pushed.length) ??
             '同步完成：拉取 ${summary.pulled.length}，推送 ${summary.pushed.length}')
         : (l?.stateSyncDoneWithConflicts(summary.pulled.length,
                 summary.pushed.length, summary.conflicts.length) ??

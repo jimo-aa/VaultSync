@@ -100,7 +100,9 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
     final l = AppLocalizations.of(context);
     final handle = _handle;
     if (handle == null) {
-      ref.read(notificationProvider.notifier).warning(l.devicesPageNotifNeedUnlock);
+      ref
+          .read(notificationProvider.notifier)
+          .warning(l.devicesPageNotifNeedUnlock);
       return;
     }
     final ok = await showVsModal<bool>(
@@ -116,8 +118,10 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
           VsKv.text([
             (l.devicesPageKvDevice, peer.name),
             ('ID', _short(peer.deviceId)),
-            (l.devicesPageFingerprint,
-                peer.fingerprint.isEmpty ? '--' : peer.fingerprint),
+            (
+              l.devicesPageFingerprint,
+              peer.fingerprint.isEmpty ? '--' : peer.fingerprint
+            ),
           ]),
           VsNote(
             l.devicesPageUnpairNote,
@@ -394,8 +398,8 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                         color: v.danger)),
                 const SizedBox(height: 4),
                 Text(
-                  l.devicesPageDestroyArmedSub(_short(armed.target),
-                      (armed.remainingMs / 1000).round()),
+                  l.devicesPageDestroyArmedSub(
+                      _short(armed.target), (armed.remainingMs / 1000).round()),
                   style: TextStyle(
                       fontSize: 12,
                       fontFamily: DesignTokens.monoFamily,
@@ -862,9 +866,18 @@ class _DestroyDialogState extends ConsumerState<_DestroyDialog> {
       _busy = true;
       _error = null;
     });
+    final addr = widget.peer.addr;
+    if (addr == null || addr.isEmpty) {
+      // 没有可拨地址就不要假装已发送：让操作员填地址后重试
+      setState(() {
+        _busy = false;
+        _error = '缺少对端地址：请在下方填写 host:port 后重试';
+      });
+      return;
+    }
     final r = (await ref.read(vaultEngineProvider).destroyArm(
               widget.handle,
-              widget.peer.deviceId,
+              addr,
               widget.peer.deviceId,
               _delaySecs,
             )) ??
@@ -1011,8 +1024,9 @@ class _DestroyDialogState extends ConsumerState<_DestroyDialog> {
                       onPressed: () => Navigator.pop(context, false)),
                   const SizedBox(width: 8),
                   VsButton(
-                      label:
-                          _busy ? l.devicesPageSending : l.devicesPageIssueDestroy,
+                      label: _busy
+                          ? l.devicesPageSending
+                          : l.devicesPageIssueDestroy,
                       tone: VsBtnTone.danger,
                       onPressed: _busy || _confirmed ? null : _arm),
                 ],
