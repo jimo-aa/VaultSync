@@ -93,14 +93,16 @@ class VaultEngine {
   Future<UnlockOutcome> unlockBio() async {
     final primary = await primaryPath();
     final r = isNative
-        ? await Isolate.run(() => _unlockSync(primary, '', disguise: false, bio: true))
+        ? await Isolate.run(
+            () => _unlockSync(primary, '', disguise: false, bio: true))
         : _bridge.unlockBio(primary);
     return _map(r, disguise: false);
   }
 
   Future<bool> vaultExists() async => _bridge.vaultExists(await primaryPath());
 
-  Future<bool> disguiseExists() async => _bridge.vaultExists(await disguisePath());
+  Future<bool> disguiseExists() async =>
+      _bridge.vaultExists(await disguisePath());
 
   Future<bool> bioBound() async {
     final primary = await primaryPath();
@@ -118,7 +120,8 @@ class VaultEngine {
   Future<String?> changePassword(
       Object sessionHandle, String oldPassword, String newPassword) async {
     final err = isNative
-        ? await Isolate.run(() => _changeSync(sessionHandle as int, oldPassword, newPassword))
+        ? await Isolate.run(
+            () => _changeSync(sessionHandle as int, oldPassword, newPassword))
         : _bridge.changePassword(sessionHandle, oldPassword, newPassword);
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
@@ -132,7 +135,9 @@ class VaultEngine {
     final h = sessionHandle as int;
     final err = isNative
         ? await Isolate.run(() => bind ? _bindBioSync(h) : _unbindBioSync(h))
-        : (bind ? _bridge.bindBio(sessionHandle) : _bridge.unbindBio(sessionHandle));
+        : (bind
+            ? _bridge.bindBio(sessionHandle)
+            : _bridge.unbindBio(sessionHandle));
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
@@ -141,12 +146,16 @@ class VaultEngine {
   // isolate 不可发送桥对象：原生路径走静态函数（句柄为 int 可跨 isolate）；
   // id 输出改用返回记录（(err, id)），因 isolate 内对捕获 List 的修改不会传回。
 
-  Future<(String? err, int id)> mkdir(Object sessionHandle, int parent, String name) async {
+  Future<(String? err, int id)> mkdir(
+      Object sessionHandle, int parent, String name) async {
     final h = sessionHandle as int;
     if (!isNative) {
       final idOut = <int>[0];
       final err = _bridge.vaultMkdir(sessionHandle, parent, name, idOut);
-      return (err == VaultStatus.ok ? null : VaultStatus.message(err), idOut[0]);
+      return (
+        err == VaultStatus.ok ? null : VaultStatus.message(err),
+        idOut[0]
+      );
     }
     final (err, id) = await Isolate.run(() => _mkdirSync(h, parent, name));
     return (err == VaultStatus.ok ? null : VaultStatus.message(err), id);
@@ -162,7 +171,8 @@ class VaultEngine {
     return jsonDecode(json) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>?> search(Object sessionHandle, String query) async {
+  Future<Map<String, dynamic>?> search(
+      Object sessionHandle, String query) async {
     final h = sessionHandle as int;
     final json = isNative
         ? await Isolate.run(() => _jsonSync(h, -1, query))
@@ -171,18 +181,23 @@ class VaultEngine {
     return jsonDecode(json) as Map<String, dynamic>;
   }
 
-  Future<(String? err, int id)> importFile(Object sessionHandle, String src, int folder) async {
+  Future<(String? err, int id)> importFile(
+      Object sessionHandle, String src, int folder) async {
     final h = sessionHandle as int;
     if (!isNative) {
       final idOut = <int>[0];
       final err = _bridge.vaultImport(sessionHandle, src, folder, idOut);
-      return (err == VaultStatus.ok ? null : VaultStatus.message(err), idOut[0]);
+      return (
+        err == VaultStatus.ok ? null : VaultStatus.message(err),
+        idOut[0]
+      );
     }
     final (err, id) = await Isolate.run(() => _importSync(h, src, folder));
     return (err == VaultStatus.ok ? null : VaultStatus.message(err), id);
   }
 
-  Future<String?> exportFile(Object sessionHandle, int fileId, String dest) async {
+  Future<String?> exportFile(
+      Object sessionHandle, int fileId, String dest) async {
     final h = sessionHandle as int;
     final err = isNative
         ? await Isolate.run(() => _statusSync(h, fileId, dest, Op.export))
@@ -190,7 +205,8 @@ class VaultEngine {
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
-  Future<String?> renameFile(Object sessionHandle, int fileId, String name) async {
+  Future<String?> renameFile(
+      Object sessionHandle, int fileId, String name) async {
     final h = sessionHandle as int;
     final err = isNative
         ? await Isolate.run(() => _statusSync(h, fileId, name, Op.rename))
@@ -198,7 +214,8 @@ class VaultEngine {
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
 
-  Future<String?> deleteFile(Object sessionHandle, int fileId, {bool secure = true}) async {
+  Future<String?> deleteFile(Object sessionHandle, int fileId,
+      {bool secure = true}) async {
     final h = sessionHandle as int;
     final err = isNative
         ? await Isolate.run(() => _deleteSync(h, fileId, secure))
@@ -207,10 +224,12 @@ class VaultEngine {
   }
 
   /// 重命名文件夹（根目录不可改名）。
-  Future<String?> renameFolder(Object sessionHandle, int folderId, String name) async {
+  Future<String?> renameFolder(
+      Object sessionHandle, int folderId, String name) async {
     final h = sessionHandle as int;
     final err = isNative
-        ? await Isolate.run(() => _statusSync(h, folderId, name, Op.renameFolder))
+        ? await Isolate.run(
+            () => _statusSync(h, folderId, name, Op.renameFolder))
         : _bridge.vaultRenameFolder(sessionHandle, folderId, name);
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
@@ -227,10 +246,12 @@ class VaultEngine {
     return (null, n);
   }
 
-  Future<String?> setTags(Object sessionHandle, int targetId, List<String> tags) async {
+  Future<String?> setTags(
+      Object sessionHandle, int targetId, List<String> tags) async {
     final h = sessionHandle as int;
     final err = isNative
-        ? await Isolate.run(() => _statusSync(h, targetId, tags.join(','), Op.setTags))
+        ? await Isolate.run(
+            () => _statusSync(h, targetId, tags.join(','), Op.setTags))
         : _bridge.vaultSetTags(sessionHandle, targetId, tags);
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
@@ -240,7 +261,8 @@ class VaultEngine {
       Object sessionHandle, int fileId, int ttlSecs, int maxOpens) async {
     final h = sessionHandle as int;
     final json = isNative
-        ? await Isolate.run(() => _shareCreateSync(h, fileId, ttlSecs, maxOpens))
+        ? await Isolate.run(
+            () => _shareCreateSync(h, fileId, ttlSecs, maxOpens))
         : _bridge.vaultShareCreate(sessionHandle, fileId, ttlSecs, maxOpens);
     if (json == null) return null;
     return jsonDecode(json) as Map<String, dynamic>;
@@ -250,7 +272,8 @@ class VaultEngine {
       Object sessionHandle, int shareId, String token, String dest) async {
     final h = sessionHandle as int;
     final err = isNative
-        ? await Isolate.run(() => _statusSync(h, shareId, '$token\u0000$dest', Op.shareOpen))
+        ? await Isolate.run(
+            () => _statusSync(h, shareId, '$token\u0000$dest', Op.shareOpen))
         : _bridge.vaultShareOpen(sessionHandle, shareId, token, dest);
     return err == VaultStatus.ok ? null : VaultStatus.message(err);
   }
@@ -320,6 +343,101 @@ class VaultEngine {
     return jsonDecode(json) as Map<String, dynamic>;
   }
 
+  // ==== P5-1 审计日志 / P5-5 紧急销毁 / P5-3 隐写术 ====
+
+  /// 审计条目列表：{"count","head","entries":[…]};失败返回 null。
+  Future<Map<String, dynamic>?> auditList(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _auditListSync(h))
+        : _bridge.auditList(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 链式校验：{"ok","checked","brokenAt","reason"};失败返回 null。
+  Future<Map<String, dynamic>?> auditVerify(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _auditVerifySync(h))
+        : _bridge.auditVerify(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 加密导出审计日志。成功返回 null，失败返回可读消息。
+  Future<String?> auditExport(Object sessionHandle, String dest) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _auditExportSync(h, dest))
+        : _bridge.auditExport(sessionHandle, dest);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 紧急销毁 · 本机：销毁后该会话对应的保险箱已不存在，调用方须立即锁定。
+  Future<String?> destroyLocal(Object sessionHandle,
+      {bool secure = true}) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _destroyLocalSync(h, secure))
+        : _bridge.destroyLocal(sessionHandle, secure: secure);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 隐写引擎开关（会话级）
+  Future<bool> stegoEnabled(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final r = isNative
+        ? await Isolate.run(() => _stegoStatusSync(h))
+        : _bridge.stegoStatus(sessionHandle);
+    return r == 1;
+  }
+
+  Future<String?> stegoSetEnabled(Object sessionHandle, bool on) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(() => _stegoSetEnabledSync(h, on))
+        : _bridge.stegoSetEnabled(sessionHandle, on);
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 图片容量（可嵌入字节数）；负值为错误码（-3 IO / -6 非受支持 PNG）。
+  Future<int> stegoCapacity(Object sessionHandle, String imagePath) async {
+    final h = sessionHandle as int;
+    return isNative
+        ? await Isolate.run(() => _stegoCapacitySync(h, imagePath))
+        : _bridge.stegoCapacity(sessionHandle, imagePath);
+  }
+
+  /// 嵌入：把 fileId 的明文加密后写入图片 LSB。
+  Future<String?> stegoEmbed(Object sessionHandle, int fileId, String imagePath,
+      String outPath) async {
+    final h = sessionHandle as int;
+    final err = isNative
+        ? await Isolate.run(
+            () => _stegoEmbedSync(h, fileId, imagePath, outPath))
+        : _bridge.stegoEmbed(sessionHandle, fileId, imagePath, outPath);
+    // 引擎在未启用时返回「参数非法」，此处翻译为可读语义（UI 也会先做前置检查）
+    if (err == VaultStatus.invalidArg) {
+      return '隐写引擎未启用（安全中心开关）';
+    }
+    if (err == VaultStatus.format) {
+      return '不支持该图片或容量不足（需 8 位 RGB/RGBA PNG）';
+    }
+    return err == VaultStatus.ok ? null : VaultStatus.message(err);
+  }
+
+  /// 提取：返回 {"name","size"}（供 UI 提示还原出的文件名）或 null。
+  Future<Map<String, dynamic>?> stegoExtract(
+      Object sessionHandle, String imagePath, String destPath) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _stegoExtractSync(h, imagePath, destPath))
+        : _bridge.stegoExtract(sessionHandle, imagePath, destPath);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
   /// 解除与指定设备的配对（幂等：该设备本就不存在亦视为成功）。
   /// 返回 null = 成功；非 null = 用户可读错误消息。
   Future<String?> unpair(Object sessionHandle, String deviceId) async {
@@ -354,8 +472,10 @@ class VaultEngine {
       {bool secure = false}) async {
     final h = sessionHandle as int;
     return isNative
-        ? await Isolate.run(() => _p2pConflictResolveSync(h, keepId, dropId, secure))
-        : _bridge.p2pConflictResolve(sessionHandle, keepId, dropId, secure: secure);
+        ? await Isolate.run(
+            () => _p2pConflictResolveSync(h, keepId, dropId, secure))
+        : _bridge.p2pConflictResolve(sessionHandle, keepId, dropId,
+            secure: secure);
   }
 
   Future<String> primaryPath() async => _join(await _vaultDir(), primaryName);
@@ -365,25 +485,29 @@ class VaultEngine {
   Future<UnlockOutcome> _unlockOn(String path, String password,
       {required bool disguise}) async {
     final r = isNative
-        ? await Isolate.run(() => _unlockSync(path, password, disguise: disguise))
+        ? await Isolate.run(
+            () => _unlockSync(path, password, disguise: disguise))
         : _bridge.unlock(path, password, disguise: disguise);
     return _map(r, disguise: disguise);
   }
 
   UnlockOutcome _map(EngineUnlock r, {required bool disguise}) {
-    if (r.ok) return UnlockSuccess(disguise: disguise, sessionHandle: r.sessionHandle!);
+    if (r.ok) {
+      return UnlockSuccess(disguise: disguise, sessionHandle: r.sessionHandle!);
+    }
     return switch (r.status) {
       VaultStatus.wrongPassword => UnlockWrongPassword(cooldownMs: r.waitMs),
       VaultStatus.cooldown => UnlockCooldown(r.waitMs),
-      VaultStatus.bioUnavailable => UnlockFailure(VsL10n.orNull?.stateBioUnsupported ??
-          '此平台不支持生物识别，请使用主密码'),
-      VaultStatus.bioNotBound => UnlockFailure(VsL10n.orNull?.stateBioNotBound ??
-          '尚未绑定生物识别（设置中绑定后可用）'),
+      VaultStatus.bioUnavailable => UnlockFailure(
+          VsL10n.orNull?.stateBioUnsupported ?? '此平台不支持生物识别，请使用主密码'),
+      VaultStatus.bioNotBound =>
+        UnlockFailure(VsL10n.orNull?.stateBioNotBound ?? '尚未绑定生物识别（设置中绑定后可用）'),
       _ => UnlockFailure(VaultStatus.message(r.status)),
     };
   }
 
-  static String _join(String dir, String name) => '$dir${Platform.pathSeparator}$name';
+  static String _join(String dir, String name) =>
+      '$dir${Platform.pathSeparator}$name';
 
   Future<String> _vaultDir() async {
     final docs = await getApplicationDocumentsDirectory();
@@ -457,7 +581,8 @@ int _statusSync(int handle, int id, String payload, Op op) {
       return lib.vaultSetTags(handle, id, payload.split(','));
     case Op.shareOpen:
       final parts = payload.split('\u0000');
-      return lib.vaultShareOpen(handle, id, parts[0], parts.length > 1 ? parts[1] : '');
+      return lib.vaultShareOpen(
+          handle, id, parts[0], parts.length > 1 ? parts[1] : '');
   }
 }
 
@@ -540,6 +665,60 @@ String? _p2pStatusSync(int handle) {
   return lib.p2pStatus(handle);
 }
 
+String? _auditListSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.auditList(handle);
+}
+
+String? _auditVerifySync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.auditVerify(handle);
+}
+
+int _auditExportSync(int handle, String dest) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.auditExport(handle, dest);
+}
+
+int _destroyLocalSync(int handle, bool secure) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.destroyLocal(handle, secure: secure);
+}
+
+int _stegoStatusSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return 0;
+  return lib.stegoStatus(handle);
+}
+
+int _stegoSetEnabledSync(int handle, bool on) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.stegoSetEnabled(handle, on);
+}
+
+int _stegoCapacitySync(int handle, String imagePath) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return -VaultStatus.internal;
+  return lib.stegoCapacity(handle, imagePath);
+}
+
+int _stegoEmbedSync(int handle, int fileId, String imagePath, String outPath) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.stegoEmbed(handle, fileId, imagePath, outPath);
+}
+
+String? _stegoExtractSync(int handle, String imagePath, String destPath) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.stegoExtract(handle, imagePath, destPath);
+}
+
 int _p2pUnpairSync(int handle, String deviceId) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return VaultStatus.internal;
@@ -564,10 +743,9 @@ int _p2pConflictResolveSync(int handle, int keepId, int dropId, bool secure) {
   return lib.p2pConflictResolve(handle, keepId, dropId, secure: secure);
 }
 
-
 /// Provider：优先原生引擎，缺失时回退 Stub（仅纯 Dart 测试 / CI 环境）。
-final vaultCoreBridgeProvider =
-    Provider<VaultCoreBridge>((ref) => VaultCoreBridgeFfi.tryOpen() ?? VaultCoreBridgeStub());
+final vaultCoreBridgeProvider = Provider<VaultCoreBridge>(
+    (ref) => VaultCoreBridgeFfi.tryOpen() ?? VaultCoreBridgeStub());
 
-final vaultEngineProvider =
-    Provider<VaultEngine>((ref) => VaultEngine(ref.watch(vaultCoreBridgeProvider)));
+final vaultEngineProvider = Provider<VaultEngine>(
+    (ref) => VaultEngine(ref.watch(vaultCoreBridgeProvider)));

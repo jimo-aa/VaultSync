@@ -7,3 +7,7 @@ native/target/
 # 系统
 Thumbs.db
 .DS_Store
+
+# 打包产物（配方入库，产物不入库）
+packaging/out/
+packaging/**/Output/

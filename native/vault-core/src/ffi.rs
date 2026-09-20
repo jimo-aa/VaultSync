@@ -161,6 +161,14 @@ pub unsafe extern "C" fn vault_core_unlock(
         let pwd = unsafe { cstr(password) }?;
         match service::unlock(&p, pwd, disguise != 0) {
             Ok(s) => {
+                s.audit(
+                    "session",
+                    if s.disguise {
+                        "unlock disguise"
+                    } else {
+                        "unlock"
+                    },
+                );
                 unsafe { handle_out.write(Box::into_raw(Box::new(s))) };
                 Ok(())
             }
@@ -196,6 +204,7 @@ pub unsafe extern "C" fn vault_core_unlock_bio(
         let store = open_os_store().ok_or(ERR_BIO_UNAVAILABLE)?;
         match service::unlock_biometric(&p, &store) {
             Ok(s) => {
+                s.audit("session", "unlock biometric");
                 unsafe { handle_out.write(Box::into_raw(Box::new(s))) };
                 Ok(())
             }
@@ -227,10 +236,14 @@ pub unsafe extern "C" fn vault_core_bind_bio(handle: *mut Session) -> i32 {
         None => return ERR_BIO_UNAVAILABLE,
     };
     let session = unsafe { &*handle };
-    service::bind_biometric(session, &store)
+    let rc = service::bind_biometric(session, &store)
         .map_err(|e| map_err(&e))
         .err()
-        .unwrap_or(OK)
+        .unwrap_or(OK);
+    if rc == OK {
+        session.audit("security", "bind biometric");
+    }
+    rc
 }
 
 /// 解除生物识别绑定。
@@ -247,10 +260,14 @@ pub unsafe extern "C" fn vault_core_unbind_bio(handle: *mut Session) -> i32 {
         None => return ERR_BIO_UNAVAILABLE,
     };
     let session = unsafe { &*handle };
-    service::unbind_biometric(session, &store)
+    let rc = service::unbind_biometric(session, &store)
         .map_err(|e| map_err(&e))
         .err()
-        .unwrap_or(OK)
+        .unwrap_or(OK);
+    if rc == OK {
+        session.audit("security", "unbind biometric");
+    }
+    rc
 }
 
 /// 修改主密码（F-07）：仅重包装 MK，数据零重加密。主空间会话专用。
@@ -270,7 +287,11 @@ pub unsafe extern "C" fn vault_core_change_password(
         let old = unsafe { cstr(old_password) }?;
         let new = unsafe { cstr(new_password) }?;
         let session = unsafe { &*handle };
-        service::change_password(session, old, new).map_err(|e| map_err(&e))
+        let rc = service::change_password(session, old, new).map_err(|e| map_err(&e));
+        if rc.is_ok() {
+            session.audit("session", "change password (re-wrap MK only)");
+        }
+        rc
     };
     run().err().unwrap_or(OK)
 }
@@ -282,6 +303,8 @@ pub unsafe extern "C" fn vault_core_change_password(
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_lock(handle: *mut Session) {
     if !handle.is_null() {
+        let session = unsafe { &*handle };
+        session.audit("session", "lock");
         drop(unsafe { Box::from_raw(handle) });
     }
 }
@@ -324,6 +347,35 @@ fn vault_op<T>(
         .map_err(|e| map_err(&e))
 }
 
+/// 敏感操作成功后追加审计条目（P5-1，docs/05-06 §3.2 记录范围）。
+///
+/// # Safety
+/// `handle` 为空时静默返回；审计写入失败不阻断业务（见 `Session::audit` 的决策说明）。
+/// 同步摘要压成一行（审计 detail 用；与 Dart 侧的摘要卡同字段）。
+fn summary_line(v: &serde_json::Value) -> String {
+    let n = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_array())
+            .map(Vec::len)
+            .unwrap_or(0)
+    };
+    format!(
+        "pushed={} pulled={} deleted={} conflicts={}",
+        n("pushed"),
+        n("pulled"),
+        n("deleted"),
+        n("conflicts")
+    )
+}
+
+unsafe fn audit_op(handle: *mut Session, kind: &str, detail: &str) {
+    if handle.is_null() {
+        return;
+    }
+    let session = unsafe { &*handle };
+    session.audit(kind, detail);
+}
+
 fn json_out(v: serde_json::Value) -> *mut c_char {
     match serde_json::to_string(&v)
         .ok()
@@ -354,6 +406,13 @@ pub unsafe extern "C" fn vault_core_vault_mkdir(
             v.mkdir(parent as u64, name).map_err(CoreError::Internal)
         })?;
         unsafe { folder_id_out.write(id) };
+        unsafe {
+            audit_op(
+                handle,
+                "vault",
+                &format!("mkdir parent={parent} name={name}"),
+            )
+        };
         Ok(())
     };
     run().err().unwrap_or(OK)
@@ -419,6 +478,13 @@ pub unsafe extern "C" fn vault_core_vault_import(
     }) {
         Ok(id) => {
             unsafe { file_id_out.write(id) };
+            unsafe {
+                audit_op(
+                    handle,
+                    "vault",
+                    &format!("import src={src} folder={folder} id={id}"),
+                )
+            };
             OK
         }
         Err(e) => map_err(&e),
@@ -442,7 +508,11 @@ pub unsafe extern "C" fn vault_core_vault_export(
                 .map_err(CoreError::Internal)
         })
     };
-    run().err().unwrap_or(OK)
+    let rc = run().err().unwrap_or(OK);
+    if rc == OK {
+        unsafe { audit_op(handle, "vault", &format!("export id={file_id}")) };
+    }
+    rc
 }
 
 /// 重命名文件。
@@ -462,7 +532,11 @@ pub unsafe extern "C" fn vault_core_vault_rename_file(
                 .map_err(CoreError::Internal)
         })
     };
-    run().err().unwrap_or(OK)
+    let rc = run().err().unwrap_or(OK);
+    if rc == OK {
+        unsafe { audit_op(handle, "vault", &format!("rename file={file_id}")) };
+    }
+    rc
 }
 
 /// 重命名文件夹（根目录不可改名）。
@@ -482,7 +556,11 @@ pub unsafe extern "C" fn vault_core_vault_rename_folder(
                 .map_err(CoreError::Internal)
         })
     };
-    run().err().unwrap_or(OK)
+    let rc = run().err().unwrap_or(OK);
+    if rc == OK {
+        unsafe { audit_op(handle, "vault", &format!("rename folder={folder_id}")) };
+    }
+    rc
 }
 
 /// 删除文件（secure=1 时先单次覆写再删除）。
@@ -495,12 +573,22 @@ pub unsafe extern "C" fn vault_core_vault_delete_file(
     file_id: i64,
     secure: i32,
 ) -> i32 {
-    vault_op(handle, |v, _| {
+    let rc = vault_op(handle, |v, _| {
         v.delete_file(file_id as u64, secure != 0)
             .map_err(CoreError::Internal)
     })
     .err()
-    .unwrap_or(OK)
+    .unwrap_or(OK);
+    if rc == OK {
+        unsafe {
+            audit_op(
+                handle,
+                "vault",
+                &format!("wipe file={file_id} secure={secure}"),
+            )
+        };
+    }
+    rc
 }
 
 /// 递归删除文件夹（secure=1 时逐个先单次覆写再删除），返回删除的文件数；失败返回负状态码。
@@ -519,7 +607,16 @@ pub unsafe extern "C" fn vault_core_vault_delete_folder(
     });
     // 成功返回删除的文件数（≥0）；失败返回负状态码（-1..-8 不会与计数混淆）。
     match r {
-        Ok(n) => i32::try_from(n).unwrap_or(i32::MAX),
+        Ok(n) => {
+            unsafe {
+                audit_op(
+                    handle,
+                    "vault",
+                    &format!("wipe folder={folder_id} files={n} secure={secure}"),
+                )
+            };
+            i32::try_from(n).unwrap_or(i32::MAX)
+        }
         Err(code) => -code,
     }
 }
@@ -546,7 +643,11 @@ pub unsafe extern "C" fn vault_core_vault_set_tags(
                 .map_err(CoreError::Internal)
         })
     };
-    run().err().unwrap_or(OK)
+    let rc = run().err().unwrap_or(OK);
+    if rc == OK {
+        unsafe { audit_op(handle, "vault", &format!("tags id={file_id}")) };
+    }
+    rc
 }
 
 /// 创建阅后即焚分享，返回 JSON {"shareId":u64,"token":"hex"}。
@@ -568,7 +669,10 @@ pub unsafe extern "C" fn vault_core_vault_share_create(
         })
     };
     match run() {
-        Ok(v) => json_out(v),
+        Ok(v) => {
+            unsafe { audit_op(handle, "security", &format!("share create id={file_id}")) };
+            json_out(v)
+        }
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -591,6 +695,312 @@ pub unsafe extern "C" fn vault_core_vault_share_open(
             v.open_share(share_id as u64, token, std::path::Path::new(dest))
                 .map_err(CoreError::Internal)
         })
+    };
+    let rc = run().err().unwrap_or(OK);
+    if rc == OK {
+        unsafe { audit_op(handle, "security", &format!("share open id={share_id}")) };
+    }
+    rc
+}
+
+// ==== P5-3 隐写术（docs/05-05）====
+// 隐写载荷 = AEAD(HKDF(MK,"stego-payload"), [name‖data])，再按位写进 PNG 的 LSB。
+// 因此「密文在图片内不可直接读」，且提取必须持有同一保险箱的 MK（本机隐蔽辅助，
+// 不作跨设备传输通道——跨设备走 P2P/中继）。
+
+/// 隐写引擎是否已启用（1=启用，0=未启用）。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_status(handle: *mut Session) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    i32::from(
+        session
+            .stego_enabled
+            .load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// 启用 / 停用隐写引擎（docs/05-06 §七）；状态变更记审计。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_set_enabled(handle: *mut Session, on: i32) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    let enabled = on != 0;
+    session
+        .stego_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    session.audit(
+        "security",
+        if enabled {
+            "stego enable"
+        } else {
+            "stego disable"
+        },
+    );
+    OK
+}
+
+/// 图片容量（可嵌入载荷字节数，已扣除长度前缀）。失败返回负错误码。
+///
+/// # Safety
+/// `image_path` 为合法路径。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_capacity(
+    handle: *mut Session,
+    image_path: *const c_char,
+) -> i64 {
+    if handle.is_null() {
+        return -i64::from(ERR_INVALID_ARG);
+    }
+    let path = match unsafe { cstr(image_path) } {
+        Ok(p) => p,
+        Err(e) => return -i64::from(e),
+    };
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return -i64::from(ERR_IO),
+    };
+    match vault_stego::png_size(&bytes) {
+        Ok((w, h)) => i64::try_from(vault_stego::capacity_bytes(w, h)).unwrap_or(i64::MAX),
+        Err(_) => -i64::from(ERR_FORMAT),
+    }
+}
+
+/// 隐写嵌入：把保险箱内某文件的**明文**加密后嵌入图片，输出到 `out_path`。
+///
+/// # Safety
+/// `handle` 有效；`image_path`、`out_path` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_embed(
+    handle: *mut Session,
+    file_id: i64,
+    image_path: *const c_char,
+    out_path: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let image_path = unsafe { cstr(image_path) }?;
+        let out_path = unsafe { cstr(out_path) }?;
+        let session = unsafe { &*handle };
+        if !session
+            .stego_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ERR_INVALID_ARG);
+        }
+        let image = std::fs::read(image_path).map_err(|_| ERR_IO)?;
+
+        // 1) 导出明文到临时文件（复用既有导出路径，避免在 FFI 层重写容器解析）
+        let tmp = session.data_dir().join(format!("stego-{file_id}.tmp"));
+        session
+            .with_vault(|v| {
+                v.export_file(file_id as u64, &tmp)
+                    .map_err(CoreError::Internal)
+            })
+            .map_err(|e| map_err(&e))?;
+        let plain = std::fs::read(&tmp).map_err(|_| ERR_IO)?;
+        let _ = std::fs::remove_file(&tmp);
+
+        // 2) 取原文件名（用于提取端还原）
+        let name = session
+            .with_vault(|v| v.file_name(file_id as u64).map_err(CoreError::Internal))
+            .unwrap_or_else(|_| format!("file-{file_id}"));
+
+        // 3) 载荷 = AEAD(HKDF(MK,"stego-payload"), [len(name)‖name‖data])，随机 nonce
+        let key = session.stego_key();
+        let nonce_v = vault_crypto::random::random_bytes(vault_crypto::AES_GCM_NONCE_LEN);
+        let mut nonce = [0u8; vault_crypto::AES_GCM_NONCE_LEN];
+        nonce.copy_from_slice(&nonce_v);
+        let mut inner = Vec::with_capacity(4 + name.len() + plain.len());
+        inner.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        inner.extend_from_slice(name.as_bytes());
+        inner.extend_from_slice(&plain);
+        let sealed =
+            vault_crypto::aead::aead_encrypt(&key, &nonce, &inner).map_err(|_| ERR_INTERNAL)?;
+
+        // 4) LSB 嵌入并写出
+        let out = vault_stego::embed(&image, &sealed).map_err(|_| ERR_FORMAT)?;
+        std::fs::write(out_path, out).map_err(|_| ERR_IO)?;
+        session.audit("security", &format!("stego embed id={file_id}"));
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 隐写提取：从图片取回载荷、解密并写出明文到 `dest_path`。
+/// 返回 JSON {"name":…,"size":N}（供 UI 提示还原出的文件名），失败返回 null。
+///
+/// # Safety
+/// `handle` 有效；`image_path`、`dest_path` 合法。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_extract(
+    handle: *mut Session,
+    image_path: *const c_char,
+    dest_path: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let image_path = unsafe { cstr(image_path) }?;
+        let dest_path = unsafe { cstr(dest_path) }?;
+        let session = unsafe { &*handle };
+        if !session
+            .stego_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ERR_INVALID_ARG);
+        }
+        let image = std::fs::read(image_path).map_err(|_| ERR_IO)?;
+        let sealed = vault_stego::extract(&image).map_err(|_| ERR_FORMAT)?;
+        let key = session.stego_key();
+        let inner = vault_crypto::aead::aead_decrypt(&key, &sealed).ok_or(ERR_WRONG_PASSWORD)?;
+        if inner.len() < 4 {
+            return Err(ERR_FORMAT);
+        }
+        let name_len = u32::from_be_bytes(inner[0..4].try_into().map_err(|_| ERR_FORMAT)?) as usize;
+        if inner.len() < 4 + name_len {
+            return Err(ERR_FORMAT);
+        }
+        let name = String::from_utf8_lossy(&inner[4..4 + name_len]).to_string();
+        let data = &inner[4 + name_len..];
+        std::fs::write(dest_path, data).map_err(|_| ERR_IO)?;
+        session.audit("security", "stego extract");
+        Ok(serde_json::json!({ "name": name, "size": data.len() }))
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// ==== P5-1 审计日志 / P5-5 紧急销毁（docs/05-06）====
+// 审计日志密钥派生自 MK，随会话打开/销毁；失败不阻断业务（见 Session::audit）。
+
+/// 审计条目列表。返回 JSON {"count","head","entries":[{seq,tsMs,kind,detail,prevHash,hash}]}。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_audit_list(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        session
+            .with_audit(|log| {
+                serde_json::json!({
+                    "count": log.len(),
+                    "head": log.head_hash(),
+                    "entries": log.entries().iter().map(|e| serde_json::json!({
+                        "seq": e.seq,
+                        "tsMs": e.ts_ms,
+                        "kind": e.kind,
+                        "detail": e.detail,
+                        "prevHash": e.prev_hash,
+                        "hash": e.hash,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .ok_or(ERR_INTERNAL)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 链式校验。返回 JSON {"ok","checked","brokenAt":u64|null,"reason":string|null}。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_audit_verify(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        session
+            .with_audit(|log| {
+                let v = log.verify();
+                serde_json::json!({
+                    "ok": v.ok,
+                    "checked": v.checked,
+                    "brokenAt": v.broken_at,
+                    "reason": v.reason,
+                })
+            })
+            .ok_or(ERR_INTERNAL)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 加密导出审计日志到 `dest`（专用导出密钥 = HKDF(MK,"audit-export")）。
+/// 导出事件本身也记入审计（docs/05-06 §3.3）。
+///
+/// # Safety
+/// `handle` 有效；`dest` 合法路径。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_audit_export(handle: *mut Session, dest: *const c_char) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let dest = unsafe { cstr(dest) }?;
+        let session = unsafe { &*handle };
+        let key = session.audit_export_key();
+        session
+            .with_audit(|log| log.export_encrypted(std::path::Path::new(dest), &key))
+            .ok_or(ERR_INTERNAL)?
+            .map_err(|_| ERR_IO)?;
+        session.audit("security", "audit export");
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 紧急销毁 · 本机（P5-5，docs/05-06 §五）：加密擦除本机全部可解封材料
+/// （保险箱头部 + 数据目录：密文容器 / 加密索引 / P2P 身份 / 审计日志）。
+/// `secure=1` 时先对每个文件做单次覆写（介质兜底语义）。
+/// 调用成功后该句柄对应的保险箱已不存在，调用方应立即 `vault_core_lock`。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_destroy_local(handle: *mut Session, secure: i32) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        // 尽力写入最后一条审计（docs/05-06 §五「同时尽力写入最终审计记录」）；
+        // 若未先导出，该条目会随数据目录一并销毁——UI 提供「先导出」选项。
+        session.audit(
+            "security",
+            if secure != 0 {
+                "destroy local (secure overwrite)"
+            } else {
+                "destroy local"
+            },
+        );
+        crate::service::wipe_local(&session.vault_path, secure != 0).map_err(|_| ERR_IO)
     };
     run().err().unwrap_or(OK)
 }
@@ -675,7 +1085,9 @@ pub unsafe extern "C" fn vault_core_p2p_sync_relay(
         let r = unsafe { cstr(relay) }?;
         let room = unsafe { cstr(room) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
-        engine.sync_via_relay(r, room).map_err(|_| ERR_IO)
+        let v = engine.sync_via_relay(r, room).map_err(|_| ERR_IO)?;
+        session.audit("device", &format!("sync relay {}", summary_line(&v)));
+        Ok(v)
     };
     match run() {
         Ok(v) => json_out(v),
@@ -736,7 +1148,8 @@ pub unsafe extern "C" fn vault_core_p2p_unpair(
         let session = unsafe { &*handle };
         let id = unsafe { cstr(device_id) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
-        engine.unpair(id).map_err(|_| ERR_INTERNAL)?;
+        let removed = engine.unpair(id).map_err(|_| ERR_INTERNAL)?;
+        session.audit("device", &format!("unpair peer={id} removed={removed}"));
         Ok(())
     };
     run().err().unwrap_or(OK)
@@ -758,9 +1171,14 @@ pub unsafe extern "C" fn vault_core_p2p_destroy_arm(
         let a = unsafe { cstr(addr) }?;
         let t = unsafe { cstr(target) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
-        engine
+        let v = engine
             .destroy_arm_remote(a, t, delay_secs)
-            .map_err(|_| ERR_IO)
+            .map_err(|_| ERR_IO)?;
+        session.audit(
+            "security",
+            &format!("destroy arm target={t} delay={delay_secs}s"),
+        );
+        Ok(v)
     };
     match run() {
         Ok(v) => json_out(v),
@@ -779,7 +1197,13 @@ pub unsafe extern "C" fn vault_core_p2p_destroy_cancel(handle: *mut Session) -> 
     }
     let session = unsafe { &*handle };
     match crate::p2p_service::p2p_engine(session) {
-        Ok(e) => i32::from(e.destroy_cancel()),
+        Ok(e) => {
+            let cancelled = e.destroy_cancel();
+            if cancelled {
+                session.audit("security", "destroy cancel");
+            }
+            i32::from(cancelled)
+        }
         Err(e) => map_err(&e),
     }
 }
@@ -804,6 +1228,13 @@ pub unsafe extern "C" fn vault_core_p2p_conflict_resolve(
             })
             .map_err(|e| map_err(&e))?;
         let _ = keep_id;
+        unsafe {
+            audit_op(
+                handle,
+                "vault",
+                &format!("conflict resolve keep={keep_id} drop={drop_id}"),
+            )
+        };
         Ok(())
     };
     run().err().unwrap_or(OK)

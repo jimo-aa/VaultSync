@@ -226,6 +226,11 @@ impl Vault {
         Ok(id)
     }
 
+    /// 文件名（隐写载荷需要随密文携带原文件名，供提取端还原）。
+    pub fn file_name(&self, file_id: u64) -> Result<String, &'static str> {
+        self.index.file_name(file_id)
+    }
+
     pub fn rename_file(&mut self, file_id: u64, name: &str) -> Result<(), &'static str> {
         self.index.rename_file(file_id, name)?;
         self.save_index()

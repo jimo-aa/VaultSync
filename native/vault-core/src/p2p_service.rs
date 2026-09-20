@@ -19,29 +19,9 @@ pub(crate) fn p2p_engine(session: &Session) -> Result<Arc<P2pEngine>, CoreError>
     let mk = *session.mk;
     let vault_path = session.vault_path.clone();
     let wipe_path = vault_path.clone();
-    let wipe: vault_p2p::engine::WipeFn = Box::new(move || {
-        // 远程销毁执行体：删保险箱头部 + 整个数据目录（docs/05-06 销毁语义）
-        let stem = wipe_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or("bad vault path")?;
-        let data_dir = wipe_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join(format!("{stem}.data"));
-        let mut errs = Vec::new();
-        if std::fs::remove_file(&wipe_path).is_err() && wipe_path.exists() {
-            errs.push("vault file");
-        }
-        if std::fs::remove_dir_all(&data_dir).is_err() && data_dir.exists() {
-            errs.push("data dir");
-        }
-        if errs.is_empty() {
-            Ok(())
-        } else {
-            Err(format!("wipe failed: {}", errs.join(", ")))
-        }
-    });
+    let wipe: vault_p2p::engine::WipeFn =
+        Box::new(move || crate::service::wipe_local(&wipe_path, false));
+
     let engine = match P2pEngine::new(
         &vault_path,
         &mk,

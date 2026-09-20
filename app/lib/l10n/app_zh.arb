@@ -107,6 +107,137 @@
       }
     }
   },
+  "@securityAuditExportFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditExportedTo": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditHead": {
+    "placeholders": {
+      "short": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditVerifyFailed": {
+    "placeholders": {
+      "at": {
+        "type": "int"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditVerifyOk": {
+    "placeholders": {
+      "checked": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDestroyAllConfirmBody": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDestroyConfirmInput": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDestroyExported": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDestroyFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDestroyPeersUndelivered": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectAuditBroken": {
+    "placeholders": {
+      "at": {
+        "type": "int"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDetectAuditOk": {
+    "placeholders": {
+      "checked": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectBruteCooldown": {
+    "placeholders": {
+      "m": {
+        "type": "int"
+      },
+      "s": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectDeviceOk": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectDeviceWarn": {
+    "placeholders": {
+      "event": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDetectSignalOk": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityStegoFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
   "@settingsMinutes": {
     "placeholders": {
       "n": {
@@ -124,6 +255,98 @@
   "@settingsVersionValue": {
     "placeholders": {
       "version": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageCapacityLine": {
+    "placeholders": {
+      "cap": {
+        "type": "String"
+      },
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageCapacityShort": {
+    "placeholders": {
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageEmbedDone": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageExtractDone": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageFileOption": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "size": {
+        "type": "String"
+      },
+      "folder": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPagePlainSize": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageSizeB": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@stegoPageSizeBytes": {
+    "placeholders": {
+      "bytes": {
+        "type": "int"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageSizeKb": {
+    "placeholders": {
+      "n": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageSizeMb": {
+    "placeholders": {
+      "n": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageToggleFailed": {
+    "placeholders": {
+      "err": {
         "type": "String"
       }
     }
@@ -562,6 +785,92 @@
   "navStego": "隐写术",
   "navSync": "同步",
   "navVault": "保险箱",
+  "securityAuditChainBroken": "链校验失败",
+  "securityAuditChainOk": "链校验通过",
+  "securityAuditEmpty": "暂无审计记录 · 解锁/导入/同步等操作会写入",
+  "securityAuditExport": "导出",
+  "securityAuditExportFailed": "审计导出失败：{err}",
+  "securityAuditExportedTo": "审计日志已加密导出到 {path}",
+  "securityAuditHead": "本机链头 {short}",
+  "securityAuditLoadFailed": "审计日志读取失败（引擎不可用或会话已失效）",
+  "securityAuditNote": "审计链按设备独立（每设备一条链，docs/05-06 §3.1），本页只显示本机链；未解锁时的失败尝试无法写入（日志密钥派生自 MK），故链上只有成功操作；日志为整体 AEAD 加密落盘，条目多时首次加载会略慢。",
+  "securityAuditTitle": "审计日志",
+  "securityAuditVerify": "校验审计链",
+  "securityAuditVerifyFailed": "审计链第 {at} 条起校验失败：{reason}",
+  "securityAuditVerifyOk": "审计链校验通过（{checked} 条）",
+  "securityAuditVerifyUnavailable": "未能读取审计链，校验未执行",
+  "securityBadgeGuarantee": "设计保证",
+  "securityCatDevice": "设备",
+  "securityCatSecurity": "安全",
+  "securityCatSession": "会话",
+  "securityCatVault": "保险箱",
+  "securityColAction": "动作 / 对象",
+  "securityColCategory": "类别",
+  "securityColHash": "链哈希",
+  "securityColSeq": "序号",
+  "securityColTime": "时间",
+  "securityDestroyAllConfirmBody": "引擎当前无离线指令队列，无法向离线设备投递销毁指令。确认后将只在本机执行加密擦除；已配对 {n} 台设备需各自在线时由对端设备页发起。",
+  "securityDestroyAllConfirmTitle": "确认全设备联动销毁",
+  "securityDestroyCancel": "取消",
+  "securityDestroyConfirm": "确认",
+  "securityDestroyConfirmInput": "输入「{word}」以确认",
+  "securityDestroyDialogSub": "不可撤销 · 需输入确认短语二次把关",
+  "securityDestroyDialogTitle": "紧急销毁",
+  "securityDestroyDone": "本机数据已加密擦除",
+  "securityDestroyEnter": "进入销毁流程",
+  "securityDestroyExportCancelled": "未选择导出路径，已取消销毁",
+  "securityDestroyExportFirst": "先导出审计日志",
+  "securityDestroyExportFirstSub": "数据目录连同审计日志会被一并销毁，勾选后先导出到所选路径",
+  "securityDestroyExported": "审计日志已导出到 {path}",
+  "securityDestroyFailed": "销毁失败：{err}",
+  "securityDestroyModeAll": "全设备联动销毁",
+  "securityDestroyModeAllSub": "签发签名指令，经 P2P / 中继传播至全部已配对设备",
+  "securityDestroyModeLocal": "本机销毁",
+  "securityDestroyModeLocalSub": "销毁本机 MK 与全部密钥槽，按介质兜底覆写",
+  "securityDestroyNote": "离线设备无法即时收到销毁指令：指令进入各设备的高优先级信令队列，目标设备下次上线时先于任何其它消息校验并执行（指令由发起方设备密钥签名，防伪造）。对「永不上线」的设备，销毁无法保证。",
+  "securityDestroyNow": "立即销毁",
+  "securityDestroyPeersHint": "需先让对端在线，并由对端设备页发起",
+  "securityDestroyPeersNone": "全设备联动：当前无已配对设备，仅本机执行加密擦除",
+  "securityDestroyPeersUndelivered": "全设备联动未完成投递：本机已擦除，{n} 台已配对设备需各自在线时由对端设备页发起销毁",
+  "securityDestroyPhrase": "销毁",
+  "securityDestroyRunning": "销毁中…",
+  "securityDestroySub": "本地 / 远程 / 全设备联动 · 加密擦除",
+  "securityDestroyTitle": "紧急销毁",
+  "securityDetectAudit": "审计链完整性",
+  "securityDetectAuditBroken": "第 {at} 条起校验失败：{reason}",
+  "securityDetectAuditOk": "正常 · {checked} / {total} 条校验通过",
+  "securityDetectAuditUnknown": "未能读取审计链 · 无法校验",
+  "securityDetectBrute": "暴力破解检测",
+  "securityDetectBruteCooldown": "冷却中 · 剩余 {m} 分 {s} 秒",
+  "securityDetectBruteOk": "正常 · 当前无冷却",
+  "securityDetectDevice": "异常设备",
+  "securityDetectDeviceNone": "尚无已配对设备",
+  "securityDetectDeviceOk": "已配对 {n} 台 · 无未授权访问记录",
+  "securityDetectDeviceWarn": "注意 · {event}",
+  "securityDetectIntegrity": "文件完整性",
+  "securityDetectIntegritySub": "随导出/同步逐块 GCM 校验 · 认证失败即拒绝",
+  "securityDetectMemory": "内存泄漏扫描",
+  "securityDetectMemorySub": "密钥与明文缓冲全链路 Zeroizing · MK 不出引擎",
+  "securityDetectSignal": "信令防重放",
+  "securityDetectSignalDown": "引擎已停止 · 无法确认信令序号连续性",
+  "securityDetectSignalOk": "Noise 信道 + 应用层单调序号（docs/08 §4.1）· 本机引擎存活 · 信令事件 {n} 条",
+  "securityDetectSignalUnknown": "未取得 P2P 状态 · 无法判定",
+  "securityFilterAll": "全部",
+  "securityNeedUnlock": "请先解锁保险箱",
+  "securityOverallDanger": "整体状态：异常",
+  "securityOverallOk": "整体状态：正常",
+  "securityOverallWarn": "整体状态：注意",
+  "securityRefresh": "刷新",
+  "securityStegoDisable": "停用",
+  "securityStegoDisabled": "隐写术引擎已停用",
+  "securityStegoEnable": "启用",
+  "securityStegoEnabled": "隐写术引擎已启用",
+  "securityStegoFailed": "隐写术引擎设置失败：{err}",
+  "securityStegoSubOff": "默认隐藏 · 图片 LSB 隐蔽存储 · 启用/停用均记审计",
+  "securityStegoSubOn": "已启用 · 图片 LSB 隐蔽存储 · 启用/停用均记审计",
+  "securityStegoTitle": "隐写术引擎",
+  "securitySub": "审计 · 检测 · 应急响应",
+  "securityTitle": "安全中心",
   "settingsAbout": "关于",
   "settingsAboutSub": "版本与设计文档",
   "settingsAppearance": "外观与语言",
@@ -674,6 +983,61 @@
   "stateSyncFailed": "同步失败",
   "stateSyncRelayFailed": "中继同步失败",
   "stateUnknownDevice": "未知设备",
+  "stegoPageCancel": "取消",
+  "stegoPageCapacityCard": "容量参考",
+  "stegoPageCapacityFormat": "不支持该图片：隐写仅接受 8 位 RGB / RGBA 的 PNG（有损压缩会破坏 LSB）",
+  "stegoPageCapacityFormula": "容量公式：宽 × 高 × 3 ÷ 8 − 4（4 字节为载荷长度前缀）",
+  "stegoPageCapacityIo": "图片读取失败：文件不存在或不可读",
+  "stegoPageCapacityLimit": "单图容量有限：更大文件需分割嵌入多张图片（docs/05-05 §3.2）。",
+  "stegoPageCapacityLine": "容量 {cap} / 需要 {need}",
+  "stegoPageCapacityShort": "容量不足：还差 {need}，请更换更大的图片（或分割嵌入多张图片）。",
+  "stegoPageDisable": "停用",
+  "stegoPageDisableDone": "隐写引擎已停用",
+  "stegoPageDisabled": "未启用",
+  "stegoPageDisabledNote": "隐写引擎默认关闭：启用后「嵌入 / 提取」才会被引擎接受；启用与停用都会写入审计链（docs/05-06 §七）。",
+  "stegoPageEmbedAction": "嵌入",
+  "stegoPageEmbedDone": "已嵌入 → {path}",
+  "stegoPageEmbedNote": "载荷 = AEAD(长度前缀 ‖ 文件名 ‖ 明文) 的密文：4 字节长度前缀与 AEAD 开销（12 字节 nonce + 16 字节 tag）同样占用容量。",
+  "stegoPageEmbedSub": "保险箱文件 → AES-256-GCM 密文 → 写入 PNG LSB",
+  "stegoPageEmbedTitle": "隐写导入（嵌入）",
+  "stegoPageEmbedding": "嵌入中…",
+  "stegoPageEnable": "启用隐写引擎",
+  "stegoPageEnableDone": "隐写引擎已启用",
+  "stegoPageEnabled": "已启用",
+  "stegoPageEnabledNote": "载荷是「先加密、再嵌入」：图片 LSB 里只有 AES-256-GCM 密文，密钥由本机 MK 经 HKDF 派生——提取必须持有同一保险箱的主密钥，因此这是本机隐蔽辅助，不是跨设备传输通道。",
+  "stegoPageExtractAction": "提取",
+  "stegoPageExtractDone": "已还原 {name}（{size}）",
+  "stegoPageExtractFailed": "提取失败：图片中不含有效载荷、不是 8 位 RGB/RGBA PNG，或该载荷不属于当前保险箱（主密钥不匹配）。",
+  "stegoPageExtractNote": "提取只在同一保险箱内有效：载荷密钥派生自本机 MK，换库 / 换设备无法解密。",
+  "stegoPageExtractSub": "PNG LSB → 密文帧 → AES-256-GCM 解密",
+  "stegoPageExtractTitle": "隐写提取（取出）",
+  "stegoPageExtracting": "提取中…",
+  "stegoPageFileEmpty": "保险箱内没有可选文件（请先导入文件）",
+  "stegoPageFileLoading": "正在读取保险箱文件…",
+  "stegoPageFileOption": "{name} · {size} · {folder}",
+  "stegoPageFileRoot": "根目录",
+  "stegoPageNeedUnlock": "会话未解锁，无法执行隐写操作",
+  "stegoPageNotChosen": "未选择",
+  "stegoPagePickFile": "保险箱文件",
+  "stegoPagePickFileHint": "选择要嵌入的文件",
+  "stegoPagePickImage": "选择 PNG 图片",
+  "stegoPagePickOutput": "选择输出位置",
+  "stegoPagePickRestore": "选择还原位置",
+  "stegoPagePickStegoImage": "选择携带数据的 PNG",
+  "stegoPagePlainSize": "明文体量 ≈ {size}",
+  "stegoPageSafetyNote": "隐写是隐蔽辅助，不替代主保险箱；有损压缩（JPG）会破坏 LSB，请使用 PNG。",
+  "stegoPageSizeB": "{n} B",
+  "stegoPageSizeBytes": "{bytes} 字节 ≈ {size}",
+  "stegoPageSizeKb": "{n} KB",
+  "stegoPageSizeMb": "{n} MB",
+  "stegoPageSub": "加密之上的隐蔽 · AES-256-GCM 密文嵌入图片 LSB",
+  "stegoPageTileEmbed": "隐写导入（嵌入）",
+  "stegoPageTileEmbedSub": "将保险箱中已加密的文件嵌入普通图片，图片外观无可见变化。",
+  "stegoPageTileExtract": "隐写提取（取出）",
+  "stegoPageTileExtractSub": "从携带隐藏数据的图片中提取密文帧，解密还原原始文件。",
+  "stegoPageTileLocked": "需先启用隐写引擎",
+  "stegoPageTitle": "隐写术引擎",
+  "stegoPageToggleFailed": "操作失败：{err}",
   "syncPageAddrHint": "host:port，如 192.168.1.10:9100",
   "syncPageCancel": "取消",
   "syncPageChunkDetails": "分块详情",

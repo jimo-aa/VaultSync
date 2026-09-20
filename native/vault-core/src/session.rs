@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
+use vault_audit::AuditLog;
 use vault_crypto::KEY_LEN;
 use vault_vault::vault::Vault;
 
@@ -19,6 +20,11 @@ pub struct Session {
     pub(crate) vault: Arc<Mutex<Option<Vault>>>,
     /// P2P 同步引擎（P3，按会话惰性创建；锁定即随会话销毁）。
     pub(crate) p2p: Mutex<Option<std::sync::Arc<vault_p2p::P2pEngine>>>,
+    /// 链式哈希审计日志（P5-1，docs/05-06 §三）。密钥派生自 MK，随会话惰性打开、随会话销毁。
+    pub(crate) audit: Mutex<Option<AuditLog>>,
+    /// 隐写引擎开关（P5-3，docs/05-06 §七：默认关闭，启用/停用均记审计）。
+    /// 会话级内存标志：每次解锁后由 UI 从设置同步过来（引擎不读 UI 配置）。
+    pub(crate) stego_enabled: std::sync::atomic::AtomicBool,
 }
 
 impl Session {
@@ -40,6 +46,68 @@ impl Session {
             None => return Err(crate::service::CoreError::Internal("vault init invariant")),
         };
         f(v)
+    }
+
+    /// 保险箱数据目录（`<parent>/<stem>.data`，与 vault-vault 的布局约定一致）。
+    pub(crate) fn data_dir(&self) -> PathBuf {
+        let stem = self
+            .vault_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("vault");
+        self.vault_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!("{stem}.data"))
+    }
+
+    /// 追加一条审计条目（docs/05-06 §3.2 的记录范围）。
+    ///
+    /// 失败**不阻断业务**：审计是事后取证，若因审计文件损坏而拒绝解锁/导入，
+    /// 等于把用户锁在自己的数据之外（决策与理由见 LOG）。失败打印到 stderr。
+    pub(crate) fn audit(&self, kind: &str, detail: &str) {
+        let mut guard = self.audit.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            match AuditLog::open(&self.data_dir(), &self.mk) {
+                Ok(log) => *guard = Some(log),
+                Err(e) => {
+                    eprintln!("vsync audit open failed: {e}");
+                    return;
+                }
+            }
+        }
+        if let Some(log) = guard.as_mut() {
+            if let Err(e) = log.append(kind, detail) {
+                eprintln!("vsync audit append failed: {e}");
+            }
+        }
+    }
+
+    /// 只读借出审计日志（列表 / 校验 / 导出）。打不开时返回 None。
+    pub(crate) fn with_audit<T>(&self, f: impl FnOnce(&AuditLog) -> T) -> Option<T> {
+        let mut guard = self.audit.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            match AuditLog::open(&self.data_dir(), &self.mk) {
+                Ok(log) => *guard = Some(log),
+                Err(e) => {
+                    eprintln!("vsync audit open failed: {e}");
+                    return None;
+                }
+            }
+        }
+        guard.as_ref().map(f)
+    }
+
+    /// 隐写载荷密钥（P5-3）：隐写层自己的 AEAD 密钥，
+    /// 与容器密钥/索引密钥分离（docs/05-05「加密先行」——隐写载荷本身即密文）。
+    pub(crate) fn stego_key(&self) -> [u8; KEY_LEN] {
+        *vault_crypto::kdf::hkdf_sha256_derive(self.mk.as_slice(), b"stego-payload")
+    }
+
+    /// 导出密钥（docs/05-06 §3.3：专用导出密钥，不等于索引/块密钥）。
+    pub(crate) fn audit_export_key(&self) -> [u8; KEY_LEN] {
+        let k = vault_crypto::kdf::hkdf_sha256_derive(self.mk.as_slice(), b"audit-export");
+        *k
     }
 }
 

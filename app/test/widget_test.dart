@@ -197,6 +197,39 @@ class FakeEngine implements VaultEngine {
           Object sessionHandle, int fileId, int ttlSecs, int maxOpens) =>
       Future.value(null);
 
+
+  @override
+  Future<Map<String, dynamic>?> auditList(Object sessionHandle) => Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> auditVerify(Object sessionHandle) => Future.value(null);
+
+  @override
+  Future<String?> auditExport(Object sessionHandle, String dest) => Future.value(null);
+
+  @override
+  Future<String?> destroyLocal(Object sessionHandle, {bool secure = true}) =>
+      Future.value(null);
+
+  @override
+  Future<bool> stegoEnabled(Object sessionHandle) => Future.value(false);
+
+  @override
+  Future<String?> stegoSetEnabled(Object sessionHandle, bool on) => Future.value(null);
+
+  @override
+  Future<int> stegoCapacity(Object sessionHandle, String imagePath) => Future.value(0);
+
+  @override
+  Future<String?> stegoEmbed(
+          Object sessionHandle, int fileId, String imagePath, String outPath) =>
+      Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> stegoExtract(
+          Object sessionHandle, String imagePath, String destPath) =>
+      Future.value(null);
+
   @override
   Future<String?> shareOpen(
           Object sessionHandle, int shareId, String token, String dest) =>

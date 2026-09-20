@@ -107,6 +107,137 @@
       }
     }
   },
+  "@securityAuditExportFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditExportedTo": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditHead": {
+    "placeholders": {
+      "short": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditVerifyFailed": {
+    "placeholders": {
+      "at": {
+        "type": "int"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityAuditVerifyOk": {
+    "placeholders": {
+      "checked": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDestroyAllConfirmBody": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDestroyConfirmInput": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDestroyExported": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDestroyFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDestroyPeersUndelivered": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectAuditBroken": {
+    "placeholders": {
+      "at": {
+        "type": "int"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDetectAuditOk": {
+    "placeholders": {
+      "checked": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectBruteCooldown": {
+    "placeholders": {
+      "m": {
+        "type": "int"
+      },
+      "s": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectDeviceOk": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityDetectDeviceWarn": {
+    "placeholders": {
+      "event": {
+        "type": "String"
+      }
+    }
+  },
+  "@securityDetectSignalOk": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@securityStegoFailed": {
+    "placeholders": {
+      "err": {
+        "type": "String"
+      }
+    }
+  },
   "@settingsMinutes": {
     "placeholders": {
       "n": {
@@ -124,6 +255,98 @@
   "@settingsVersionValue": {
     "placeholders": {
       "version": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageCapacityLine": {
+    "placeholders": {
+      "cap": {
+        "type": "String"
+      },
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageCapacityShort": {
+    "placeholders": {
+      "need": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageEmbedDone": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageExtractDone": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageFileOption": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "size": {
+        "type": "String"
+      },
+      "folder": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPagePlainSize": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageSizeB": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@stegoPageSizeBytes": {
+    "placeholders": {
+      "bytes": {
+        "type": "int"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageSizeKb": {
+    "placeholders": {
+      "n": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageSizeMb": {
+    "placeholders": {
+      "n": {
+        "type": "String"
+      }
+    }
+  },
+  "@stegoPageToggleFailed": {
+    "placeholders": {
+      "err": {
         "type": "String"
       }
     }
@@ -562,6 +785,92 @@
   "navStego": "Stego",
   "navSync": "Sync",
   "navVault": "Vault",
+  "securityAuditChainBroken": "Chain check failed",
+  "securityAuditChainOk": "Chain verified",
+  "securityAuditEmpty": "No audit records yet · unlock/import/sync operations are recorded here",
+  "securityAuditExport": "Export",
+  "securityAuditExportFailed": "Audit export failed: {err}",
+  "securityAuditExportedTo": "Audit log encrypted and exported to {path}",
+  "securityAuditHead": "Local chain head {short}",
+  "securityAuditLoadFailed": "Failed to read the audit log (engine unavailable or session expired)",
+  "securityAuditNote": "The audit chain is per device (one chain each, docs/05-06 §3.1); this page shows the local chain only. Failed attempts while locked cannot be written (the log key is derived from the MK), so the chain holds successful operations only. The log is sealed as a whole with AEAD, so the first load of a long log takes a moment.",
+  "securityAuditTitle": "Audit log",
+  "securityAuditVerify": "Verify chain",
+  "securityAuditVerifyFailed": "Audit chain verification failed from entry {at}: {reason}",
+  "securityAuditVerifyOk": "Audit chain verified ({checked} entries)",
+  "securityAuditVerifyUnavailable": "Audit chain unreadable; verification was not run",
+  "securityBadgeGuarantee": "By design",
+  "securityCatDevice": "Device",
+  "securityCatSecurity": "Security",
+  "securityCatSession": "Session",
+  "securityCatVault": "Vault",
+  "securityColAction": "Action / object",
+  "securityColCategory": "Category",
+  "securityColHash": "Chain hash",
+  "securityColSeq": "Seq",
+  "securityColTime": "Time",
+  "securityDestroyAllConfirmBody": "The engine has no offline command queue, so a destroy command cannot be delivered to offline devices. Confirming wipes this device only; the {n} paired device(s) must each be wiped from their own device page while online.",
+  "securityDestroyAllConfirmTitle": "Confirm fleet-wide wipe",
+  "securityDestroyCancel": "Cancel",
+  "securityDestroyConfirm": "Confirm",
+  "securityDestroyConfirmInput": "Type \"{word}\" to confirm",
+  "securityDestroyDialogSub": "Irreversible · confirmation phrase required",
+  "securityDestroyDialogTitle": "Emergency wipe",
+  "securityDestroyDone": "Local data cryptographically erased",
+  "securityDestroyEnter": "Proceed to wipe",
+  "securityDestroyExportCancelled": "No export path selected; wipe cancelled",
+  "securityDestroyExportFirst": "Export the audit log first",
+  "securityDestroyExportFirstSub": "The data directory is wiped together with the audit log; export it to a chosen path first",
+  "securityDestroyExported": "Audit log exported to {path}",
+  "securityDestroyFailed": "Wipe failed: {err}",
+  "securityDestroyModeAll": "Fleet-wide wipe",
+  "securityDestroyModeAllSub": "Signs a destroy command and propagates it to every paired device over P2P / relay",
+  "securityDestroyModeLocal": "Wipe this device",
+  "securityDestroyModeLocalSub": "Destroys the local MK and every key slot, with media fallback overwrite",
+  "securityDestroyNote": "Offline devices do not receive the destroy command immediately: it enters each device's high-priority signalling queue, and the target verifies and executes it before any other message once it comes online (signed by the initiating device key, so it cannot be forged). For a device that never comes online, the wipe cannot be guaranteed.",
+  "securityDestroyNow": "Wipe now",
+  "securityDestroyPeersHint": "Bring the peer online first, then start the wipe from that device's page",
+  "securityDestroyPeersNone": "Fleet-wide wipe: no paired devices, only this device was erased",
+  "securityDestroyPeersUndelivered": "Fleet-wide wipe not delivered: this device is erased, {n} paired device(s) must be wiped from their own device page while online",
+  "securityDestroyPhrase": "destroy",
+  "securityDestroyRunning": "Wiping…",
+  "securityDestroySub": "Local / remote / fleet-wide · cryptographic erase",
+  "securityDestroyTitle": "Emergency wipe",
+  "securityDetectAudit": "Audit chain integrity",
+  "securityDetectAuditBroken": "Verification failed from entry {at}: {reason}",
+  "securityDetectAuditOk": "Normal · {checked} / {total} entries verified",
+  "securityDetectAuditUnknown": "Audit chain unreadable · cannot verify",
+  "securityDetectBrute": "Brute-force detection",
+  "securityDetectBruteCooldown": "Cooling down · {m} min {s} s remaining",
+  "securityDetectBruteOk": "Normal · no active cooldown",
+  "securityDetectDevice": "Unexpected devices",
+  "securityDetectDeviceNone": "No paired devices yet",
+  "securityDetectDeviceOk": "{n} device(s) paired · no unauthorized access recorded",
+  "securityDetectDeviceWarn": "Attention · {event}",
+  "securityDetectIntegrity": "File integrity",
+  "securityDetectIntegritySub": "Per-chunk GCM authentication on every export and sync · rejected on failure",
+  "securityDetectMemory": "Memory leak scan",
+  "securityDetectMemorySub": "Keys and plaintext buffers are Zeroizing end to end · the MK never leaves the engine",
+  "securityDetectSignal": "Anti-replay signalling",
+  "securityDetectSignalDown": "Engine stopped · signal sequence continuity unverified",
+  "securityDetectSignalOk": "Noise channel + monotonic application sequence numbers (docs/08 §4.1) · local engine alive · {n} signalling event(s)",
+  "securityDetectSignalUnknown": "P2P status unavailable · cannot determine",
+  "securityFilterAll": "All",
+  "securityNeedUnlock": "Unlock the vault first",
+  "securityOverallDanger": "Overall: critical",
+  "securityOverallOk": "Overall: normal",
+  "securityOverallWarn": "Overall: attention",
+  "securityRefresh": "Refresh",
+  "securityStegoDisable": "Disable",
+  "securityStegoDisabled": "Steganography engine disabled",
+  "securityStegoEnable": "Enable",
+  "securityStegoEnabled": "Steganography engine enabled",
+  "securityStegoFailed": "Failed to change the steganography engine: {err}",
+  "securityStegoSubOff": "Hidden by default · covert storage in image LSBs · enable/disable is audited",
+  "securityStegoSubOn": "Enabled · covert storage in image LSBs · enable/disable is audited",
+  "securityStegoTitle": "Steganography engine",
+  "securitySub": "Audit · Detection · Incident response",
+  "securityTitle": "Security Center",
   "settingsAbout": "About",
   "settingsAboutSub": "Version and design docs",
   "settingsAppearance": "Appearance & language",
@@ -674,6 +983,61 @@
   "stateSyncFailed": "Sync failed",
   "stateSyncRelayFailed": "Relay sync failed",
   "stateUnknownDevice": "Unknown device",
+  "stegoPageCancel": "Cancel",
+  "stegoPageCapacityCard": "Capacity reference",
+  "stegoPageCapacityFormat": "Unsupported image: the stego engine accepts 8-bit RGB / RGBA PNG only (lossy compression destroys LSBs)",
+  "stegoPageCapacityFormula": "Capacity = width × height × 3 ÷ 8 − 4 (the 4 bytes are the payload length prefix)",
+  "stegoPageCapacityIo": "Could not read the image: the file is missing or unreadable",
+  "stegoPageCapacityLimit": "One image holds little: larger files must be split across several images (docs/05-05 §3.2).",
+  "stegoPageCapacityLine": "Capacity {cap} / needed {need}",
+  "stegoPageCapacityShort": "Not enough capacity: {need} short — use a larger image (or split across several images).",
+  "stegoPageDisable": "Disable",
+  "stegoPageDisableDone": "Stego engine disabled",
+  "stegoPageDisabled": "Disabled",
+  "stegoPageDisabledNote": "The stego engine is off by default: embed / extract are only accepted once it is enabled, and both enabling and disabling are written to the audit chain (docs/05-06 §7).",
+  "stegoPageEmbedAction": "Embed",
+  "stegoPageEmbedDone": "Embedded → {path}",
+  "stegoPageEmbedNote": "Payload = AEAD ciphertext of [length prefix ‖ file name ‖ plaintext]: the 4-byte length prefix and the AEAD overhead (12-byte nonce + 16-byte tag) also count against capacity.",
+  "stegoPageEmbedSub": "Vault file → AES-256-GCM ciphertext → PNG LSB",
+  "stegoPageEmbedTitle": "Stego import (embed)",
+  "stegoPageEmbedding": "Embedding…",
+  "stegoPageEnable": "Enable stego engine",
+  "stegoPageEnableDone": "Stego engine enabled",
+  "stegoPageEnabled": "Enabled",
+  "stegoPageEnabledNote": "The payload is encrypted first, then embedded: the image LSBs hold nothing but AES-256-GCM ciphertext under a key derived from this vault's MK via HKDF — extraction needs that same master key, so this is a local concealment aid, not a cross-device channel.",
+  "stegoPageExtractAction": "Extract",
+  "stegoPageExtractDone": "Restored {name} ({size})",
+  "stegoPageExtractFailed": "Extraction failed: the image holds no valid payload, is not an 8-bit RGB/RGBA PNG, or the payload belongs to another vault (master key mismatch).",
+  "stegoPageExtractNote": "Extraction only works inside the same vault: the payload key is derived from this machine's MK, so another vault or device cannot decrypt it.",
+  "stegoPageExtractSub": "PNG LSB → ciphertext frame → AES-256-GCM decrypt",
+  "stegoPageExtractTitle": "Stego extract (retrieve)",
+  "stegoPageExtracting": "Extracting…",
+  "stegoPageFileEmpty": "No files in the vault (import one first)",
+  "stegoPageFileLoading": "Reading vault files…",
+  "stegoPageFileOption": "{name} · {size} · {folder}",
+  "stegoPageFileRoot": "Root",
+  "stegoPageNeedUnlock": "Session is locked; stego operations are unavailable",
+  "stegoPageNotChosen": "Not chosen",
+  "stegoPagePickFile": "Vault file",
+  "stegoPagePickFileHint": "Choose the file to embed",
+  "stegoPagePickImage": "Choose PNG image",
+  "stegoPagePickOutput": "Choose output location",
+  "stegoPagePickRestore": "Choose restore location",
+  "stegoPagePickStegoImage": "Choose PNG carrying data",
+  "stegoPagePlainSize": "Plaintext size ≈ {size}",
+  "stegoPageSafetyNote": "Steganography is a concealment aid, not a replacement for the main vault; lossy compression (JPG) destroys LSBs, so use PNG.",
+  "stegoPageSizeB": "{n} B",
+  "stegoPageSizeBytes": "{bytes} bytes ≈ {size}",
+  "stegoPageSizeKb": "{n} KB",
+  "stegoPageSizeMb": "{n} MB",
+  "stegoPageSub": "Concealment on top of encryption · AES-256-GCM ciphertext in image LSBs",
+  "stegoPageTileEmbed": "Stego import (embed)",
+  "stegoPageTileEmbedSub": "Embed an already-encrypted vault file into an ordinary image; the image looks unchanged.",
+  "stegoPageTileExtract": "Stego extract (retrieve)",
+  "stegoPageTileExtractSub": "Pull the ciphertext frame out of an image and decrypt the original file.",
+  "stegoPageTileLocked": "Enable the stego engine first",
+  "stegoPageTitle": "Steganography Engine",
+  "stegoPageToggleFailed": "Operation failed: {err}",
   "syncPageAddrHint": "host:port, e.g. 192.168.1.10:9100",
   "syncPageCancel": "Cancel",
   "syncPageChunkDetails": "Chunk details",

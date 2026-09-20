@@ -914,6 +914,522 @@ abstract class AppLocalizations {
   /// **'保险箱'**
   String get navVault;
 
+  /// No description provided for @securityAuditChainBroken.
+  ///
+  /// In zh, this message translates to:
+  /// **'链校验失败'**
+  String get securityAuditChainBroken;
+
+  /// No description provided for @securityAuditChainOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'链校验通过'**
+  String get securityAuditChainOk;
+
+  /// No description provided for @securityAuditEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'暂无审计记录 · 解锁/导入/同步等操作会写入'**
+  String get securityAuditEmpty;
+
+  /// No description provided for @securityAuditExport.
+  ///
+  /// In zh, this message translates to:
+  /// **'导出'**
+  String get securityAuditExport;
+
+  /// No description provided for @securityAuditExportFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计导出失败：{err}'**
+  String securityAuditExportFailed(String err);
+
+  /// No description provided for @securityAuditExportedTo.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计日志已加密导出到 {path}'**
+  String securityAuditExportedTo(String path);
+
+  /// No description provided for @securityAuditHead.
+  ///
+  /// In zh, this message translates to:
+  /// **'本机链头 {short}'**
+  String securityAuditHead(String short);
+
+  /// No description provided for @securityAuditLoadFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计日志读取失败（引擎不可用或会话已失效）'**
+  String get securityAuditLoadFailed;
+
+  /// No description provided for @securityAuditNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计链按设备独立（每设备一条链，docs/05-06 §3.1），本页只显示本机链；未解锁时的失败尝试无法写入（日志密钥派生自 MK），故链上只有成功操作；日志为整体 AEAD 加密落盘，条目多时首次加载会略慢。'**
+  String get securityAuditNote;
+
+  /// No description provided for @securityAuditTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计日志'**
+  String get securityAuditTitle;
+
+  /// No description provided for @securityAuditVerify.
+  ///
+  /// In zh, this message translates to:
+  /// **'校验审计链'**
+  String get securityAuditVerify;
+
+  /// No description provided for @securityAuditVerifyFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计链第 {at} 条起校验失败：{reason}'**
+  String securityAuditVerifyFailed(int at, String reason);
+
+  /// No description provided for @securityAuditVerifyOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计链校验通过（{checked} 条）'**
+  String securityAuditVerifyOk(int checked);
+
+  /// No description provided for @securityAuditVerifyUnavailable.
+  ///
+  /// In zh, this message translates to:
+  /// **'未能读取审计链，校验未执行'**
+  String get securityAuditVerifyUnavailable;
+
+  /// No description provided for @securityBadgeGuarantee.
+  ///
+  /// In zh, this message translates to:
+  /// **'设计保证'**
+  String get securityBadgeGuarantee;
+
+  /// No description provided for @securityCatDevice.
+  ///
+  /// In zh, this message translates to:
+  /// **'设备'**
+  String get securityCatDevice;
+
+  /// No description provided for @securityCatSecurity.
+  ///
+  /// In zh, this message translates to:
+  /// **'安全'**
+  String get securityCatSecurity;
+
+  /// No description provided for @securityCatSession.
+  ///
+  /// In zh, this message translates to:
+  /// **'会话'**
+  String get securityCatSession;
+
+  /// No description provided for @securityCatVault.
+  ///
+  /// In zh, this message translates to:
+  /// **'保险箱'**
+  String get securityCatVault;
+
+  /// No description provided for @securityColAction.
+  ///
+  /// In zh, this message translates to:
+  /// **'动作 / 对象'**
+  String get securityColAction;
+
+  /// No description provided for @securityColCategory.
+  ///
+  /// In zh, this message translates to:
+  /// **'类别'**
+  String get securityColCategory;
+
+  /// No description provided for @securityColHash.
+  ///
+  /// In zh, this message translates to:
+  /// **'链哈希'**
+  String get securityColHash;
+
+  /// No description provided for @securityColSeq.
+  ///
+  /// In zh, this message translates to:
+  /// **'序号'**
+  String get securityColSeq;
+
+  /// No description provided for @securityColTime.
+  ///
+  /// In zh, this message translates to:
+  /// **'时间'**
+  String get securityColTime;
+
+  /// No description provided for @securityDestroyAllConfirmBody.
+  ///
+  /// In zh, this message translates to:
+  /// **'引擎当前无离线指令队列，无法向离线设备投递销毁指令。确认后将只在本机执行加密擦除；已配对 {n} 台设备需各自在线时由对端设备页发起。'**
+  String securityDestroyAllConfirmBody(int n);
+
+  /// No description provided for @securityDestroyAllConfirmTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'确认全设备联动销毁'**
+  String get securityDestroyAllConfirmTitle;
+
+  /// No description provided for @securityDestroyCancel.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消'**
+  String get securityDestroyCancel;
+
+  /// No description provided for @securityDestroyConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确认'**
+  String get securityDestroyConfirm;
+
+  /// No description provided for @securityDestroyConfirmInput.
+  ///
+  /// In zh, this message translates to:
+  /// **'输入「{word}」以确认'**
+  String securityDestroyConfirmInput(String word);
+
+  /// No description provided for @securityDestroyDialogSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'不可撤销 · 需输入确认短语二次把关'**
+  String get securityDestroyDialogSub;
+
+  /// No description provided for @securityDestroyDialogTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'紧急销毁'**
+  String get securityDestroyDialogTitle;
+
+  /// No description provided for @securityDestroyDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'本机数据已加密擦除'**
+  String get securityDestroyDone;
+
+  /// No description provided for @securityDestroyEnter.
+  ///
+  /// In zh, this message translates to:
+  /// **'进入销毁流程'**
+  String get securityDestroyEnter;
+
+  /// No description provided for @securityDestroyExportCancelled.
+  ///
+  /// In zh, this message translates to:
+  /// **'未选择导出路径，已取消销毁'**
+  String get securityDestroyExportCancelled;
+
+  /// No description provided for @securityDestroyExportFirst.
+  ///
+  /// In zh, this message translates to:
+  /// **'先导出审计日志'**
+  String get securityDestroyExportFirst;
+
+  /// No description provided for @securityDestroyExportFirstSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据目录连同审计日志会被一并销毁，勾选后先导出到所选路径'**
+  String get securityDestroyExportFirstSub;
+
+  /// No description provided for @securityDestroyExported.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计日志已导出到 {path}'**
+  String securityDestroyExported(String path);
+
+  /// No description provided for @securityDestroyFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'销毁失败：{err}'**
+  String securityDestroyFailed(String err);
+
+  /// No description provided for @securityDestroyModeAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'全设备联动销毁'**
+  String get securityDestroyModeAll;
+
+  /// No description provided for @securityDestroyModeAllSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'签发签名指令，经 P2P / 中继传播至全部已配对设备'**
+  String get securityDestroyModeAllSub;
+
+  /// No description provided for @securityDestroyModeLocal.
+  ///
+  /// In zh, this message translates to:
+  /// **'本机销毁'**
+  String get securityDestroyModeLocal;
+
+  /// No description provided for @securityDestroyModeLocalSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'销毁本机 MK 与全部密钥槽，按介质兜底覆写'**
+  String get securityDestroyModeLocalSub;
+
+  /// No description provided for @securityDestroyNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'离线设备无法即时收到销毁指令：指令进入各设备的高优先级信令队列，目标设备下次上线时先于任何其它消息校验并执行（指令由发起方设备密钥签名，防伪造）。对「永不上线」的设备，销毁无法保证。'**
+  String get securityDestroyNote;
+
+  /// No description provided for @securityDestroyNow.
+  ///
+  /// In zh, this message translates to:
+  /// **'立即销毁'**
+  String get securityDestroyNow;
+
+  /// No description provided for @securityDestroyPeersHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'需先让对端在线，并由对端设备页发起'**
+  String get securityDestroyPeersHint;
+
+  /// No description provided for @securityDestroyPeersNone.
+  ///
+  /// In zh, this message translates to:
+  /// **'全设备联动：当前无已配对设备，仅本机执行加密擦除'**
+  String get securityDestroyPeersNone;
+
+  /// No description provided for @securityDestroyPeersUndelivered.
+  ///
+  /// In zh, this message translates to:
+  /// **'全设备联动未完成投递：本机已擦除，{n} 台已配对设备需各自在线时由对端设备页发起销毁'**
+  String securityDestroyPeersUndelivered(int n);
+
+  /// No description provided for @securityDestroyPhrase.
+  ///
+  /// In zh, this message translates to:
+  /// **'销毁'**
+  String get securityDestroyPhrase;
+
+  /// No description provided for @securityDestroyRunning.
+  ///
+  /// In zh, this message translates to:
+  /// **'销毁中…'**
+  String get securityDestroyRunning;
+
+  /// No description provided for @securityDestroySub.
+  ///
+  /// In zh, this message translates to:
+  /// **'本地 / 远程 / 全设备联动 · 加密擦除'**
+  String get securityDestroySub;
+
+  /// No description provided for @securityDestroyTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'紧急销毁'**
+  String get securityDestroyTitle;
+
+  /// No description provided for @securityDetectAudit.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计链完整性'**
+  String get securityDetectAudit;
+
+  /// No description provided for @securityDetectAuditBroken.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {at} 条起校验失败：{reason}'**
+  String securityDetectAuditBroken(int at, String reason);
+
+  /// No description provided for @securityDetectAuditOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'正常 · {checked} / {total} 条校验通过'**
+  String securityDetectAuditOk(int checked, int total);
+
+  /// No description provided for @securityDetectAuditUnknown.
+  ///
+  /// In zh, this message translates to:
+  /// **'未能读取审计链 · 无法校验'**
+  String get securityDetectAuditUnknown;
+
+  /// No description provided for @securityDetectBrute.
+  ///
+  /// In zh, this message translates to:
+  /// **'暴力破解检测'**
+  String get securityDetectBrute;
+
+  /// No description provided for @securityDetectBruteCooldown.
+  ///
+  /// In zh, this message translates to:
+  /// **'冷却中 · 剩余 {m} 分 {s} 秒'**
+  String securityDetectBruteCooldown(int m, int s);
+
+  /// No description provided for @securityDetectBruteOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'正常 · 当前无冷却'**
+  String get securityDetectBruteOk;
+
+  /// No description provided for @securityDetectDevice.
+  ///
+  /// In zh, this message translates to:
+  /// **'异常设备'**
+  String get securityDetectDevice;
+
+  /// No description provided for @securityDetectDeviceNone.
+  ///
+  /// In zh, this message translates to:
+  /// **'尚无已配对设备'**
+  String get securityDetectDeviceNone;
+
+  /// No description provided for @securityDetectDeviceOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'已配对 {n} 台 · 无未授权访问记录'**
+  String securityDetectDeviceOk(int n);
+
+  /// No description provided for @securityDetectDeviceWarn.
+  ///
+  /// In zh, this message translates to:
+  /// **'注意 · {event}'**
+  String securityDetectDeviceWarn(String event);
+
+  /// No description provided for @securityDetectIntegrity.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件完整性'**
+  String get securityDetectIntegrity;
+
+  /// No description provided for @securityDetectIntegritySub.
+  ///
+  /// In zh, this message translates to:
+  /// **'随导出/同步逐块 GCM 校验 · 认证失败即拒绝'**
+  String get securityDetectIntegritySub;
+
+  /// No description provided for @securityDetectMemory.
+  ///
+  /// In zh, this message translates to:
+  /// **'内存泄漏扫描'**
+  String get securityDetectMemory;
+
+  /// No description provided for @securityDetectMemorySub.
+  ///
+  /// In zh, this message translates to:
+  /// **'密钥与明文缓冲全链路 Zeroizing · MK 不出引擎'**
+  String get securityDetectMemorySub;
+
+  /// No description provided for @securityDetectSignal.
+  ///
+  /// In zh, this message translates to:
+  /// **'信令防重放'**
+  String get securityDetectSignal;
+
+  /// No description provided for @securityDetectSignalDown.
+  ///
+  /// In zh, this message translates to:
+  /// **'引擎已停止 · 无法确认信令序号连续性'**
+  String get securityDetectSignalDown;
+
+  /// No description provided for @securityDetectSignalOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'Noise 信道 + 应用层单调序号（docs/08 §4.1）· 本机引擎存活 · 信令事件 {n} 条'**
+  String securityDetectSignalOk(int n);
+
+  /// No description provided for @securityDetectSignalUnknown.
+  ///
+  /// In zh, this message translates to:
+  /// **'未取得 P2P 状态 · 无法判定'**
+  String get securityDetectSignalUnknown;
+
+  /// No description provided for @securityFilterAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'全部'**
+  String get securityFilterAll;
+
+  /// No description provided for @securityNeedUnlock.
+  ///
+  /// In zh, this message translates to:
+  /// **'请先解锁保险箱'**
+  String get securityNeedUnlock;
+
+  /// No description provided for @securityOverallDanger.
+  ///
+  /// In zh, this message translates to:
+  /// **'整体状态：异常'**
+  String get securityOverallDanger;
+
+  /// No description provided for @securityOverallOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'整体状态：正常'**
+  String get securityOverallOk;
+
+  /// No description provided for @securityOverallWarn.
+  ///
+  /// In zh, this message translates to:
+  /// **'整体状态：注意'**
+  String get securityOverallWarn;
+
+  /// No description provided for @securityRefresh.
+  ///
+  /// In zh, this message translates to:
+  /// **'刷新'**
+  String get securityRefresh;
+
+  /// No description provided for @securityStegoDisable.
+  ///
+  /// In zh, this message translates to:
+  /// **'停用'**
+  String get securityStegoDisable;
+
+  /// No description provided for @securityStegoDisabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写术引擎已停用'**
+  String get securityStegoDisabled;
+
+  /// No description provided for @securityStegoEnable.
+  ///
+  /// In zh, this message translates to:
+  /// **'启用'**
+  String get securityStegoEnable;
+
+  /// No description provided for @securityStegoEnabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写术引擎已启用'**
+  String get securityStegoEnabled;
+
+  /// No description provided for @securityStegoFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写术引擎设置失败：{err}'**
+  String securityStegoFailed(String err);
+
+  /// No description provided for @securityStegoSubOff.
+  ///
+  /// In zh, this message translates to:
+  /// **'默认隐藏 · 图片 LSB 隐蔽存储 · 启用/停用均记审计'**
+  String get securityStegoSubOff;
+
+  /// No description provided for @securityStegoSubOn.
+  ///
+  /// In zh, this message translates to:
+  /// **'已启用 · 图片 LSB 隐蔽存储 · 启用/停用均记审计'**
+  String get securityStegoSubOn;
+
+  /// No description provided for @securityStegoTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写术引擎'**
+  String get securityStegoTitle;
+
+  /// No description provided for @securitySub.
+  ///
+  /// In zh, this message translates to:
+  /// **'审计 · 检测 · 应急响应'**
+  String get securitySub;
+
+  /// No description provided for @securityTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'安全中心'**
+  String get securityTitle;
+
   /// No description provided for @settingsAbout.
   ///
   /// In zh, this message translates to:
@@ -1589,6 +2105,336 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'未知设备'**
   String get stateUnknownDevice;
+
+  /// No description provided for @stegoPageCancel.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消'**
+  String get stegoPageCancel;
+
+  /// No description provided for @stegoPageCapacityCard.
+  ///
+  /// In zh, this message translates to:
+  /// **'容量参考'**
+  String get stegoPageCapacityCard;
+
+  /// No description provided for @stegoPageCapacityFormat.
+  ///
+  /// In zh, this message translates to:
+  /// **'不支持该图片：隐写仅接受 8 位 RGB / RGBA 的 PNG（有损压缩会破坏 LSB）'**
+  String get stegoPageCapacityFormat;
+
+  /// No description provided for @stegoPageCapacityFormula.
+  ///
+  /// In zh, this message translates to:
+  /// **'容量公式：宽 × 高 × 3 ÷ 8 − 4（4 字节为载荷长度前缀）'**
+  String get stegoPageCapacityFormula;
+
+  /// No description provided for @stegoPageCapacityIo.
+  ///
+  /// In zh, this message translates to:
+  /// **'图片读取失败：文件不存在或不可读'**
+  String get stegoPageCapacityIo;
+
+  /// No description provided for @stegoPageCapacityLimit.
+  ///
+  /// In zh, this message translates to:
+  /// **'单图容量有限：更大文件需分割嵌入多张图片（docs/05-05 §3.2）。'**
+  String get stegoPageCapacityLimit;
+
+  /// No description provided for @stegoPageCapacityLine.
+  ///
+  /// In zh, this message translates to:
+  /// **'容量 {cap} / 需要 {need}'**
+  String stegoPageCapacityLine(String cap, String need);
+
+  /// No description provided for @stegoPageCapacityShort.
+  ///
+  /// In zh, this message translates to:
+  /// **'容量不足：还差 {need}，请更换更大的图片（或分割嵌入多张图片）。'**
+  String stegoPageCapacityShort(String need);
+
+  /// No description provided for @stegoPageDisable.
+  ///
+  /// In zh, this message translates to:
+  /// **'停用'**
+  String get stegoPageDisable;
+
+  /// No description provided for @stegoPageDisableDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写引擎已停用'**
+  String get stegoPageDisableDone;
+
+  /// No description provided for @stegoPageDisabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'未启用'**
+  String get stegoPageDisabled;
+
+  /// No description provided for @stegoPageDisabledNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写引擎默认关闭：启用后「嵌入 / 提取」才会被引擎接受；启用与停用都会写入审计链（docs/05-06 §七）。'**
+  String get stegoPageDisabledNote;
+
+  /// No description provided for @stegoPageEmbedAction.
+  ///
+  /// In zh, this message translates to:
+  /// **'嵌入'**
+  String get stegoPageEmbedAction;
+
+  /// No description provided for @stegoPageEmbedDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'已嵌入 → {path}'**
+  String stegoPageEmbedDone(String path);
+
+  /// No description provided for @stegoPageEmbedNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'载荷 = AEAD(长度前缀 ‖ 文件名 ‖ 明文) 的密文：4 字节长度前缀与 AEAD 开销（12 字节 nonce + 16 字节 tag）同样占用容量。'**
+  String get stegoPageEmbedNote;
+
+  /// No description provided for @stegoPageEmbedSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'保险箱文件 → AES-256-GCM 密文 → 写入 PNG LSB'**
+  String get stegoPageEmbedSub;
+
+  /// No description provided for @stegoPageEmbedTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写导入（嵌入）'**
+  String get stegoPageEmbedTitle;
+
+  /// No description provided for @stegoPageEmbedding.
+  ///
+  /// In zh, this message translates to:
+  /// **'嵌入中…'**
+  String get stegoPageEmbedding;
+
+  /// No description provided for @stegoPageEnable.
+  ///
+  /// In zh, this message translates to:
+  /// **'启用隐写引擎'**
+  String get stegoPageEnable;
+
+  /// No description provided for @stegoPageEnableDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写引擎已启用'**
+  String get stegoPageEnableDone;
+
+  /// No description provided for @stegoPageEnabled.
+  ///
+  /// In zh, this message translates to:
+  /// **'已启用'**
+  String get stegoPageEnabled;
+
+  /// No description provided for @stegoPageEnabledNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'载荷是「先加密、再嵌入」：图片 LSB 里只有 AES-256-GCM 密文，密钥由本机 MK 经 HKDF 派生——提取必须持有同一保险箱的主密钥，因此这是本机隐蔽辅助，不是跨设备传输通道。'**
+  String get stegoPageEnabledNote;
+
+  /// No description provided for @stegoPageExtractAction.
+  ///
+  /// In zh, this message translates to:
+  /// **'提取'**
+  String get stegoPageExtractAction;
+
+  /// No description provided for @stegoPageExtractDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'已还原 {name}（{size}）'**
+  String stegoPageExtractDone(String name, String size);
+
+  /// No description provided for @stegoPageExtractFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'提取失败：图片中不含有效载荷、不是 8 位 RGB/RGBA PNG，或该载荷不属于当前保险箱（主密钥不匹配）。'**
+  String get stegoPageExtractFailed;
+
+  /// No description provided for @stegoPageExtractNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'提取只在同一保险箱内有效：载荷密钥派生自本机 MK，换库 / 换设备无法解密。'**
+  String get stegoPageExtractNote;
+
+  /// No description provided for @stegoPageExtractSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'PNG LSB → 密文帧 → AES-256-GCM 解密'**
+  String get stegoPageExtractSub;
+
+  /// No description provided for @stegoPageExtractTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写提取（取出）'**
+  String get stegoPageExtractTitle;
+
+  /// No description provided for @stegoPageExtracting.
+  ///
+  /// In zh, this message translates to:
+  /// **'提取中…'**
+  String get stegoPageExtracting;
+
+  /// No description provided for @stegoPageFileEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'保险箱内没有可选文件（请先导入文件）'**
+  String get stegoPageFileEmpty;
+
+  /// No description provided for @stegoPageFileLoading.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在读取保险箱文件…'**
+  String get stegoPageFileLoading;
+
+  /// No description provided for @stegoPageFileOption.
+  ///
+  /// In zh, this message translates to:
+  /// **'{name} · {size} · {folder}'**
+  String stegoPageFileOption(String name, String size, String folder);
+
+  /// No description provided for @stegoPageFileRoot.
+  ///
+  /// In zh, this message translates to:
+  /// **'根目录'**
+  String get stegoPageFileRoot;
+
+  /// No description provided for @stegoPageNeedUnlock.
+  ///
+  /// In zh, this message translates to:
+  /// **'会话未解锁，无法执行隐写操作'**
+  String get stegoPageNeedUnlock;
+
+  /// No description provided for @stegoPageNotChosen.
+  ///
+  /// In zh, this message translates to:
+  /// **'未选择'**
+  String get stegoPageNotChosen;
+
+  /// No description provided for @stegoPagePickFile.
+  ///
+  /// In zh, this message translates to:
+  /// **'保险箱文件'**
+  String get stegoPagePickFile;
+
+  /// No description provided for @stegoPagePickFileHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择要嵌入的文件'**
+  String get stegoPagePickFileHint;
+
+  /// No description provided for @stegoPagePickImage.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择 PNG 图片'**
+  String get stegoPagePickImage;
+
+  /// No description provided for @stegoPagePickOutput.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择输出位置'**
+  String get stegoPagePickOutput;
+
+  /// No description provided for @stegoPagePickRestore.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择还原位置'**
+  String get stegoPagePickRestore;
+
+  /// No description provided for @stegoPagePickStegoImage.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择携带数据的 PNG'**
+  String get stegoPagePickStegoImage;
+
+  /// No description provided for @stegoPagePlainSize.
+  ///
+  /// In zh, this message translates to:
+  /// **'明文体量 ≈ {size}'**
+  String stegoPagePlainSize(String size);
+
+  /// No description provided for @stegoPageSafetyNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写是隐蔽辅助，不替代主保险箱；有损压缩（JPG）会破坏 LSB，请使用 PNG。'**
+  String get stegoPageSafetyNote;
+
+  /// No description provided for @stegoPageSizeB.
+  ///
+  /// In zh, this message translates to:
+  /// **'{n} B'**
+  String stegoPageSizeB(int n);
+
+  /// No description provided for @stegoPageSizeBytes.
+  ///
+  /// In zh, this message translates to:
+  /// **'{bytes} 字节 ≈ {size}'**
+  String stegoPageSizeBytes(int bytes, String size);
+
+  /// No description provided for @stegoPageSizeKb.
+  ///
+  /// In zh, this message translates to:
+  /// **'{n} KB'**
+  String stegoPageSizeKb(String n);
+
+  /// No description provided for @stegoPageSizeMb.
+  ///
+  /// In zh, this message translates to:
+  /// **'{n} MB'**
+  String stegoPageSizeMb(String n);
+
+  /// No description provided for @stegoPageSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'加密之上的隐蔽 · AES-256-GCM 密文嵌入图片 LSB'**
+  String get stegoPageSub;
+
+  /// No description provided for @stegoPageTileEmbed.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写导入（嵌入）'**
+  String get stegoPageTileEmbed;
+
+  /// No description provided for @stegoPageTileEmbedSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'将保险箱中已加密的文件嵌入普通图片，图片外观无可见变化。'**
+  String get stegoPageTileEmbedSub;
+
+  /// No description provided for @stegoPageTileExtract.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写提取（取出）'**
+  String get stegoPageTileExtract;
+
+  /// No description provided for @stegoPageTileExtractSub.
+  ///
+  /// In zh, this message translates to:
+  /// **'从携带隐藏数据的图片中提取密文帧，解密还原原始文件。'**
+  String get stegoPageTileExtractSub;
+
+  /// No description provided for @stegoPageTileLocked.
+  ///
+  /// In zh, this message translates to:
+  /// **'需先启用隐写引擎'**
+  String get stegoPageTileLocked;
+
+  /// No description provided for @stegoPageTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'隐写术引擎'**
+  String get stegoPageTitle;
+
+  /// No description provided for @stegoPageToggleFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'操作失败：{err}'**
+  String stegoPageToggleFailed(String err);
 
   /// No description provided for @syncPageAddrHint.
   ///

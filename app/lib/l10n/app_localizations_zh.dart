@@ -468,6 +468,300 @@ class AppLocalizationsZh extends AppLocalizations {
   String get navVault => '保险箱';
 
   @override
+  String get securityAuditChainBroken => '链校验失败';
+
+  @override
+  String get securityAuditChainOk => '链校验通过';
+
+  @override
+  String get securityAuditEmpty => '暂无审计记录 · 解锁/导入/同步等操作会写入';
+
+  @override
+  String get securityAuditExport => '导出';
+
+  @override
+  String securityAuditExportFailed(String err) {
+    return '审计导出失败：$err';
+  }
+
+  @override
+  String securityAuditExportedTo(String path) {
+    return '审计日志已加密导出到 $path';
+  }
+
+  @override
+  String securityAuditHead(String short) {
+    return '本机链头 $short';
+  }
+
+  @override
+  String get securityAuditLoadFailed => '审计日志读取失败（引擎不可用或会话已失效）';
+
+  @override
+  String get securityAuditNote =>
+      '审计链按设备独立（每设备一条链，docs/05-06 §3.1），本页只显示本机链；未解锁时的失败尝试无法写入（日志密钥派生自 MK），故链上只有成功操作；日志为整体 AEAD 加密落盘，条目多时首次加载会略慢。';
+
+  @override
+  String get securityAuditTitle => '审计日志';
+
+  @override
+  String get securityAuditVerify => '校验审计链';
+
+  @override
+  String securityAuditVerifyFailed(int at, String reason) {
+    return '审计链第 $at 条起校验失败：$reason';
+  }
+
+  @override
+  String securityAuditVerifyOk(int checked) {
+    return '审计链校验通过（$checked 条）';
+  }
+
+  @override
+  String get securityAuditVerifyUnavailable => '未能读取审计链，校验未执行';
+
+  @override
+  String get securityBadgeGuarantee => '设计保证';
+
+  @override
+  String get securityCatDevice => '设备';
+
+  @override
+  String get securityCatSecurity => '安全';
+
+  @override
+  String get securityCatSession => '会话';
+
+  @override
+  String get securityCatVault => '保险箱';
+
+  @override
+  String get securityColAction => '动作 / 对象';
+
+  @override
+  String get securityColCategory => '类别';
+
+  @override
+  String get securityColHash => '链哈希';
+
+  @override
+  String get securityColSeq => '序号';
+
+  @override
+  String get securityColTime => '时间';
+
+  @override
+  String securityDestroyAllConfirmBody(int n) {
+    return '引擎当前无离线指令队列，无法向离线设备投递销毁指令。确认后将只在本机执行加密擦除；已配对 $n 台设备需各自在线时由对端设备页发起。';
+  }
+
+  @override
+  String get securityDestroyAllConfirmTitle => '确认全设备联动销毁';
+
+  @override
+  String get securityDestroyCancel => '取消';
+
+  @override
+  String get securityDestroyConfirm => '确认';
+
+  @override
+  String securityDestroyConfirmInput(String word) {
+    return '输入「$word」以确认';
+  }
+
+  @override
+  String get securityDestroyDialogSub => '不可撤销 · 需输入确认短语二次把关';
+
+  @override
+  String get securityDestroyDialogTitle => '紧急销毁';
+
+  @override
+  String get securityDestroyDone => '本机数据已加密擦除';
+
+  @override
+  String get securityDestroyEnter => '进入销毁流程';
+
+  @override
+  String get securityDestroyExportCancelled => '未选择导出路径，已取消销毁';
+
+  @override
+  String get securityDestroyExportFirst => '先导出审计日志';
+
+  @override
+  String get securityDestroyExportFirstSub => '数据目录连同审计日志会被一并销毁，勾选后先导出到所选路径';
+
+  @override
+  String securityDestroyExported(String path) {
+    return '审计日志已导出到 $path';
+  }
+
+  @override
+  String securityDestroyFailed(String err) {
+    return '销毁失败：$err';
+  }
+
+  @override
+  String get securityDestroyModeAll => '全设备联动销毁';
+
+  @override
+  String get securityDestroyModeAllSub => '签发签名指令，经 P2P / 中继传播至全部已配对设备';
+
+  @override
+  String get securityDestroyModeLocal => '本机销毁';
+
+  @override
+  String get securityDestroyModeLocalSub => '销毁本机 MK 与全部密钥槽，按介质兜底覆写';
+
+  @override
+  String get securityDestroyNote =>
+      '离线设备无法即时收到销毁指令：指令进入各设备的高优先级信令队列，目标设备下次上线时先于任何其它消息校验并执行（指令由发起方设备密钥签名，防伪造）。对「永不上线」的设备，销毁无法保证。';
+
+  @override
+  String get securityDestroyNow => '立即销毁';
+
+  @override
+  String get securityDestroyPeersHint => '需先让对端在线，并由对端设备页发起';
+
+  @override
+  String get securityDestroyPeersNone => '全设备联动：当前无已配对设备，仅本机执行加密擦除';
+
+  @override
+  String securityDestroyPeersUndelivered(int n) {
+    return '全设备联动未完成投递：本机已擦除，$n 台已配对设备需各自在线时由对端设备页发起销毁';
+  }
+
+  @override
+  String get securityDestroyPhrase => '销毁';
+
+  @override
+  String get securityDestroyRunning => '销毁中…';
+
+  @override
+  String get securityDestroySub => '本地 / 远程 / 全设备联动 · 加密擦除';
+
+  @override
+  String get securityDestroyTitle => '紧急销毁';
+
+  @override
+  String get securityDetectAudit => '审计链完整性';
+
+  @override
+  String securityDetectAuditBroken(int at, String reason) {
+    return '第 $at 条起校验失败：$reason';
+  }
+
+  @override
+  String securityDetectAuditOk(int checked, int total) {
+    return '正常 · $checked / $total 条校验通过';
+  }
+
+  @override
+  String get securityDetectAuditUnknown => '未能读取审计链 · 无法校验';
+
+  @override
+  String get securityDetectBrute => '暴力破解检测';
+
+  @override
+  String securityDetectBruteCooldown(int m, int s) {
+    return '冷却中 · 剩余 $m 分 $s 秒';
+  }
+
+  @override
+  String get securityDetectBruteOk => '正常 · 当前无冷却';
+
+  @override
+  String get securityDetectDevice => '异常设备';
+
+  @override
+  String get securityDetectDeviceNone => '尚无已配对设备';
+
+  @override
+  String securityDetectDeviceOk(int n) {
+    return '已配对 $n 台 · 无未授权访问记录';
+  }
+
+  @override
+  String securityDetectDeviceWarn(String event) {
+    return '注意 · $event';
+  }
+
+  @override
+  String get securityDetectIntegrity => '文件完整性';
+
+  @override
+  String get securityDetectIntegritySub => '随导出/同步逐块 GCM 校验 · 认证失败即拒绝';
+
+  @override
+  String get securityDetectMemory => '内存泄漏扫描';
+
+  @override
+  String get securityDetectMemorySub => '密钥与明文缓冲全链路 Zeroizing · MK 不出引擎';
+
+  @override
+  String get securityDetectSignal => '信令防重放';
+
+  @override
+  String get securityDetectSignalDown => '引擎已停止 · 无法确认信令序号连续性';
+
+  @override
+  String securityDetectSignalOk(int n) {
+    return 'Noise 信道 + 应用层单调序号（docs/08 §4.1）· 本机引擎存活 · 信令事件 $n 条';
+  }
+
+  @override
+  String get securityDetectSignalUnknown => '未取得 P2P 状态 · 无法判定';
+
+  @override
+  String get securityFilterAll => '全部';
+
+  @override
+  String get securityNeedUnlock => '请先解锁保险箱';
+
+  @override
+  String get securityOverallDanger => '整体状态：异常';
+
+  @override
+  String get securityOverallOk => '整体状态：正常';
+
+  @override
+  String get securityOverallWarn => '整体状态：注意';
+
+  @override
+  String get securityRefresh => '刷新';
+
+  @override
+  String get securityStegoDisable => '停用';
+
+  @override
+  String get securityStegoDisabled => '隐写术引擎已停用';
+
+  @override
+  String get securityStegoEnable => '启用';
+
+  @override
+  String get securityStegoEnabled => '隐写术引擎已启用';
+
+  @override
+  String securityStegoFailed(String err) {
+    return '隐写术引擎设置失败：$err';
+  }
+
+  @override
+  String get securityStegoSubOff => '默认隐藏 · 图片 LSB 隐蔽存储 · 启用/停用均记审计';
+
+  @override
+  String get securityStegoSubOn => '已启用 · 图片 LSB 隐蔽存储 · 启用/停用均记审计';
+
+  @override
+  String get securityStegoTitle => '隐写术引擎';
+
+  @override
+  String get securitySub => '审计 · 检测 · 应急响应';
+
+  @override
+  String get securityTitle => '安全中心';
+
+  @override
   String get settingsAbout => '关于';
 
   @override
@@ -827,6 +1121,198 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get stateUnknownDevice => '未知设备';
+
+  @override
+  String get stegoPageCancel => '取消';
+
+  @override
+  String get stegoPageCapacityCard => '容量参考';
+
+  @override
+  String get stegoPageCapacityFormat =>
+      '不支持该图片：隐写仅接受 8 位 RGB / RGBA 的 PNG（有损压缩会破坏 LSB）';
+
+  @override
+  String get stegoPageCapacityFormula => '容量公式：宽 × 高 × 3 ÷ 8 − 4（4 字节为载荷长度前缀）';
+
+  @override
+  String get stegoPageCapacityIo => '图片读取失败：文件不存在或不可读';
+
+  @override
+  String get stegoPageCapacityLimit => '单图容量有限：更大文件需分割嵌入多张图片（docs/05-05 §3.2）。';
+
+  @override
+  String stegoPageCapacityLine(String cap, String need) {
+    return '容量 $cap / 需要 $need';
+  }
+
+  @override
+  String stegoPageCapacityShort(String need) {
+    return '容量不足：还差 $need，请更换更大的图片（或分割嵌入多张图片）。';
+  }
+
+  @override
+  String get stegoPageDisable => '停用';
+
+  @override
+  String get stegoPageDisableDone => '隐写引擎已停用';
+
+  @override
+  String get stegoPageDisabled => '未启用';
+
+  @override
+  String get stegoPageDisabledNote =>
+      '隐写引擎默认关闭：启用后「嵌入 / 提取」才会被引擎接受；启用与停用都会写入审计链（docs/05-06 §七）。';
+
+  @override
+  String get stegoPageEmbedAction => '嵌入';
+
+  @override
+  String stegoPageEmbedDone(String path) {
+    return '已嵌入 → $path';
+  }
+
+  @override
+  String get stegoPageEmbedNote =>
+      '载荷 = AEAD(长度前缀 ‖ 文件名 ‖ 明文) 的密文：4 字节长度前缀与 AEAD 开销（12 字节 nonce + 16 字节 tag）同样占用容量。';
+
+  @override
+  String get stegoPageEmbedSub => '保险箱文件 → AES-256-GCM 密文 → 写入 PNG LSB';
+
+  @override
+  String get stegoPageEmbedTitle => '隐写导入（嵌入）';
+
+  @override
+  String get stegoPageEmbedding => '嵌入中…';
+
+  @override
+  String get stegoPageEnable => '启用隐写引擎';
+
+  @override
+  String get stegoPageEnableDone => '隐写引擎已启用';
+
+  @override
+  String get stegoPageEnabled => '已启用';
+
+  @override
+  String get stegoPageEnabledNote =>
+      '载荷是「先加密、再嵌入」：图片 LSB 里只有 AES-256-GCM 密文，密钥由本机 MK 经 HKDF 派生——提取必须持有同一保险箱的主密钥，因此这是本机隐蔽辅助，不是跨设备传输通道。';
+
+  @override
+  String get stegoPageExtractAction => '提取';
+
+  @override
+  String stegoPageExtractDone(String name, String size) {
+    return '已还原 $name（$size）';
+  }
+
+  @override
+  String get stegoPageExtractFailed =>
+      '提取失败：图片中不含有效载荷、不是 8 位 RGB/RGBA PNG，或该载荷不属于当前保险箱（主密钥不匹配）。';
+
+  @override
+  String get stegoPageExtractNote => '提取只在同一保险箱内有效：载荷密钥派生自本机 MK，换库 / 换设备无法解密。';
+
+  @override
+  String get stegoPageExtractSub => 'PNG LSB → 密文帧 → AES-256-GCM 解密';
+
+  @override
+  String get stegoPageExtractTitle => '隐写提取（取出）';
+
+  @override
+  String get stegoPageExtracting => '提取中…';
+
+  @override
+  String get stegoPageFileEmpty => '保险箱内没有可选文件（请先导入文件）';
+
+  @override
+  String get stegoPageFileLoading => '正在读取保险箱文件…';
+
+  @override
+  String stegoPageFileOption(String name, String size, String folder) {
+    return '$name · $size · $folder';
+  }
+
+  @override
+  String get stegoPageFileRoot => '根目录';
+
+  @override
+  String get stegoPageNeedUnlock => '会话未解锁，无法执行隐写操作';
+
+  @override
+  String get stegoPageNotChosen => '未选择';
+
+  @override
+  String get stegoPagePickFile => '保险箱文件';
+
+  @override
+  String get stegoPagePickFileHint => '选择要嵌入的文件';
+
+  @override
+  String get stegoPagePickImage => '选择 PNG 图片';
+
+  @override
+  String get stegoPagePickOutput => '选择输出位置';
+
+  @override
+  String get stegoPagePickRestore => '选择还原位置';
+
+  @override
+  String get stegoPagePickStegoImage => '选择携带数据的 PNG';
+
+  @override
+  String stegoPagePlainSize(String size) {
+    return '明文体量 ≈ $size';
+  }
+
+  @override
+  String get stegoPageSafetyNote => '隐写是隐蔽辅助，不替代主保险箱；有损压缩（JPG）会破坏 LSB，请使用 PNG。';
+
+  @override
+  String stegoPageSizeB(int n) {
+    return '$n B';
+  }
+
+  @override
+  String stegoPageSizeBytes(int bytes, String size) {
+    return '$bytes 字节 ≈ $size';
+  }
+
+  @override
+  String stegoPageSizeKb(String n) {
+    return '$n KB';
+  }
+
+  @override
+  String stegoPageSizeMb(String n) {
+    return '$n MB';
+  }
+
+  @override
+  String get stegoPageSub => '加密之上的隐蔽 · AES-256-GCM 密文嵌入图片 LSB';
+
+  @override
+  String get stegoPageTileEmbed => '隐写导入（嵌入）';
+
+  @override
+  String get stegoPageTileEmbedSub => '将保险箱中已加密的文件嵌入普通图片，图片外观无可见变化。';
+
+  @override
+  String get stegoPageTileExtract => '隐写提取（取出）';
+
+  @override
+  String get stegoPageTileExtractSub => '从携带隐藏数据的图片中提取密文帧，解密还原原始文件。';
+
+  @override
+  String get stegoPageTileLocked => '需先启用隐写引擎';
+
+  @override
+  String get stegoPageTitle => '隐写术引擎';
+
+  @override
+  String stegoPageToggleFailed(String err) {
+    return '操作失败：$err';
+  }
 
   @override
   String get syncPageAddrHint => 'host:port，如 192.168.1.10:9100';

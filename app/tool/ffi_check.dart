@@ -3,6 +3,7 @@
 // 用法：在 app/ 目录下执行 `dart run tool/ffi_check.dart [dll路径]`
 // ignore_for_file: avoid_print
 import 'dart:ffi';
+import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
@@ -108,6 +109,84 @@ late P2pSyncDart _p2pSync;
 late P2pStatusDart _p2pStatus;
 late P2pUnpairDart _p2pUnpair;
 late P2pDestroyArmDart _p2pDestroyArm;
+// P5 审计 / 销毁 / 隐写（每函数独立 typedef）
+typedef AuditListC = Pointer<Utf8> Function(Pointer<Void>);
+typedef AuditListDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef AuditExportC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef AuditExportDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef DestroyLocalC = Int32 Function(Pointer<Void>, Int32);
+typedef DestroyLocalDart = int Function(Pointer<Void>, int);
+typedef StegoStatusC = Int32 Function(Pointer<Void>);
+typedef StegoSetEnabledC = Int32 Function(Pointer<Void>, Int32);
+typedef StegoSetEnabledDart = int Function(Pointer<Void>, int);
+typedef StegoCapacityC = Int64 Function(Pointer<Void>, Pointer<Utf8>);
+typedef StegoCapacityDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef StegoEmbedC = Int32 Function(
+    Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
+typedef StegoEmbedDart = int Function(
+    Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>);
+typedef StegoExtractC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef StegoExtractDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+late AuditListDart _auditList;
+late AuditListDart _auditVerify;
+late AuditExportDart _auditExport;
+late DestroyLocalDart _destroyLocal;
+late int Function(Pointer<Void>) _stegoStatus;
+late StegoSetEnabledDart _stegoSetEnabled;
+late StegoCapacityDart _stegoCapacity;
+late StegoEmbedDart _stegoEmbed;
+late StegoExtractDart _stegoExtract;
+
+/// 最小 PNG 生成器（8 位 RGB，无过滤）：隐写往返断言用，避免引入图像依赖。
+Uint8List makePng(int w, int h) {
+  final raw = <int>[];
+  for (var y = 0; y < h; y++) {
+    raw.add(0); // filter: none
+    for (var x = 0; x < w; x++) {
+      raw
+        ..add((x * 3 + y) & 0xFF)
+        ..add((y * 5 + x) & 0xFF)
+        ..add((x * y + 17) & 0xFF);
+    }
+  }
+  final idat = ZLibEncoder().convert(raw);
+  final out = BytesBuilder();
+  out.add(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+  void chunk(String type, List<int> data) {
+    final len = ByteData(4)..setUint32(0, data.length);
+    out.add(len.buffer.asUint8List());
+    final body = <int>[...type.codeUnits, ...data];
+    out.add(body);
+    final crc = ByteData(4)..setUint32(0, _crc32(body));
+    out.add(crc.buffer.asUint8List());
+  }
+
+  final ihdr = ByteData(13)
+    ..setUint32(0, w)
+    ..setUint32(4, h)
+    ..setUint8(8, 8) // bit depth
+    ..setUint8(9, 2) // color type: truecolor
+    ..setUint8(10, 0)
+    ..setUint8(11, 0)
+    ..setUint8(12, 0);
+  chunk('IHDR', ihdr.buffer.asUint8List());
+  chunk('IDAT', idat);
+  chunk('IEND', const <int>[]);
+  return out.toBytes();
+}
+
+int _crc32(List<int> bytes) {
+  var crc = 0xFFFFFFFF;
+  for (final b in bytes) {
+    crc ^= b;
+    for (var i = 0; i < 8; i++) {
+      crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+    }
+  }
+  return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
+}
 
 Pointer<Utf8> n(String s) => s.toNativeUtf8();
 String str(Pointer<Utf8> p) => p.toDartString();
@@ -211,8 +290,26 @@ void main(List<String> args) {
   _p2pSync = lib.lookupFunction<P2pSyncC, P2pSyncDart>('vault_core_p2p_sync');
   _p2pStatus =
       lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
-  _p2pUnpair = lib.lookupFunction<P2pUnpairC, P2pUnpairDart>(
-      'vault_core_p2p_unpair');
+  _p2pUnpair =
+      lib.lookupFunction<P2pUnpairC, P2pUnpairDart>('vault_core_p2p_unpair');
+  _auditList =
+      lib.lookupFunction<AuditListC, AuditListDart>('vault_core_audit_list');
+  _auditVerify =
+      lib.lookupFunction<AuditListC, AuditListDart>('vault_core_audit_verify');
+  _auditExport = lib
+      .lookupFunction<AuditExportC, AuditExportDart>('vault_core_audit_export');
+  _destroyLocal = lib.lookupFunction<DestroyLocalC, DestroyLocalDart>(
+      'vault_core_destroy_local');
+  _stegoStatus = lib.lookupFunction<StegoStatusC, int Function(Pointer<Void>)>(
+      'vault_core_stego_status');
+  _stegoSetEnabled = lib.lookupFunction<StegoSetEnabledC, StegoSetEnabledDart>(
+      'vault_core_stego_set_enabled');
+  _stegoCapacity = lib.lookupFunction<StegoCapacityC, StegoCapacityDart>(
+      'vault_core_stego_capacity');
+  _stegoEmbed =
+      lib.lookupFunction<StegoEmbedC, StegoEmbedDart>('vault_core_stego_embed');
+  _stegoExtract = lib.lookupFunction<StegoExtractC, StegoExtractDart>(
+      'vault_core_stego_extract');
   _p2pDestroyArm = lib.lookupFunction<P2pDestroyArmC, P2pDestroyArmDart>(
       'vault_core_p2p_destroy_arm');
 
@@ -545,8 +642,99 @@ void main(List<String> args) {
       !postPeers.any((p) => (p as Map<String, dynamic>)['deviceId'] == devBId),
       'P4 解绑后 deviceId 不再出现于 peers');
   if (postUnpair.address != 0) _free(postUnpair);
-  check(_p2pUnpair(hA, n('vd-0000000000000000')) == 0,
-      'P4 解绑不存在的设备仍返回 0（幂等）');
+  check(_p2pUnpair(hA, n('vd-0000000000000000')) == 0, 'P4 解绑不存在的设备仍返回 0（幂等）');
+
+  // ===== P5-1 审计日志：链式写入 / 校验 / 加密导出 =====
+  final p5dir = Directory.systemTemp.createTempSync('vsync_p5_');
+  final vaultP5 = '${p5dir.path}${Platform.pathSeparator}p5.vsvb';
+  final vp5 = n(vaultP5);
+  check(_create(vp5, pw, 0) == 0, 'P5 创建保险箱');
+  final sP5 =
+      runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), vaultP5, 'pw-1234');
+  check(sP5.status == 0 && sP5.handle != 0, 'P5 解锁（审计链随会话打开）');
+  final hP = Pointer<Void>.fromAddress(sP5.handle);
+
+  final p5src = '${p5dir.path}${Platform.pathSeparator}audit-me.txt';
+  File(p5src).writeAsStringSync('审计链冒烟：中文与 ASCII 混排 payload');
+  final pp5 = n(p5src);
+  final outP5 = calloc<Uint64>();
+  check(_vaultImport(hP, pp5, 0, outP5) == 0, 'P5 导入一个文件（应写入审计）');
+  final p5Id = outP5.value;
+  check(_vaultRenameFile(hP, p5Id, n('audit-me-renamed.txt')) == 0,
+      'P5 重命名（应写入审计）');
+
+  final auditJson = _auditList(hP);
+  final auditStr = auditJson.address == 0 ? '' : auditJson.toDartString();
+  if (auditJson.address != 0) _free(auditJson);
+  check(auditStr.contains('"count":'), 'P5 审计列表返回 JSON');
+  final auditCount = int.tryParse(
+          RegExp(r'"count":(\d+)').firstMatch(auditStr)?.group(1) ?? '0') ??
+      0;
+  check(auditCount >= 3, 'P5 审计条目 ≥3（解锁 + 导入 + 重命名，实际 $auditCount）');
+  check(
+      auditStr.contains('"kind": "vault"') ||
+          auditStr.contains('"kind":"vault"'),
+      'P5 审计含 vault 类别条目');
+
+  final verifyJson = _auditVerify(hP);
+  final verifyStr = verifyJson.address == 0 ? '' : verifyJson.toDartString();
+  if (verifyJson.address != 0) _free(verifyJson);
+  check(verifyStr.contains('"ok": true') || verifyStr.contains('"ok":true'),
+      'P5 审计链校验通过（链式哈希连续）');
+  check(
+      RegExp(r'"checked": ?(\d+)').firstMatch(verifyStr)?.group(1) ==
+          '$auditCount',
+      'P5 校验条数与列表条数一致');
+
+  final auditDest =
+      '${p5dir.path}${Platform.pathSeparator}audit-export.vsaudit';
+  final ap = n(auditDest);
+  check(_auditExport(hP, ap) == 0, 'P5 审计加密导出');
+  final auditBlob = File(auditDest).readAsBytesSync();
+  check(auditBlob.length > 32, 'P5 导出件非空（AEAD 密文）');
+  check(!String.fromCharCodes(auditBlob).contains('audit-me'), 'P5 导出件不含明文条目');
+  calloc.free(ap);
+
+  // ===== P5-3 隐写术：LSB 往返（Dart 侧生成 PNG） =====
+  check(_stegoStatus(hP) == 0, 'P5 隐写引擎默认关闭');
+  check(
+      _stegoSetEnabled(hP, 1) == 0 && _stegoStatus(hP) == 1, 'P5 启用隐写引擎（记审计）');
+
+  final pngPath = '${p5dir.path}${Platform.pathSeparator}cover.png';
+  File(pngPath).writeAsBytesSync(makePng(64, 64));
+  final pngIn = n(pngPath);
+  final cap = _stegoCapacity(hP, pngIn);
+  check(cap == 64 * 64 * 3 ~/ 8 - 4, 'P5 容量公式 w*h*3/8-4（实际 $cap）');
+
+  final pngOut = '${p5dir.path}${Platform.pathSeparator}stego-out.png';
+  final po = n(pngOut);
+  check(_stegoEmbed(hP, p5Id, pngIn, po) == 0, 'P5 嵌入成功');
+  check(File(pngOut).existsSync(), 'P5 输出图片已生成');
+
+  final stegoDest = '${p5dir.path}${Platform.pathSeparator}restored.txt';
+  final sd = n(stegoDest);
+  final exJson = _stegoExtract(hP, po, sd);
+  final exStr = exJson.address == 0 ? '' : exJson.toDartString();
+  if (exJson.address != 0) _free(exJson);
+  check(exStr.contains('"name"'), 'P5 提取返回还原文件名（$exStr）');
+  check(File(stegoDest).readAsStringSync() == File(p5src).readAsStringSync(),
+      'P5 隐写往返内容逐字节一致');
+  check(File(pngOut).lengthSync() > 0, 'P5 载体图片可读');
+
+  // ===== P5-5 紧急销毁：本机（保险箱头部 + 数据目录） =====
+  final p5DataDir = '${p5dir.path}${Platform.pathSeparator}p5.data';
+  check(Directory(p5DataDir).existsSync(), 'P5 销毁前数据目录存在');
+  check(_destroyLocal(hP, 1) == 0, 'P5 本机紧急销毁（覆写后删除）');
+  check(!File(vaultP5).existsSync(), 'P5 销毁后保险箱头部已删除');
+  check(!Directory(p5DataDir).existsSync(), 'P5 销毁后数据目录（含审计 / P2P 身份）已删除');
+  _lock(hP);
+  calloc.free(pngIn);
+  calloc.free(po);
+  calloc.free(sd);
+  calloc.free(pp5);
+  calloc.free(outP5);
+  calloc.free(vp5);
+  p5dir.deleteSync(recursive: true);
 
   _lock(hA);
   _lock(hB);

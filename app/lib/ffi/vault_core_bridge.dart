@@ -67,7 +67,8 @@ abstract class VaultCoreBridge {
 
   int unbindBio(Object sessionHandle);
 
-  int changePassword(Object sessionHandle, String oldPassword, String newPassword);
+  int changePassword(
+      Object sessionHandle, String oldPassword, String newPassword);
 
   void lock(Object sessionHandle);
 
@@ -75,13 +76,15 @@ abstract class VaultCoreBridge {
 
   // ==== P2 保险箱操作（JSON 结果为引擎分配的字符串，由桥接层释放）====
 
-  int vaultMkdir(Object sessionHandle, int parent, String name, List<int> idOut);
+  int vaultMkdir(
+      Object sessionHandle, int parent, String name, List<int> idOut);
 
   String? vaultList(Object sessionHandle, int folder);
 
   String? vaultSearch(Object sessionHandle, String query);
 
-  int vaultImport(Object sessionHandle, String src, int folder, List<int> idOut);
+  int vaultImport(
+      Object sessionHandle, String src, int folder, List<int> idOut);
 
   int vaultExport(Object sessionHandle, int fileId, String dest);
 
@@ -93,14 +96,17 @@ abstract class VaultCoreBridge {
   int vaultRenameFolder(Object sessionHandle, int folderId, String name);
 
   /// 递归删除文件夹；成功返回删除的文件数（≥0），失败返回负状态码。
-  int vaultDeleteFolder(Object sessionHandle, int folderId, {bool secure = true});
+  int vaultDeleteFolder(Object sessionHandle, int folderId,
+      {bool secure = true});
 
   /// 设置标签（文件与文件夹通用）。
   int vaultSetTags(Object sessionHandle, int targetId, List<String> tags);
 
-  String? vaultShareCreate(Object sessionHandle, int fileId, int ttlSecs, int maxOpens);
+  String? vaultShareCreate(
+      Object sessionHandle, int fileId, int ttlSecs, int maxOpens);
 
-  int vaultShareOpen(Object sessionHandle, int shareId, String token, String dest);
+  int vaultShareOpen(
+      Object sessionHandle, int shareId, String token, String dest);
 
   // ==== P3 P2P 同步（JSON 结果为引擎分配的字符串，由桥接层释放）====
 
@@ -119,20 +125,53 @@ abstract class VaultCoreBridge {
   /// 解除与指定设备的配对（幂等：该设备本就不存在亦成功）。
   int p2pUnpair(Object sessionHandle, String deviceId);
 
+  // ==== P5-1 审计日志 / P5-5 紧急销毁（JSON 结果为引擎分配字符串）====
+
+  /// 审计条目列表 JSON：{"count","head","entries":[{seq,tsMs,kind,detail,prevHash,hash}]}。
+  String? auditList(Object sessionHandle);
+
+  /// 链式校验 JSON：{"ok","checked","brokenAt","reason"}。
+  String? auditVerify(Object sessionHandle);
+
+  /// 加密导出审计日志到 dest（导出事件本身也记审计）。
+  int auditExport(Object sessionHandle, String dest);
+
+  /// 紧急销毁 · 本机：销毁保险箱头部与整个数据目录；secure=1 先单次覆写。
+  int destroyLocal(Object sessionHandle, {bool secure = true});
+
+  // ==== P5-3 隐写术（docs/05-05）====
+
+  /// 1 = 已启用，0 = 未启用，负值为错误码。
+  int stegoStatus(Object sessionHandle);
+
+  /// 启用 / 停用隐写引擎（状态变更记审计）。
+  int stegoSetEnabled(Object sessionHandle, bool on);
+
+  /// 图片可嵌入载荷字节数；负值为错误码（-3 IO / -6 格式）。
+  int stegoCapacity(Object sessionHandle, String imagePath);
+
+  /// 把保险箱内文件的明文加密后嵌入图片，写出到 outPath。
+  int stegoEmbed(
+      Object sessionHandle, int fileId, String imagePath, String outPath);
+
+  /// 从图片提取并解密写出到 destPath，返回 JSON {"name","size"}。
+  String? stegoExtract(Object sessionHandle, String imagePath, String destPath);
+
   String? p2pDestroyArm(
       Object sessionHandle, String addr, String target, int delaySecs);
 
   int p2pDestroyCancel(Object sessionHandle);
 
-  int p2pConflictResolve(
-      Object sessionHandle, int keepId, int dropId, {bool secure = false});
+  int p2pConflictResolve(Object sessionHandle, int keepId, int dropId,
+      {bool secure = false});
 
   /// 按平台返回动态库文件名。
   static String get libraryName {
     if (Platform.isWindows) return 'vault_core.dll';
     if (Platform.isMacOS) return 'libvault_core.dylib';
     if (Platform.isLinux) return 'libvault_core.so';
-    throw UnsupportedError('VaultSync 核心引擎暂不支持该平台: ${Platform.operatingSystem}');
+    throw UnsupportedError(
+        'VaultSync 核心引擎暂不支持该平台: ${Platform.operatingSystem}');
   }
 }
 
@@ -141,14 +180,15 @@ typedef _VersionC = Pointer<Utf8> Function();
 typedef _FreeStringC = Void Function(Pointer<Utf8>);
 typedef _PathFnC = Int32 Function(Pointer<Utf8>);
 typedef _CreateC = Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Int32);
-typedef _UnlockC = Int32 Function(
-    Pointer<Utf8>, Pointer<Utf8>, Int32, Pointer<Pointer<Void>>, Pointer<Uint64>);
+typedef _UnlockC = Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Int32,
+    Pointer<Pointer<Void>>, Pointer<Uint64>);
 typedef _UnlockBioC = Int32 Function(
     Pointer<Utf8>, Pointer<Pointer<Void>>, Pointer<Uint64>);
 typedef _UnlockBioDart = int Function(
     Pointer<Utf8>, Pointer<Pointer<Void>>, Pointer<Uint64>);
 typedef _HandleFnC = Int32 Function(Pointer<Void>);
-typedef _ChangePwdC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _ChangePwdC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _LockC = Void Function(Pointer<Void>);
 typedef _CooldownC = Int32 Function(Pointer<Utf8>, Pointer<Uint64>);
 // P2 保险箱操作
@@ -172,6 +212,17 @@ typedef _ShareOpenC = Int32 Function(
 typedef _P2pPairBeginC = Pointer<Utf8> Function(Pointer<Void>);
 typedef _P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
 typedef _P2pUnpairC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+// P5 审计 / 销毁 / 隐写（每函数独立 typedef）
+typedef _AuditListC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _AuditExportC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _DestroyLocalC = Int32 Function(Pointer<Void>, Int32);
+typedef _StegoStatusC = Int32 Function(Pointer<Void>);
+typedef _StegoSetEnabledC = Int32 Function(Pointer<Void>, Int32);
+typedef _StegoCapacityC = Int64 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _StegoEmbedC = Int32 Function(
+    Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
+typedef _StegoExtractC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _P2pPairJoinC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
@@ -187,82 +238,145 @@ typedef _P2pConflictResolveC = Int32 Function(
 class VaultCoreBridgeFfi implements VaultCoreBridge {
   VaultCoreBridgeFfi._(this._lib) {
     _hello = _lib.lookupFunction<_HelloC, int Function()>('vault_core_hello');
-    final version =
-        _lib.lookupFunction<_VersionC, Pointer<Utf8> Function()>('vault_core_version');
+    final version = _lib.lookupFunction<_VersionC, Pointer<Utf8> Function()>(
+        'vault_core_version');
     final freeString =
-        _lib.lookupFunction<_FreeStringC, void Function(Pointer<Utf8>)>('vault_core_free_string');
-    _vaultExists =
-        _lib.lookupFunction<_PathFnC, int Function(Pointer<Utf8>)>('vault_core_vault_exists');
-    _bioBound =
-        _lib.lookupFunction<_PathFnC, int Function(Pointer<Utf8>)>('vault_core_bio_bound');
-    _create = _lib.lookupFunction<_CreateC, int Function(
-        Pointer<Utf8>, Pointer<Utf8>, int)>('vault_core_create_vault');
-    _unlock = _lib.lookupFunction<_UnlockC, int Function(Pointer<Utf8>, Pointer<Utf8>, int,
-        Pointer<Pointer<Void>>, Pointer<Uint64>)>('vault_core_unlock');
+        _lib.lookupFunction<_FreeStringC, void Function(Pointer<Utf8>)>(
+            'vault_core_free_string');
+    _vaultExists = _lib.lookupFunction<_PathFnC, int Function(Pointer<Utf8>)>(
+        'vault_core_vault_exists');
+    _bioBound = _lib.lookupFunction<_PathFnC, int Function(Pointer<Utf8>)>(
+        'vault_core_bio_bound');
+    _create = _lib.lookupFunction<
+        _CreateC,
+        int Function(
+            Pointer<Utf8>, Pointer<Utf8>, int)>('vault_core_create_vault');
+    _unlock = _lib.lookupFunction<
+        _UnlockC,
+        int Function(Pointer<Utf8>, Pointer<Utf8>, int, Pointer<Pointer<Void>>,
+            Pointer<Uint64>)>('vault_core_unlock');
     _unlockBio = _lib
         .lookupFunction<_UnlockBioC, _UnlockBioDart>('vault_core_unlock_bio');
-    _bindBio =
-        _lib.lookupFunction<_HandleFnC, int Function(Pointer<Void>)>('vault_core_bind_bio');
-    _unbindBio =
-        _lib.lookupFunction<_HandleFnC, int Function(Pointer<Void>)>('vault_core_unbind_bio');
-    _changePassword = _lib.lookupFunction<_ChangePwdC, int Function(
-        Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>('vault_core_change_password');
-    _lock = _lib.lookupFunction<_LockC, void Function(Pointer<Void>)>('vault_core_lock');
-    _cooldown = _lib.lookupFunction<_CooldownC, int Function(
-        Pointer<Utf8>, Pointer<Uint64>)>('vault_core_cooldown_remaining_ms');
-    _vaultMkdir = _lib.lookupFunction<_MkdirC, int Function(
-        Pointer<Void>, int, Pointer<Utf8>, Pointer<Uint64>)>('vault_core_vault_mkdir');
-    _vaultList = _lib
-        .lookupFunction<_ListC, Pointer<Utf8> Function(Pointer<Void>, int)>(
+    _bindBio = _lib.lookupFunction<_HandleFnC, int Function(Pointer<Void>)>(
+        'vault_core_bind_bio');
+    _unbindBio = _lib.lookupFunction<_HandleFnC, int Function(Pointer<Void>)>(
+        'vault_core_unbind_bio');
+    _changePassword = _lib.lookupFunction<
+        _ChangePwdC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_change_password');
+    _lock = _lib.lookupFunction<_LockC, void Function(Pointer<Void>)>(
+        'vault_core_lock');
+    _cooldown = _lib.lookupFunction<
+        _CooldownC,
+        int Function(Pointer<Utf8>,
+            Pointer<Uint64>)>('vault_core_cooldown_remaining_ms');
+    _vaultMkdir = _lib.lookupFunction<
+        _MkdirC,
+        int Function(Pointer<Void>, int, Pointer<Utf8>,
+            Pointer<Uint64>)>('vault_core_vault_mkdir');
+    _vaultList =
+        _lib.lookupFunction<_ListC, Pointer<Utf8> Function(Pointer<Void>, int)>(
             'vault_core_vault_list');
-    _vaultSearch = _lib.lookupFunction<_SearchC,
-        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_vault_search');
-    _vaultImport = _lib.lookupFunction<_ImportC, int Function(
-        Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>)>('vault_core_vault_import');
-    _vaultExport = _lib.lookupFunction<_ExportC, int Function(
-        Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_export');
-    _vaultRenameFile = _lib.lookupFunction<_RenameC, int Function(
-        Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_rename_file');
-    _vaultRenameFolder = _lib.lookupFunction<_RenameFolderC, int Function(
-        Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_rename_folder');
+    _vaultSearch = _lib.lookupFunction<
+        _SearchC,
+        Pointer<Utf8> Function(
+            Pointer<Void>, Pointer<Utf8>)>('vault_core_vault_search');
+    _vaultImport = _lib.lookupFunction<
+        _ImportC,
+        int Function(Pointer<Void>, Pointer<Utf8>, int,
+            Pointer<Uint64>)>('vault_core_vault_import');
+    _vaultExport = _lib.lookupFunction<
+        _ExportC,
+        int Function(
+            Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_export');
+    _vaultRenameFile = _lib.lookupFunction<
+        _RenameC,
+        int Function(
+            Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_rename_file');
+    _vaultRenameFolder = _lib.lookupFunction<
+        _RenameFolderC,
+        int Function(Pointer<Void>, int,
+            Pointer<Utf8>)>('vault_core_vault_rename_folder');
     _vaultDeleteFile = _lib.lookupFunction<_DeleteFileC,
         int Function(Pointer<Void>, int, int)>('vault_core_vault_delete_file');
-    _vaultDeleteFolder = _lib.lookupFunction<_DeleteFolderC,
-        int Function(Pointer<Void>, int, int)>('vault_core_vault_delete_folder');
-    _vaultSetTags = _lib.lookupFunction<_TagsC, int Function(
-        Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_set_tags');
-    _vaultShareCreate = _lib.lookupFunction<_ShareCreateC,
-        Pointer<Utf8> Function(Pointer<Void>, int, int, int)>('vault_core_vault_share_create');
-    _vaultShareOpen = _lib.lookupFunction<_ShareOpenC, int Function(
-        Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)>('vault_core_vault_share_open');
-    _p2pPairBegin = _lib
-        .lookupFunction<_P2pPairBeginC, Pointer<Utf8> Function(Pointer<Void>)>(
-            'vault_core_p2p_pair_begin');
-    _p2pPairJoin = _lib.lookupFunction<_P2pPairJoinC,
-        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>(
-        'vault_core_p2p_pair_join');
-    _p2pSync = _lib
-        .lookupFunction<_P2pSyncC, Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>)>(
-            'vault_core_p2p_sync');
-    _p2pSyncRelay = _lib.lookupFunction<_P2pSyncRelayC,
-        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>(
-        'vault_core_p2p_sync_relay');
-    _p2pServeRelay = _lib.lookupFunction<_P2pServeRelayC,
-        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>(
-        'vault_core_p2p_serve_relay');
-    _p2pStatus = _lib
-        .lookupFunction<_P2pStatusC, Pointer<Utf8> Function(Pointer<Void>)>(
+    _vaultDeleteFolder = _lib
+        .lookupFunction<_DeleteFolderC, int Function(Pointer<Void>, int, int)>(
+            'vault_core_vault_delete_folder');
+    _vaultSetTags = _lib.lookupFunction<
+        _TagsC,
+        int Function(
+            Pointer<Void>, int, Pointer<Utf8>)>('vault_core_vault_set_tags');
+    _vaultShareCreate = _lib.lookupFunction<
+        _ShareCreateC,
+        Pointer<Utf8> Function(
+            Pointer<Void>, int, int, int)>('vault_core_vault_share_create');
+    _vaultShareOpen = _lib.lookupFunction<
+        _ShareOpenC,
+        int Function(Pointer<Void>, int, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_vault_share_open');
+    _p2pPairBegin = _lib.lookupFunction<_P2pPairBeginC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_p2p_pair_begin');
+    _p2pPairJoin = _lib.lookupFunction<
+        _P2pPairJoinC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_p2p_pair_join');
+    _p2pSync = _lib.lookupFunction<
+        _P2pSyncC,
+        Pointer<Utf8> Function(
+            Pointer<Void>, Pointer<Utf8>)>('vault_core_p2p_sync');
+    _p2pSyncRelay = _lib.lookupFunction<
+        _P2pSyncRelayC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_p2p_sync_relay');
+    _p2pServeRelay = _lib.lookupFunction<
+        _P2pServeRelayC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_p2p_serve_relay');
+    _p2pStatus =
+        _lib.lookupFunction<_P2pStatusC, Pointer<Utf8> Function(Pointer<Void>)>(
             'vault_core_p2p_status');
+    _auditList =
+        _lib.lookupFunction<_AuditListC, Pointer<Utf8> Function(Pointer<Void>)>(
+            'vault_core_audit_list');
+    _auditVerify =
+        _lib.lookupFunction<_AuditListC, Pointer<Utf8> Function(Pointer<Void>)>(
+            'vault_core_audit_verify');
+    _auditExport = _lib.lookupFunction<_AuditExportC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_audit_export');
+    _destroyLocal =
+        _lib.lookupFunction<_DestroyLocalC, int Function(Pointer<Void>, int)>(
+            'vault_core_destroy_local');
+    _stegoStatus =
+        _lib.lookupFunction<_StegoStatusC, int Function(Pointer<Void>)>(
+            'vault_core_stego_status');
+    _stegoSetEnabled = _lib.lookupFunction<_StegoSetEnabledC,
+        int Function(Pointer<Void>, int)>('vault_core_stego_set_enabled');
+    _stegoCapacity = _lib.lookupFunction<
+        _StegoCapacityC,
+        int Function(
+            Pointer<Void>, Pointer<Utf8>)>('vault_core_stego_capacity');
+    _stegoEmbed = _lib.lookupFunction<
+        _StegoEmbedC,
+        int Function(Pointer<Void>, int, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_stego_embed');
+    _stegoExtract = _lib.lookupFunction<
+        _StegoExtractC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Utf8>)>('vault_core_stego_extract');
     _p2pUnpair = _lib.lookupFunction<_P2pUnpairC,
         int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_p2p_unpair');
-    _p2pDestroyArm = _lib.lookupFunction<_P2pDestroyArmC,
-        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int)>(
-        'vault_core_p2p_destroy_arm');
-    _p2pDestroyCancel = _lib
-        .lookupFunction<_HandleFnC, int Function(Pointer<Void>)>(
+    _p2pDestroyArm = _lib.lookupFunction<
+        _P2pDestroyArmC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
+            int)>('vault_core_p2p_destroy_arm');
+    _p2pDestroyCancel =
+        _lib.lookupFunction<_HandleFnC, int Function(Pointer<Void>)>(
             'vault_core_p2p_destroy_cancel');
-    _p2pConflictResolve = _lib.lookupFunction<_P2pConflictResolveC,
-        int Function(Pointer<Void>, int, int, int)>('vault_core_p2p_conflict_resolve');
+    _p2pConflictResolve = _lib.lookupFunction<
+        _P2pConflictResolveC,
+        int Function(
+            Pointer<Void>, int, int, int)>('vault_core_p2p_conflict_resolve');
     _version = version;
     _freeString = freeString;
   }
@@ -274,35 +388,54 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Utf8>) _vaultExists;
   late final int Function(Pointer<Utf8>) _bioBound;
   late final int Function(Pointer<Utf8>, Pointer<Utf8>, int) _create;
-  late final int Function(Pointer<Utf8>, Pointer<Utf8>, int, Pointer<Pointer<Void>>,
-      Pointer<Uint64>) _unlock;
+  late final int Function(Pointer<Utf8>, Pointer<Utf8>, int,
+      Pointer<Pointer<Void>>, Pointer<Uint64>) _unlock;
   late final _UnlockBioDart _unlockBio;
   late final int Function(Pointer<Void>) _bindBio;
   late final int Function(Pointer<Void>) _unbindBio;
-  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _changePassword;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      _changePassword;
   late final void Function(Pointer<Void>) _lock;
   late final int Function(Pointer<Utf8>, Pointer<Uint64>) _cooldown;
-  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Uint64>) _vaultMkdir;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Uint64>)
+      _vaultMkdir;
   late final Pointer<Utf8> Function(Pointer<Void>, int) _vaultList;
   late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>) _vaultSearch;
-  late final int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>) _vaultImport;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, int, Pointer<Uint64>)
+      _vaultImport;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultExport;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultRenameFile;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultRenameFolder;
   late final int Function(Pointer<Void>, int, int) _vaultDeleteFile;
   late final int Function(Pointer<Void>, int, int) _vaultDeleteFolder;
   late final int Function(Pointer<Void>, int, Pointer<Utf8>) _vaultSetTags;
-  late final Pointer<Utf8> Function(Pointer<Void>, int, int, int) _vaultShareCreate;
-  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>) _vaultShareOpen;
+  late final Pointer<Utf8> Function(Pointer<Void>, int, int, int)
+      _vaultShareCreate;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
+      _vaultShareOpen;
   late final Pointer<Utf8> Function(Pointer<Void>) _p2pPairBegin;
-  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pPairJoin;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      _p2pPairJoin;
   late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>) _p2pSync;
-  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pSyncRelay;
-  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>) _p2pServeRelay;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      _p2pSyncRelay;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      _p2pServeRelay;
   late final Pointer<Utf8> Function(Pointer<Void>) _p2pStatus;
   late final int Function(Pointer<Void>, Pointer<Utf8>) _p2pUnpair;
-  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int)
-      _p2pDestroyArm;
+  late final Pointer<Utf8> Function(Pointer<Void>) _auditList;
+  late final Pointer<Utf8> Function(Pointer<Void>) _auditVerify;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _auditExport;
+  late final int Function(Pointer<Void>, int) _destroyLocal;
+  late final int Function(Pointer<Void>) _stegoStatus;
+  late final int Function(Pointer<Void>, int) _stegoSetEnabled;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _stegoCapacity;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
+      _stegoEmbed;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      _stegoExtract;
+  late final Pointer<Utf8> Function(
+      Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int) _p2pDestroyArm;
   late final int Function(Pointer<Void>) _p2pDestroyCancel;
   late final int Function(Pointer<Void>, int, int, int) _p2pConflictResolve;
 
@@ -324,7 +457,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   /// 尝试加载原生引擎；失败返回 null（调用方回退 Stub）。
   static VaultCoreBridgeFfi? tryOpen() {
     try {
-      return VaultCoreBridgeFfi._(DynamicLibrary.open(VaultCoreBridge.libraryName));
+      return VaultCoreBridgeFfi._(
+          DynamicLibrary.open(VaultCoreBridge.libraryName));
     } on Error {
       return null;
     }
@@ -376,7 +510,9 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   EngineUnlock _runUnlock(
-    int Function(Pointer<Utf8>, Pointer<Utf8>, int, Pointer<Pointer<Void>>, Pointer<Uint64>) fn,
+    int Function(Pointer<Utf8>, Pointer<Utf8>, int, Pointer<Pointer<Void>>,
+            Pointer<Uint64>)
+        fn,
     String path,
     String password,
     bool disguise,
@@ -426,7 +562,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       _unbindBio(Pointer<Void>.fromAddress(sessionHandle as int));
 
   @override
-  int changePassword(Object sessionHandle, String oldPassword, String newPassword) {
+  int changePassword(
+      Object sessionHandle, String oldPassword, String newPassword) {
     final oldPw = _toNative(oldPassword);
     final newPw = _toNative(newPassword);
     try {
@@ -456,7 +593,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   @override
-  int vaultMkdir(Object sessionHandle, int parent, String name, List<int> idOut) {
+  int vaultMkdir(
+      Object sessionHandle, int parent, String name, List<int> idOut) {
     final n = _toNative(name);
     final id = calloc<Uint64>();
     try {
@@ -486,7 +624,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   @override
-  int vaultImport(Object sessionHandle, String src, int folder, List<int> idOut) {
+  int vaultImport(
+      Object sessionHandle, String src, int folder, List<int> idOut) {
     final s = _toNative(src);
     final id = calloc<Uint64>();
     try {
@@ -535,7 +674,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   @override
-  int vaultDeleteFolder(Object sessionHandle, int folderId, {bool secure = true}) {
+  int vaultDeleteFolder(Object sessionHandle, int folderId,
+      {bool secure = true}) {
     return _vaultDeleteFolder(_handle(sessionHandle), folderId, secure ? 1 : 0);
   }
 
@@ -550,12 +690,15 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   @override
-  String? vaultShareCreate(Object sessionHandle, int fileId, int ttlSecs, int maxOpens) {
-    return _takeJson(_vaultShareCreate(_handle(sessionHandle), fileId, ttlSecs, maxOpens));
+  String? vaultShareCreate(
+      Object sessionHandle, int fileId, int ttlSecs, int maxOpens) {
+    return _takeJson(
+        _vaultShareCreate(_handle(sessionHandle), fileId, ttlSecs, maxOpens));
   }
 
   @override
-  int vaultShareOpen(Object sessionHandle, int shareId, String token, String dest) {
+  int vaultShareOpen(
+      Object sessionHandle, int shareId, String token, String dest) {
     final t = _toNative(token);
     final d = _toNative(dest);
     try {
@@ -621,6 +764,71 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       _takeJson(_p2pStatus(_handle(sessionHandle)));
 
   @override
+  String? auditList(Object sessionHandle) =>
+      _takeJson(_auditList(_handle(sessionHandle)));
+
+  @override
+  String? auditVerify(Object sessionHandle) =>
+      _takeJson(_auditVerify(_handle(sessionHandle)));
+
+  @override
+  int auditExport(Object sessionHandle, String dest) {
+    final d = _toNative(dest);
+    try {
+      return _auditExport(_handle(sessionHandle), d);
+    } finally {
+      calloc.free(d);
+    }
+  }
+
+  @override
+  int destroyLocal(Object sessionHandle, {bool secure = true}) =>
+      _destroyLocal(_handle(sessionHandle), secure ? 1 : 0);
+
+  @override
+  int stegoStatus(Object sessionHandle) => _stegoStatus(_handle(sessionHandle));
+
+  @override
+  int stegoSetEnabled(Object sessionHandle, bool on) =>
+      _stegoSetEnabled(_handle(sessionHandle), on ? 1 : 0);
+
+  @override
+  int stegoCapacity(Object sessionHandle, String imagePath) {
+    final p = _toNative(imagePath);
+    try {
+      return _stegoCapacity(_handle(sessionHandle), p);
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  @override
+  int stegoEmbed(
+      Object sessionHandle, int fileId, String imagePath, String outPath) {
+    final i = _toNative(imagePath);
+    final o = _toNative(outPath);
+    try {
+      return _stegoEmbed(_handle(sessionHandle), fileId, i, o);
+    } finally {
+      calloc.free(i);
+      calloc.free(o);
+    }
+  }
+
+  @override
+  String? stegoExtract(
+      Object sessionHandle, String imagePath, String destPath) {
+    final i = _toNative(imagePath);
+    final d = _toNative(destPath);
+    try {
+      return _takeJson(_stegoExtract(_handle(sessionHandle), i, d));
+    } finally {
+      calloc.free(i);
+      calloc.free(d);
+    }
+  }
+
+  @override
   int p2pUnpair(Object sessionHandle, String deviceId) {
     final d = _toNative(deviceId);
     try {
@@ -665,10 +873,12 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
   String coreVersion() => 'vault-core (stub, native not linked)';
 
   @override
-  bool vaultExists(String path) => throw UnsupportedError('stub: native not linked');
+  bool vaultExists(String path) =>
+      throw UnsupportedError('stub: native not linked');
 
   @override
-  bool bioBound(String path) => throw UnsupportedError('stub: native not linked');
+  bool bioBound(String path) =>
+      throw UnsupportedError('stub: native not linked');
 
   @override
   int createVault(String path, String password, {bool bindBio = false}) =>
@@ -679,26 +889,33 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  EngineUnlock unlockBio(String path) => throw UnsupportedError('stub: native not linked');
-
-  @override
-  int bindBio(Object sessionHandle) => throw UnsupportedError('stub: native not linked');
-
-  @override
-  int unbindBio(Object sessionHandle) => throw UnsupportedError('stub: native not linked');
-
-  @override
-  int changePassword(Object sessionHandle, String oldPassword, String newPassword) =>
+  EngineUnlock unlockBio(String path) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
-  void lock(Object sessionHandle) => throw UnsupportedError('stub: native not linked');
+  int bindBio(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
 
   @override
-  int cooldownRemainingMs(String path) => throw UnsupportedError('stub: native not linked');
+  int unbindBio(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
 
   @override
-  int vaultMkdir(Object sessionHandle, int parent, String name, List<int> idOut) =>
+  int changePassword(
+          Object sessionHandle, String oldPassword, String newPassword) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  void lock(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int cooldownRemainingMs(String path) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int vaultMkdir(
+          Object sessionHandle, int parent, String name, List<int> idOut) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
@@ -710,7 +927,8 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  int vaultImport(Object sessionHandle, String src, int folder, List<int> idOut) =>
+  int vaultImport(
+          Object sessionHandle, String src, int folder, List<int> idOut) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
@@ -730,7 +948,8 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  int vaultDeleteFolder(Object sessionHandle, int folderId, {bool secure = true}) =>
+  int vaultDeleteFolder(Object sessionHandle, int folderId,
+          {bool secure = true}) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
@@ -738,11 +957,13 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  String? vaultShareCreate(Object sessionHandle, int fileId, int ttlSecs, int maxOpens) =>
+  String? vaultShareCreate(
+          Object sessionHandle, int fileId, int ttlSecs, int maxOpens) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
-  int vaultShareOpen(Object sessionHandle, int shareId, String token, String dest) =>
+  int vaultShareOpen(
+          Object sessionHandle, int shareId, String token, String dest) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
@@ -774,7 +995,46 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  String? p2pDestroyArm(Object sessionHandle, String addr, String target, int delaySecs) =>
+  String? auditList(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? auditVerify(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int auditExport(Object sessionHandle, String dest) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int destroyLocal(Object sessionHandle, {bool secure = true}) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int stegoStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int stegoSetEnabled(Object sessionHandle, bool on) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int stegoCapacity(Object sessionHandle, String imagePath) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int stegoEmbed(
+          Object sessionHandle, int fileId, String imagePath, String outPath) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? stegoExtract(
+          Object sessionHandle, String imagePath, String destPath) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pDestroyArm(
+          Object sessionHandle, String addr, String target, int delaySecs) =>
       throw UnsupportedError('stub: native not linked');
 
   @override

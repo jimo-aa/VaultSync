@@ -491,6 +491,318 @@ class AppLocalizationsEn extends AppLocalizations {
   String get navVault => 'Vault';
 
   @override
+  String get securityAuditChainBroken => 'Chain check failed';
+
+  @override
+  String get securityAuditChainOk => 'Chain verified';
+
+  @override
+  String get securityAuditEmpty =>
+      'No audit records yet · unlock/import/sync operations are recorded here';
+
+  @override
+  String get securityAuditExport => 'Export';
+
+  @override
+  String securityAuditExportFailed(String err) {
+    return 'Audit export failed: $err';
+  }
+
+  @override
+  String securityAuditExportedTo(String path) {
+    return 'Audit log encrypted and exported to $path';
+  }
+
+  @override
+  String securityAuditHead(String short) {
+    return 'Local chain head $short';
+  }
+
+  @override
+  String get securityAuditLoadFailed =>
+      'Failed to read the audit log (engine unavailable or session expired)';
+
+  @override
+  String get securityAuditNote =>
+      'The audit chain is per device (one chain each, docs/05-06 §3.1); this page shows the local chain only. Failed attempts while locked cannot be written (the log key is derived from the MK), so the chain holds successful operations only. The log is sealed as a whole with AEAD, so the first load of a long log takes a moment.';
+
+  @override
+  String get securityAuditTitle => 'Audit log';
+
+  @override
+  String get securityAuditVerify => 'Verify chain';
+
+  @override
+  String securityAuditVerifyFailed(int at, String reason) {
+    return 'Audit chain verification failed from entry $at: $reason';
+  }
+
+  @override
+  String securityAuditVerifyOk(int checked) {
+    return 'Audit chain verified ($checked entries)';
+  }
+
+  @override
+  String get securityAuditVerifyUnavailable =>
+      'Audit chain unreadable; verification was not run';
+
+  @override
+  String get securityBadgeGuarantee => 'By design';
+
+  @override
+  String get securityCatDevice => 'Device';
+
+  @override
+  String get securityCatSecurity => 'Security';
+
+  @override
+  String get securityCatSession => 'Session';
+
+  @override
+  String get securityCatVault => 'Vault';
+
+  @override
+  String get securityColAction => 'Action / object';
+
+  @override
+  String get securityColCategory => 'Category';
+
+  @override
+  String get securityColHash => 'Chain hash';
+
+  @override
+  String get securityColSeq => 'Seq';
+
+  @override
+  String get securityColTime => 'Time';
+
+  @override
+  String securityDestroyAllConfirmBody(int n) {
+    return 'The engine has no offline command queue, so a destroy command cannot be delivered to offline devices. Confirming wipes this device only; the $n paired device(s) must each be wiped from their own device page while online.';
+  }
+
+  @override
+  String get securityDestroyAllConfirmTitle => 'Confirm fleet-wide wipe';
+
+  @override
+  String get securityDestroyCancel => 'Cancel';
+
+  @override
+  String get securityDestroyConfirm => 'Confirm';
+
+  @override
+  String securityDestroyConfirmInput(String word) {
+    return 'Type \"$word\" to confirm';
+  }
+
+  @override
+  String get securityDestroyDialogSub =>
+      'Irreversible · confirmation phrase required';
+
+  @override
+  String get securityDestroyDialogTitle => 'Emergency wipe';
+
+  @override
+  String get securityDestroyDone => 'Local data cryptographically erased';
+
+  @override
+  String get securityDestroyEnter => 'Proceed to wipe';
+
+  @override
+  String get securityDestroyExportCancelled =>
+      'No export path selected; wipe cancelled';
+
+  @override
+  String get securityDestroyExportFirst => 'Export the audit log first';
+
+  @override
+  String get securityDestroyExportFirstSub =>
+      'The data directory is wiped together with the audit log; export it to a chosen path first';
+
+  @override
+  String securityDestroyExported(String path) {
+    return 'Audit log exported to $path';
+  }
+
+  @override
+  String securityDestroyFailed(String err) {
+    return 'Wipe failed: $err';
+  }
+
+  @override
+  String get securityDestroyModeAll => 'Fleet-wide wipe';
+
+  @override
+  String get securityDestroyModeAllSub =>
+      'Signs a destroy command and propagates it to every paired device over P2P / relay';
+
+  @override
+  String get securityDestroyModeLocal => 'Wipe this device';
+
+  @override
+  String get securityDestroyModeLocalSub =>
+      'Destroys the local MK and every key slot, with media fallback overwrite';
+
+  @override
+  String get securityDestroyNote =>
+      'Offline devices do not receive the destroy command immediately: it enters each device\'s high-priority signalling queue, and the target verifies and executes it before any other message once it comes online (signed by the initiating device key, so it cannot be forged). For a device that never comes online, the wipe cannot be guaranteed.';
+
+  @override
+  String get securityDestroyNow => 'Wipe now';
+
+  @override
+  String get securityDestroyPeersHint =>
+      'Bring the peer online first, then start the wipe from that device\'s page';
+
+  @override
+  String get securityDestroyPeersNone =>
+      'Fleet-wide wipe: no paired devices, only this device was erased';
+
+  @override
+  String securityDestroyPeersUndelivered(int n) {
+    return 'Fleet-wide wipe not delivered: this device is erased, $n paired device(s) must be wiped from their own device page while online';
+  }
+
+  @override
+  String get securityDestroyPhrase => 'destroy';
+
+  @override
+  String get securityDestroyRunning => 'Wiping…';
+
+  @override
+  String get securityDestroySub =>
+      'Local / remote / fleet-wide · cryptographic erase';
+
+  @override
+  String get securityDestroyTitle => 'Emergency wipe';
+
+  @override
+  String get securityDetectAudit => 'Audit chain integrity';
+
+  @override
+  String securityDetectAuditBroken(int at, String reason) {
+    return 'Verification failed from entry $at: $reason';
+  }
+
+  @override
+  String securityDetectAuditOk(int checked, int total) {
+    return 'Normal · $checked / $total entries verified';
+  }
+
+  @override
+  String get securityDetectAuditUnknown =>
+      'Audit chain unreadable · cannot verify';
+
+  @override
+  String get securityDetectBrute => 'Brute-force detection';
+
+  @override
+  String securityDetectBruteCooldown(int m, int s) {
+    return 'Cooling down · $m min $s s remaining';
+  }
+
+  @override
+  String get securityDetectBruteOk => 'Normal · no active cooldown';
+
+  @override
+  String get securityDetectDevice => 'Unexpected devices';
+
+  @override
+  String get securityDetectDeviceNone => 'No paired devices yet';
+
+  @override
+  String securityDetectDeviceOk(int n) {
+    return '$n device(s) paired · no unauthorized access recorded';
+  }
+
+  @override
+  String securityDetectDeviceWarn(String event) {
+    return 'Attention · $event';
+  }
+
+  @override
+  String get securityDetectIntegrity => 'File integrity';
+
+  @override
+  String get securityDetectIntegritySub =>
+      'Per-chunk GCM authentication on every export and sync · rejected on failure';
+
+  @override
+  String get securityDetectMemory => 'Memory leak scan';
+
+  @override
+  String get securityDetectMemorySub =>
+      'Keys and plaintext buffers are Zeroizing end to end · the MK never leaves the engine';
+
+  @override
+  String get securityDetectSignal => 'Anti-replay signalling';
+
+  @override
+  String get securityDetectSignalDown =>
+      'Engine stopped · signal sequence continuity unverified';
+
+  @override
+  String securityDetectSignalOk(int n) {
+    return 'Noise channel + monotonic application sequence numbers (docs/08 §4.1) · local engine alive · $n signalling event(s)';
+  }
+
+  @override
+  String get securityDetectSignalUnknown =>
+      'P2P status unavailable · cannot determine';
+
+  @override
+  String get securityFilterAll => 'All';
+
+  @override
+  String get securityNeedUnlock => 'Unlock the vault first';
+
+  @override
+  String get securityOverallDanger => 'Overall: critical';
+
+  @override
+  String get securityOverallOk => 'Overall: normal';
+
+  @override
+  String get securityOverallWarn => 'Overall: attention';
+
+  @override
+  String get securityRefresh => 'Refresh';
+
+  @override
+  String get securityStegoDisable => 'Disable';
+
+  @override
+  String get securityStegoDisabled => 'Steganography engine disabled';
+
+  @override
+  String get securityStegoEnable => 'Enable';
+
+  @override
+  String get securityStegoEnabled => 'Steganography engine enabled';
+
+  @override
+  String securityStegoFailed(String err) {
+    return 'Failed to change the steganography engine: $err';
+  }
+
+  @override
+  String get securityStegoSubOff =>
+      'Hidden by default · covert storage in image LSBs · enable/disable is audited';
+
+  @override
+  String get securityStegoSubOn =>
+      'Enabled · covert storage in image LSBs · enable/disable is audited';
+
+  @override
+  String get securityStegoTitle => 'Steganography engine';
+
+  @override
+  String get securitySub => 'Audit · Detection · Incident response';
+
+  @override
+  String get securityTitle => 'Security Center';
+
+  @override
   String get settingsAbout => 'About';
 
   @override
@@ -869,6 +1181,209 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get stateUnknownDevice => 'Unknown device';
+
+  @override
+  String get stegoPageCancel => 'Cancel';
+
+  @override
+  String get stegoPageCapacityCard => 'Capacity reference';
+
+  @override
+  String get stegoPageCapacityFormat =>
+      'Unsupported image: the stego engine accepts 8-bit RGB / RGBA PNG only (lossy compression destroys LSBs)';
+
+  @override
+  String get stegoPageCapacityFormula =>
+      'Capacity = width × height × 3 ÷ 8 − 4 (the 4 bytes are the payload length prefix)';
+
+  @override
+  String get stegoPageCapacityIo =>
+      'Could not read the image: the file is missing or unreadable';
+
+  @override
+  String get stegoPageCapacityLimit =>
+      'One image holds little: larger files must be split across several images (docs/05-05 §3.2).';
+
+  @override
+  String stegoPageCapacityLine(String cap, String need) {
+    return 'Capacity $cap / needed $need';
+  }
+
+  @override
+  String stegoPageCapacityShort(String need) {
+    return 'Not enough capacity: $need short — use a larger image (or split across several images).';
+  }
+
+  @override
+  String get stegoPageDisable => 'Disable';
+
+  @override
+  String get stegoPageDisableDone => 'Stego engine disabled';
+
+  @override
+  String get stegoPageDisabled => 'Disabled';
+
+  @override
+  String get stegoPageDisabledNote =>
+      'The stego engine is off by default: embed / extract are only accepted once it is enabled, and both enabling and disabling are written to the audit chain (docs/05-06 §7).';
+
+  @override
+  String get stegoPageEmbedAction => 'Embed';
+
+  @override
+  String stegoPageEmbedDone(String path) {
+    return 'Embedded → $path';
+  }
+
+  @override
+  String get stegoPageEmbedNote =>
+      'Payload = AEAD ciphertext of [length prefix ‖ file name ‖ plaintext]: the 4-byte length prefix and the AEAD overhead (12-byte nonce + 16-byte tag) also count against capacity.';
+
+  @override
+  String get stegoPageEmbedSub =>
+      'Vault file → AES-256-GCM ciphertext → PNG LSB';
+
+  @override
+  String get stegoPageEmbedTitle => 'Stego import (embed)';
+
+  @override
+  String get stegoPageEmbedding => 'Embedding…';
+
+  @override
+  String get stegoPageEnable => 'Enable stego engine';
+
+  @override
+  String get stegoPageEnableDone => 'Stego engine enabled';
+
+  @override
+  String get stegoPageEnabled => 'Enabled';
+
+  @override
+  String get stegoPageEnabledNote =>
+      'The payload is encrypted first, then embedded: the image LSBs hold nothing but AES-256-GCM ciphertext under a key derived from this vault\'s MK via HKDF — extraction needs that same master key, so this is a local concealment aid, not a cross-device channel.';
+
+  @override
+  String get stegoPageExtractAction => 'Extract';
+
+  @override
+  String stegoPageExtractDone(String name, String size) {
+    return 'Restored $name ($size)';
+  }
+
+  @override
+  String get stegoPageExtractFailed =>
+      'Extraction failed: the image holds no valid payload, is not an 8-bit RGB/RGBA PNG, or the payload belongs to another vault (master key mismatch).';
+
+  @override
+  String get stegoPageExtractNote =>
+      'Extraction only works inside the same vault: the payload key is derived from this machine\'s MK, so another vault or device cannot decrypt it.';
+
+  @override
+  String get stegoPageExtractSub =>
+      'PNG LSB → ciphertext frame → AES-256-GCM decrypt';
+
+  @override
+  String get stegoPageExtractTitle => 'Stego extract (retrieve)';
+
+  @override
+  String get stegoPageExtracting => 'Extracting…';
+
+  @override
+  String get stegoPageFileEmpty => 'No files in the vault (import one first)';
+
+  @override
+  String get stegoPageFileLoading => 'Reading vault files…';
+
+  @override
+  String stegoPageFileOption(String name, String size, String folder) {
+    return '$name · $size · $folder';
+  }
+
+  @override
+  String get stegoPageFileRoot => 'Root';
+
+  @override
+  String get stegoPageNeedUnlock =>
+      'Session is locked; stego operations are unavailable';
+
+  @override
+  String get stegoPageNotChosen => 'Not chosen';
+
+  @override
+  String get stegoPagePickFile => 'Vault file';
+
+  @override
+  String get stegoPagePickFileHint => 'Choose the file to embed';
+
+  @override
+  String get stegoPagePickImage => 'Choose PNG image';
+
+  @override
+  String get stegoPagePickOutput => 'Choose output location';
+
+  @override
+  String get stegoPagePickRestore => 'Choose restore location';
+
+  @override
+  String get stegoPagePickStegoImage => 'Choose PNG carrying data';
+
+  @override
+  String stegoPagePlainSize(String size) {
+    return 'Plaintext size ≈ $size';
+  }
+
+  @override
+  String get stegoPageSafetyNote =>
+      'Steganography is a concealment aid, not a replacement for the main vault; lossy compression (JPG) destroys LSBs, so use PNG.';
+
+  @override
+  String stegoPageSizeB(int n) {
+    return '$n B';
+  }
+
+  @override
+  String stegoPageSizeBytes(int bytes, String size) {
+    return '$bytes bytes ≈ $size';
+  }
+
+  @override
+  String stegoPageSizeKb(String n) {
+    return '$n KB';
+  }
+
+  @override
+  String stegoPageSizeMb(String n) {
+    return '$n MB';
+  }
+
+  @override
+  String get stegoPageSub =>
+      'Concealment on top of encryption · AES-256-GCM ciphertext in image LSBs';
+
+  @override
+  String get stegoPageTileEmbed => 'Stego import (embed)';
+
+  @override
+  String get stegoPageTileEmbedSub =>
+      'Embed an already-encrypted vault file into an ordinary image; the image looks unchanged.';
+
+  @override
+  String get stegoPageTileExtract => 'Stego extract (retrieve)';
+
+  @override
+  String get stegoPageTileExtractSub =>
+      'Pull the ciphertext frame out of an image and decrypt the original file.';
+
+  @override
+  String get stegoPageTileLocked => 'Enable the stego engine first';
+
+  @override
+  String get stegoPageTitle => 'Steganography Engine';
+
+  @override
+  String stegoPageToggleFailed(String err) {
+    return 'Operation failed: $err';
+  }
 
   @override
   String get syncPageAddrHint => 'host:port, e.g. 192.168.1.10:9100';

@@ -1,4 +1,4 @@
-# 最底层 crate：链式哈希审计日志（P5-1 完整实现）。
+# 链式哈希审计日志，依赖 crypto（docs/01 §三）。
 [package]
 name = "vault-audit"
 version.workspace = true
@@ -6,3 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+vault-crypto = { path = "../vault-crypto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

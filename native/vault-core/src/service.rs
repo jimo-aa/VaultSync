@@ -128,6 +128,8 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
                 disguise,
                 vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 p2p: std::sync::Mutex::new(None),
+                audit: std::sync::Mutex::new(None),
+                stego_enabled: std::sync::atomic::AtomicBool::new(false),
             })
         }
         Some(_) => Err(CoreError::Internal(
@@ -159,6 +161,8 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
                 disguise: false,
                 vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 p2p: std::sync::Mutex::new(None),
+                audit: std::sync::Mutex::new(None),
+                stego_enabled: std::sync::atomic::AtomicBool::new(false),
             })
         }
         Some(_) => Err(CoreError::Internal(
@@ -217,6 +221,98 @@ pub fn cooldown_remaining_ms(path: &Path) -> Option<u64> {
 pub fn bio_bound(path: &Path) -> Result<bool, CoreError> {
     let ks = Keystore::load(path).map_err(CoreError::Format)?;
     Ok(ks.bio_bound())
+}
+
+/// 加密擦除本机数据（P5-5 紧急销毁 / 远程销毁执行体，docs/05-06 §五）。
+///
+/// `secure=true` 时先对保险箱头部与数据目录内的每个文件做**单次覆写**再删除
+/// （介质兜底语义；SSD 上单次覆写不等于物理擦除，文档如实标注）。
+/// 销毁的是「本机全部可解封材料」：保险箱头部（wrapped MK 副本 + salt）
+/// 与数据目录（密文容器 / 加密索引 / P2P 身份 / 审计日志）。
+pub(crate) fn wipe_local(vault_path: &Path, secure: bool) -> Result<(), String> {
+    let stem = vault_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("bad vault path")?;
+    let data_dir = vault_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(format!("{stem}.data"));
+
+    let mut targets: Vec<std::path::PathBuf> = Vec::new();
+    if vault_path.exists() {
+        targets.push(vault_path.to_path_buf());
+    }
+    collect_files(&data_dir, &mut targets, 0);
+
+    if secure {
+        for f in &targets {
+            overwrite_once(f);
+        }
+    }
+
+    let mut errs = Vec::new();
+    for f in &targets {
+        if f == vault_path {
+            continue;
+        }
+        if std::fs::remove_file(f).is_err() && f.exists() {
+            errs.push("file");
+        }
+    }
+    if std::fs::remove_file(vault_path).is_err() && vault_path.exists() {
+        errs.push("vault file");
+    }
+    if std::fs::remove_dir_all(&data_dir).is_err() && data_dir.exists() {
+        errs.push("data dir");
+    }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("wipe failed: {}", errs.join(", ")))
+    }
+}
+
+/// 递归收集数据目录内的常规文件（深度上限防环）。
+fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>, depth: u32) {
+    if depth > 8 || !dir.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, out, depth + 1);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// 单次覆写（64 KiB 零块）；失败静默（尽力而为，随后仍会删除）。
+fn overwrite_once(path: &Path) {
+    use std::io::{Seek, Write};
+    let mut f = match std::fs::OpenOptions::new().write(true).open(path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if f.seek(std::io::SeekFrom::Start(0)).is_err() {
+        return;
+    }
+    let zeros = vec![0u8; 64 * 1024];
+    let mut left = len;
+    while left > 0 {
+        let n = zeros.len().min(left as usize);
+        if f.write_all(&zeros[..n]).is_err() {
+            return;
+        }
+        left -= n as u64;
+    }
+    f.sync_all().ok();
 }
 
 #[cfg(test)]

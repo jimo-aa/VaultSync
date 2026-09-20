@@ -690,6 +690,59 @@ class _VaultPageState extends ConsumerState<VaultPage> {
             colors: [Color(0xFF20283A), Color(0xFF2A3450)]),
       };
 
+  /// 网格/列表列数（与 _grid 的 SliverGridDelegate 取同一公式），
+  /// 供方向键上下移动。分栏与列表视图按单列处理。
+  int _cols(VaultUiState state) {
+    if (state.view != VaultViewMode.grid) return 1;
+    final width = MediaQuery.widthOf(context) - DesignTokens.sidebarW - 48;
+    return (width / 172).floor().clamp(3, 8);
+  }
+
+  /// 键盘可达（P5-8 无障碍深化）：Tab 聚焦内容区后可用方向键遍历条目。
+  KeyEventResult _onContentKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final state = ref.read(vaultUiProvider);
+    final entries = state.listing.entries;
+    if (entries.isEmpty) return KeyEventResult.ignored;
+    final cur = state.selected.isEmpty
+        ? -1
+        : entries.indexWhere((x) => state.selected.contains(x.id));
+    final ctrl = HardwareKeyboard.instance.logicalKeysPressed
+            .contains(LogicalKeyboardKey.controlLeft) ||
+        HardwareKeyboard.instance.logicalKeysPressed
+            .contains(LogicalKeyboardKey.controlRight);
+    final key = event.logicalKey;
+
+    if (ctrl && key == LogicalKeyboardKey.keyA) {
+      _ctl.selectAll();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      _ctl.clearSelection();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.space) {
+      if (cur >= 0) _openDetail(entries[cur]);
+      return KeyEventResult.handled;
+    }
+    final cols = _cols(state);
+    int? next;
+    if (key == LogicalKeyboardKey.arrowRight) {
+      next = cur < 0 ? 0 : (cur + 1).clamp(0, entries.length - 1);
+    } else if (key == LogicalKeyboardKey.arrowLeft) {
+      next = cur < 0 ? 0 : (cur - 1).clamp(0, entries.length - 1);
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      next = cur < 0 ? 0 : (cur + cols).clamp(0, entries.length - 1);
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      next = cur < 0 ? 0 : (cur - cols).clamp(0, entries.length - 1);
+    }
+    if (next == null) return KeyEventResult.ignored;
+    _select(entries[next]);
+    return KeyEventResult.handled;
+  }
+
   Color _kindColor(String ic) => switch (ic) {
         'img' => context.vs.enc,
         'zip' => context.vs.gold,
@@ -719,76 +772,82 @@ class _VaultPageState extends ConsumerState<VaultPage> {
             DesignTokens.sp5 * 2 -
             1);
 
-    return Listener(
-      // 每次按下先复位守卫：右键选中后守卫会残留到下一次点击，若不复位，
-      // 紧随其后的「点空白取消选中」会被上一次的守卫吞掉（实测复现）。
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (_) => _tapGuard = false,
-      child: GestureDetector(
-        // 点击空白处清除选中；命中条目的点击由 _tapGuard 抑制（见 _clearSelection）
-        onTap: _clearSelection,
+    return Focus(
+      // 内容区可聚焦（Tab 到达），聚焦后方向键即可遍历条目（P5-8）。
+      canRequestFocus: true,
+      onKeyEvent: _onContentKey,
+      child: Listener(
+        // 每次按下先复位守卫：右键选中后守卫会残留到下一次点击，若不复位，
+        // 紧随其后的「点空白取消选中」会被上一次的守卫吞掉（实测复现）。
         behavior: HitTestBehavior.translucent,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: minH),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 工具栏（.toolbar）
-              Row(
-                children: [
-                  VsSeg<VaultViewMode>(
-                    segments: [
-                      (VaultViewMode.grid, l.vaultPageViewGrid, 'grid'),
-                      (VaultViewMode.list, l.vaultPageViewList, 'list'),
-                      (VaultViewMode.columns, l.vaultPageViewSplit, 'split'),
+        onPointerDown: (_) => _tapGuard = false,
+        child: GestureDetector(
+          // 点击空白处清除选中；命中条目的点击由 _tapGuard 抑制（见 _clearSelection）
+          onTap: _clearSelection,
+          behavior: HitTestBehavior.translucent,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: minH),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 工具栏（.toolbar）
+                Row(
+                  children: [
+                    VsSeg<VaultViewMode>(
+                      segments: [
+                        (VaultViewMode.grid, l.vaultPageViewGrid, 'grid'),
+                        (VaultViewMode.list, l.vaultPageViewList, 'list'),
+                        (VaultViewMode.columns, l.vaultPageViewSplit, 'split'),
+                      ],
+                      selected: state.view,
+                      onChanged: _ctl.setView,
+                    ),
+                    if (state.selected.isNotEmpty) ...[
+                      const SizedBox(width: 10),
+                      VsBadge(l.vaultPageSelectedCount(state.selected.length),
+                          tone: VsTone.info, plain: true),
                     ],
-                    selected: state.view,
-                    onChanged: _ctl.setView,
-                  ),
-                  if (state.selected.isNotEmpty) ...[
-                    const SizedBox(width: 10),
-                    VsBadge(l.vaultPageSelectedCount(state.selected.length),
-                        tone: VsTone.info, plain: true),
+                    const Spacer(),
+                    VsButton(
+                        label: l.vaultPageNewFolder,
+                        icon: 'plus',
+                        tone: VsBtnTone.ghost,
+                        onPressed: _mkdir),
+                    const SizedBox(width: 8),
+                    VsButton(
+                        label: l.vaultPageImport,
+                        icon: 'up',
+                        tone: VsBtnTone.primary,
+                        onPressed: _import),
                   ],
-                  const Spacer(),
-                  VsButton(
-                      label: l.vaultPageNewFolder,
-                      icon: 'plus',
-                      tone: VsBtnTone.ghost,
-                      onPressed: _mkdir),
-                  const SizedBox(width: 8),
-                  VsButton(
-                      label: l.vaultPageImport,
-                      icon: 'up',
-                      tone: VsBtnTone.primary,
-                      onPressed: _import),
-                ],
-              ),
-              if (state.searchQuery != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Row(children: [
-                    Text(l.vaultPageSearching(state.searchQuery!),
-                        style: TextStyle(fontSize: 12.5, color: v.text2)),
-                    MouseRegion(
-                      cursor: SystemMouseCursors.click,
-                      child: GestureDetector(
-                        onTap: () {
-                          ref.read(globalSearchProvider.notifier).set('');
-                          _ctl.exitSearch();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 8),
-                          child: Text(l.vaultPageBackToFolder,
-                              style: TextStyle(fontSize: 12.5, color: v.blue)),
+                ),
+                if (state.searchQuery != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Row(children: [
+                      Text(l.vaultPageSearching(state.searchQuery!),
+                          style: TextStyle(fontSize: 12.5, color: v.text2)),
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () {
+                            ref.read(globalSearchProvider.notifier).set('');
+                            _ctl.exitSearch();
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Text(l.vaultPageBackToFolder,
+                                style:
+                                    TextStyle(fontSize: 12.5, color: v.blue)),
+                          ),
                         ),
                       ),
-                    ),
-                  ]),
-                ),
-              const SizedBox(height: 12),
-              _buildContent(v, state),
-            ],
+                    ]),
+                  ),
+                const SizedBox(height: 12),
+                _buildContent(v, state),
+              ],
+            ),
           ),
         ),
       ),

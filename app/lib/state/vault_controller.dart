@@ -89,8 +89,8 @@ class VaultUiController extends Notifier<VaultUiState> {
     final selected = state.selected
         .where((id) => listing.entries.any((e) => e.id == id))
         .toSet();
-    state = state.copyWith(
-        loading: false, listing: listing, selected: selected);
+    state =
+        state.copyWith(loading: false, listing: listing, selected: selected);
   }
 
   /// 进入子文件夹；环守卫：目标已在面包屑栈中（含当前层）则忽略。
@@ -118,7 +118,10 @@ class VaultUiController extends Notifier<VaultUiState> {
   }
 
   void select(VaultEntry e,
-      {bool toggle = false, bool range = false, bool ctrl = false, bool shift = false}) {
+      {bool toggle = false,
+      bool range = false,
+      bool ctrl = false,
+      bool shift = false}) {
     final order = state.listing.entries;
     if (shift) {
       final anchor = state.anchor;
@@ -147,6 +150,13 @@ class VaultUiController extends Notifier<VaultUiState> {
 
   void _selectOnly(int id) =>
       state = state.copyWith(selected: {id}, anchor: id);
+
+  /// 全选当前列表（键盘 Ctrl+A，P5-8）。
+  void selectAll() {
+    if (state.listing.isEmpty) return;
+    state = state.copyWith(
+        selected: state.listing.entries.map((e) => e.id).toSet());
+  }
 
   void clearSelection() {
     if (state.selected.isEmpty) return;
@@ -182,5 +192,5 @@ class VaultUiController extends Notifier<VaultUiState> {
   }
 }
 
-final vaultUiProvider = NotifierProvider<VaultUiController, VaultUiState>(
-    VaultUiController.new);
+final vaultUiProvider =
+    NotifierProvider<VaultUiController, VaultUiState>(VaultUiController.new);
