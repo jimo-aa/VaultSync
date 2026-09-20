@@ -1,4 +1,4 @@
-# P2P 网络与同步（libp2p），依赖 crypto + audit（docs/01 §三）。
+# P2P 网络与同步：Noise（snow）+ 自研轻量帧协议，未引入 libp2p（设计偏移见 LOG 2026-09-18 与 docs/v1.0/README §四 归档批注）。
 [package]
 name = "vault-p2p"
 version.workspace = true
