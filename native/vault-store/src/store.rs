@@ -103,7 +103,12 @@ impl VaultStore {
                 let (j, out) = j.recover(master_key, &exists, true)?;
                 maintenance = out.entered_maintenance;
                 recovery = out;
-                j
+                // recover 可能因「全部回滚且无留存条目」删除 journal 文件；
+                // RW 会话六步提交协议必须有 journal，重建空日志
+                match j {
+                    Some(j) => Some(j),
+                    None => Some(Journal::create_empty(data_dir, ns, master_key)?),
+                }
             }
             // 全新库：RW 打开即建空 journal（六步提交协议依赖它）
             None if !readonly => Some(Journal::create_empty(data_dir, ns, master_key)?),
