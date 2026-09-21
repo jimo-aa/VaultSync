@@ -44,6 +44,8 @@ jobs:
       #（命令行 -D warnings 会压过源码内 allow 属性，测试代码无法豁免）
       - run: cargo clippy --all-targets
       - run: cargo test
+      # P6-9 规模基准（自断言：容量翻倍写入 <2×、审计 append 常数级）
+      - run: cargo bench -p vault-store
       # P6-7 供应链治理：依赖图审计 + 许可证/封禁检查（advisories 阻断，见 native/deny.toml）
       - run: cargo install cargo-deny --locked || true
       - run: cargo deny --version || cargo install cargo-deny --locked
