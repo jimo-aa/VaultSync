@@ -23,9 +23,9 @@ pub enum OpenMode {
 #[derive(Clone, Copy, Debug)]
 struct SegmentMeta {
     kind: SegmentKind,
-    /// 保留：diagnostics 汇报段规模用
-    #[allow(dead_code)]
     record_count: u64,
+    /// 段文件字节数（压实触发判据）
+    bytes: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +60,13 @@ pub struct VaultStore {
 }
 
 /// 压实触发阈值（docs/v2.0/02 §4.3）。
+/// 偏差（记 LOG）：设计为「追加段 ≥ 8 **或** 字节 ≥ 快照 × 0.5」；实现改为
+/// 「字节达标即压；段数达标还须记录数 ≥ 512（或段数绝对超限）」——FFI 侧
+/// 每操作一次审计追加，若严格按「段数 ≥ 8」触发，8 条记录就全量重写一次，
+/// 单条 append 退化为 O(全日志)/8，违背 P6-4 的 O(1) 出口标准。
 const COMPACTION_APPEND_SEGMENTS: usize = 8;
+const COMPACTION_MIN_RECORDS: u64 = 512;
+const COMPACTION_ABSOLUTE_SEGMENTS: usize = 4096;
 /// pending 记录数达到该值即落一个追加段（批量化窗口的简化实现：
 /// 200 ms 时间窗属后台线程职责，本层提供显式 `flush`）。
 pub const FLUSH_BATCH_RECORDS: usize = 256;
@@ -141,6 +147,7 @@ impl VaultStore {
             let Ok(id) = stem.parse::<u64>() else {
                 continue;
             };
+            let bytes = e.metadata().map(|m| m.len()).unwrap_or(0);
             let (header, _records) = segment::read_segment(&e.path(), ns, master_key)?;
             // read_segment 已做 CRC + digest + AEAD 全量校验（审计段与快照段
             // 必须全量校验，docs/v2.0/02 §4.2 读取顺序）
@@ -149,6 +156,7 @@ impl VaultStore {
                 SegmentMeta {
                     kind: header.segment_kind,
                     record_count: header.record_count,
+                    bytes,
                 },
             ));
         }
@@ -319,6 +327,11 @@ impl VaultStore {
         self.pending.len()
     }
 
+    /// 是否有未提交的 pending 记录（审计段描述预登记判定用）。
+    pub fn pending_is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     fn segment_kind(&self) -> SegmentKind {
         match self.ns {
             Namespace::Index => SegmentKind::IndexAppend,
@@ -332,9 +345,11 @@ impl VaultStore {
     /// 六步（docs/v2.0/02 §4.2）：
     /// 1 journal 预告+fsync → 2 组包加密 → 3 tmp+fsync → 4 rename+fsync(dir)
     /// **提交点** → 5 journal 完成 → 6 清单更新。
-    pub fn flush(&mut self) -> Result<(), StoreError> {
+    /// 返回本批提交的段 id（无 pending 时为 None）。审计分段化的段间
+    /// 链头指针需要知道段边界，故返回 id。
+    pub fn flush(&mut self) -> Result<Option<u64>, StoreError> {
         if self.pending.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         self.ensure_writable()?;
         let seg_id = self.next_segment_id;
@@ -404,8 +419,14 @@ impl VaultStore {
         }
 
         // 步骤 6：清单更新（manifest 只是缓存；失败不回滚——扫描可修正）
-        self.segments
-            .insert(seg_id, SegmentMeta { kind, record_count });
+        self.segments.insert(
+            seg_id,
+            SegmentMeta {
+                kind,
+                record_count,
+                bytes: file.len() as u64,
+            },
+        );
         self.apply_records(&records);
         self.next_segment_id += 1;
         abort_point("before_manifest");
@@ -415,8 +436,13 @@ impl VaultStore {
         }
         abort_point("after_manifest");
 
+        // 全部预告已配对完成 → journal 截断（防日志无限增长拖慢后续提交）
+        if let Some(j) = self.journal.as_mut() {
+            j.truncate(&self.master_key)?;
+        }
+
         self.maybe_compact()?;
-        Ok(())
+        Ok(Some(seg_id))
     }
 
     /// manifest.vssg：state 命名空间的单条 KV，内容只是段集合的缓存视图。
@@ -465,21 +491,44 @@ impl VaultStore {
         Ok(())
     }
 
-    /// 压实触发：追加段 ≥ 8 或追加段总字节 ≥ 快照段 × 0.5（docs/v2.0/02 §4.3）。
+    /// 压实触发：追加段总字节 ≥ 快照段 × 0.5，或（追加段 ≥ 8 且追加记录数
+    /// ≥ 512），或追加段数绝对超限（docs/v2.0/02 §4.3，阈值修正见常量注释）。
     pub fn maybe_compact(&mut self) -> Result<bool, StoreError> {
         if self.readonly {
             return Ok(false); // 只读实例跳过压实，diagnostics 回报 compactionPending
         }
-        let append_segments = self
-            .segments
-            .iter()
-            .filter(|(_, m)| m.kind != SegmentKind::IndexSnapshot)
-            .count();
-        if append_segments < COMPACTION_APPEND_SEGMENTS {
-            return Ok(false);
+        let mut append_segments = 0usize;
+        let mut append_bytes = 0u64;
+        let mut append_records = 0u64;
+        let mut snapshot_bytes = 0u64;
+        for m in self.segments.values() {
+            if matches!(m.kind, SegmentKind::IndexSnapshot) {
+                snapshot_bytes += m.bytes;
+            } else {
+                append_segments += 1;
+                append_bytes += m.bytes;
+                append_records += m.record_count;
+            }
         }
-        self.compact()?;
-        Ok(true)
+        let bytes_ready = snapshot_bytes > 0 && append_bytes >= snapshot_bytes / 2;
+        let count_ready = append_segments >= COMPACTION_APPEND_SEGMENTS
+            && append_records >= COMPACTION_MIN_RECORDS;
+        let absolute = append_segments >= COMPACTION_ABSOLUTE_SEGMENTS;
+        if bytes_ready || count_ready || absolute {
+            self.compact()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// 下一次 flush 将使用的段 id（journal 预告与审计段描述的预登记用）。
+    pub fn next_segment_id(&self) -> u64 {
+        self.next_segment_id
+    }
+
+    /// 现存段 id（升序）。审计分段化重建段描述用。
+    pub fn segment_ids(&self) -> Vec<u64> {
+        self.segments.keys().copied().collect()
     }
 
     /// 压实：合并当前全量为新快照段 → compact.marker → 从后往前删 retired → 删 marker。
@@ -582,6 +631,7 @@ impl VaultStore {
             SegmentMeta {
                 kind: SegmentKind::IndexSnapshot,
                 record_count: records.len() as u64,
+                bytes: file.len() as u64,
             },
         );
         self.snapshot_id = Some(seg_id);
@@ -751,12 +801,11 @@ mod tests {
                 s.kv_put(i, format!("v{i}").as_bytes()).unwrap();
                 s.flush().unwrap();
             }
-            // flush 尾部自动触发压实：追加段达到阈值即合并，段数保持有界
-            assert!(
-                s.segment_count() < 8,
-                "auto compaction should bound segment count, got {}",
-                s.segment_count()
-            );
+            // 触发判据修正后（见常量注释），小额高频写入不自动触发压实；
+            // 显式压实收敛段数，视图不变
+            assert_eq!(s.segment_count(), 64);
+            s.compact().unwrap();
+            assert_eq!(s.segment_count(), 1);
         }
         let s = VaultStore::open(dir.path(), Namespace::Index, &mk(), OpenMode::ReadOnly).unwrap();
         assert_eq!(s.kv_get(63).unwrap(), b"v63");
@@ -795,31 +844,14 @@ mod tests {
             s.flush().unwrap(); // 段 2
         }
         // 手工把 journal 重写成「段 2 有预告无完成」——等价于崩溃发生在
-        // rename（提交点）之后、journal 完成条目写盘之前。
+        // rename（提交点）之后、journal 完成条目写盘之前（正常 flush 会把
+        // 已配对的 journal 截断，所以直接构造该状态）。
         {
-            let j = Journal::load(dir.path(), Namespace::Index, &mk())
-                .unwrap()
-                .unwrap();
-            let entries: Vec<_> = j.entries().to_vec();
             let mut j2 = Journal::create_empty(dir.path(), Namespace::Index, &mk()).unwrap();
-            let mut seq = 0u64;
-            let mut trimmed = entries.clone();
-            let last = trimmed.pop().unwrap();
-            assert!(
-                matches!(last.kind, JournalEntryKind::CommitDone),
-                "last entry should be Done"
-            );
-            assert_eq!(last.arg0, 2, "last Done should be segment 2");
-            for e in trimmed {
-                let mut e2 = e;
-                e2.commit_seq = seq;
-                seq += 1;
-                j2.append(e2, &mk()).unwrap();
-            }
             j2.append(
                 JournalEntry {
                     kind: JournalEntryKind::CommitIntent,
-                    commit_seq: seq,
+                    commit_seq: 0,
                     arg0: 2,
                     arg1: 1,
                 },

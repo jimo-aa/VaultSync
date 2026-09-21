@@ -171,7 +171,7 @@ impl Vault {
                     return Ok(());
                 }
                 st.kv_apply(ops).map_err(Self::store_err)?;
-                st.flush().map_err(Self::store_err)
+                st.flush().map_err(Self::store_err).map(|_| ())
             }
         }
     }
@@ -808,7 +808,7 @@ impl Vault {
         let mut st = VaultStore::open(&stage_root, Namespace::Index, new_mk, OpenMode::ReadWrite)
             .map_err(Self::store_err)?;
         st.kv_apply(ops).map_err(Self::store_err)?;
-        st.flush().map_err(Self::store_err)?;
+        st.flush().map_err(Self::store_err).map(|_| ())?;
         drop(st);
 
         let real_dir = VaultStore::ns_dir(&self.data_dir, Namespace::Index);

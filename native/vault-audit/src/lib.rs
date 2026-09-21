@@ -15,6 +15,9 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(warnings)]
 
+pub mod segmented;
+pub use segmented::SegmentedAuditLog;
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -83,13 +86,23 @@ fn format_ver() -> u16 {
     AUDIT_FORMAT_VER
 }
 
-pub struct AuditLog {
+pub struct LegacyLog {
     d: LogData,
     path: PathBuf,
     key: [u8; KEY_LEN],
 }
 
-fn now_ms() -> u64 {
+/// 审计日志（P6-4 起双路径）：
+/// - `Legacy`：v0.5.0 单文件 `audit.enc`（保持原读写语义，P7-9 迁移）；
+/// - `Segmented`：VSAU v1 分段存储（新建库），append O(1)。
+///
+/// 变体装箱：两路径内部状态尺寸差异大，枚举保持小。
+pub enum AuditLog {
+    Legacy(Box<LegacyLog>),
+    Segmented(Box<SegmentedAuditLog>),
+}
+
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -97,12 +110,51 @@ fn now_ms() -> u64 {
 }
 
 /// 创世条目的 prev_hash：32 个 0 字节的 hex（64 字符）。
-fn genesis_prev_hash() -> String {
+pub(crate) fn genesis_prev_hash() -> String {
     vault_crypto::hex_encode(&[0u8; 32])
 }
 
+/// 链校验（对任意条目序列）；LegacyLog::verify 与分段路径共用。
+pub(crate) fn verify_entries(entries: &[AuditEntry]) -> AuditVerify {
+    let mut expected_prev = genesis_prev_hash();
+    for (i, e) in entries.iter().enumerate() {
+        let expected_seq = i as u64 + 1;
+        if e.seq != expected_seq {
+            return broken(
+                i,
+                e.seq,
+                format!("seq 不连续：期望 {expected_seq}，实际 {}", e.seq),
+            );
+        }
+        if e.prev_hash != expected_prev {
+            return broken(
+                i,
+                e.seq,
+                format!("链断：第 {} 条 prev_hash 与前一条 hash 不符", e.seq),
+            );
+        }
+        let recomputed = compute_hash(&e.prev_hash, e.seq, e.ts_ms, &e.kind, &e.detail);
+        if recomputed != e.hash {
+            return broken(i, e.seq, format!("哈希不匹配：第 {} 条内容已被改动", e.seq));
+        }
+        expected_prev = e.hash.clone();
+    }
+    AuditVerify {
+        ok: true,
+        checked: entries.len(),
+        broken_at: None,
+        reason: None,
+    }
+}
+
 /// 链式哈希：确定性字节拼接（长度前缀防拼接歧义）。
-fn compute_hash(prev_hash: &str, seq: u64, ts_ms: u64, kind: &str, detail: &str) -> String {
+pub(crate) fn compute_hash(
+    prev_hash: &str,
+    seq: u64,
+    ts_ms: u64,
+    kind: &str,
+    detail: &str,
+) -> String {
     let mut h = Sha256::new();
     h.update(prev_hash.as_bytes());
     h.update(&seq.to_be_bytes());
@@ -150,10 +202,128 @@ fn broken(checked: usize, broken_at: u64, reason: String) -> AuditVerify {
 
 impl AuditLog {
     /// 打开（不存在则新建空日志）：密钥 = HKDF(MK,"audit-log")。
+    /// 双路径：存在 `audit.enc` → legacy；否则 → VSAU v1 分段。
     pub fn open(data_dir: &Path, mk: &[u8; KEY_LEN]) -> Result<Self, &'static str> {
         Self::open_with_key(data_dir, &hkdf_sha256_derive(mk, AUDIT_KEY_INFO))
     }
 
+    /// 用调用方提供的密钥打开（测试 / 密钥轮换重加密场景）。
+    pub fn open_with_key(data_dir: &Path, key: &[u8; KEY_LEN]) -> Result<Self, &'static str> {
+        if data_dir.join(AUDIT_FILE).exists() {
+            Ok(AuditLog::Legacy(Box::new(LegacyLog::open_with_key(
+                data_dir, key,
+            )?)))
+        } else {
+            Ok(AuditLog::Segmented(Box::new(SegmentedAuditLog::open(
+                data_dir, key,
+            )?)))
+        }
+    }
+
+    /// 追加一条并立即落盘（审计不得滞后于操作）。
+    pub fn append(&mut self, kind: &str, detail: &str) -> Result<AuditEntry, &'static str> {
+        match self {
+            AuditLog::Legacy(l) => l.append(kind, detail),
+            AuditLog::Segmented(l) => l.append(kind, detail),
+        }
+    }
+
+    pub fn entries(&self) -> &[AuditEntry] {
+        match self {
+            AuditLog::Legacy(l) => l.entries(),
+            AuditLog::Segmented(l) => l.entries(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            AuditLog::Legacy(l) => l.len(),
+            AuditLog::Segmented(l) => l.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            AuditLog::Legacy(l) => l.is_empty(),
+            AuditLog::Segmented(l) => l.is_empty(),
+        }
+    }
+
+    pub fn verify(&self) -> AuditVerify {
+        match self {
+            AuditLog::Legacy(l) => l.verify(),
+            AuditLog::Segmented(l) => l.verify(),
+        }
+    }
+
+    /// 链头哈希（空日志返回创世零哈希），供跨设备交叉核对（docs/05-06 §3.1）。
+    pub fn head_hash(&self) -> String {
+        match self {
+            AuditLog::Legacy(l) => l.head_hash(),
+            AuditLog::Segmented(l) => l.head_hash(),
+        }
+    }
+
+    /// 导出为加密文件：信封明文用调用方给的专用导出密钥加密（docs/05-06 §3.3）。
+    pub fn export_encrypted(
+        &self,
+        dest: &Path,
+        export_key: &[u8; KEY_LEN],
+    ) -> Result<(), &'static str> {
+        let env = ExportEnvelope {
+            version: AUDIT_FORMAT_VER,
+            exported_ms: now_ms(),
+            entries: self.entries().to_vec(),
+        };
+        let json = serde_json::to_vec(&env).map_err(|_| "audit export serialize failed")?;
+        let blob = encrypt_blob(export_key, &json)?;
+        write_atomic(dest, &blob)
+    }
+
+    /// 明文读写：仅供链校验与测试使用（仅 legacy 路径支持）。
+    pub fn to_plaintext_json(&self) -> Result<Vec<u8>, &'static str> {
+        match self {
+            AuditLog::Legacy(l) => l.to_plaintext_json(),
+            AuditLog::Segmented(_) => Err("plaintext json only for legacy audit log"),
+        }
+    }
+
+    /// 读取导出件（校验/导入用）：解密后返回条目，并顺带做一次链校验。
+    pub fn read_export(
+        blob_path: &Path,
+        export_key: &[u8; KEY_LEN],
+    ) -> Result<(Vec<AuditEntry>, AuditVerify), &'static str> {
+        LegacyLog::read_export(blob_path, export_key)
+    }
+
+    /// 从明文 JSON 还原（legacy 形态；无落盘路径）。
+    pub fn from_plaintext_json(bytes: &[u8]) -> Result<Self, &'static str> {
+        Ok(AuditLog::Legacy(Box::new(LegacyLog::from_plaintext_json(
+            bytes,
+        )?)))
+    }
+
+    /// 密钥轮换时的日志重加密。v3 分段路径：值 JSON 逐字节原样重写入新密钥段，
+    /// 链与条目字节不变。
+    pub fn rekey(
+        data_dir: &Path,
+        old_mk: &[u8; KEY_LEN],
+        new_mk: &[u8; KEY_LEN],
+    ) -> Result<usize, &'static str> {
+        if data_dir.join(AUDIT_FILE).exists() {
+            return LegacyLog::rekey(data_dir, old_mk, new_mk);
+        }
+        let old = SegmentedAuditLog::open(data_dir, &hkdf_sha256_derive(old_mk, AUDIT_KEY_INFO))?;
+        let entries = old.entries().to_vec();
+        segmented::rebuild(
+            data_dir,
+            &hkdf_sha256_derive(new_mk, AUDIT_KEY_INFO),
+            entries,
+        )
+    }
+}
+
+impl LegacyLog {
     /// 用调用方提供的密钥打开（测试 / 密钥轮换重加密场景）。
     pub fn open_with_key(data_dir: &Path, key: &[u8; KEY_LEN]) -> Result<Self, &'static str> {
         std::fs::create_dir_all(data_dir).map_err(|_| "cannot create audit dir")?;
@@ -213,35 +383,7 @@ impl AuditLog {
 
     /// 链校验：报出哈希不匹配 / 链断（prev_hash ≠ 上一条 hash）/ seq 不连续三种问题。
     pub fn verify(&self) -> AuditVerify {
-        let mut expected_prev = genesis_prev_hash();
-        for (i, e) in self.d.entries.iter().enumerate() {
-            let expected_seq = i as u64 + 1;
-            if e.seq != expected_seq {
-                return broken(
-                    i,
-                    e.seq,
-                    format!("seq 不连续：期望 {expected_seq}，实际 {}", e.seq),
-                );
-            }
-            if e.prev_hash != expected_prev {
-                return broken(
-                    i,
-                    e.seq,
-                    format!("链断：第 {} 条 prev_hash 与前一条 hash 不符", e.seq),
-                );
-            }
-            let recomputed = compute_hash(&e.prev_hash, e.seq, e.ts_ms, &e.kind, &e.detail);
-            if recomputed != e.hash {
-                return broken(i, e.seq, format!("哈希不匹配：第 {} 条内容已被改动", e.seq));
-            }
-            expected_prev = e.hash.clone();
-        }
-        AuditVerify {
-            ok: true,
-            checked: self.d.entries.len(),
-            broken_at: None,
-            reason: None,
-        }
+        verify_entries(&self.d.entries)
     }
 
     /// 链头哈希（空日志返回创世零哈希），供跨设备交叉核对（docs/05-06 §3.1）。
@@ -344,7 +486,7 @@ pub fn self_check() -> bool {
     if !vault_crypto::self_check() {
         return false;
     }
-    let mut log = AuditLog {
+    let mut log = LegacyLog {
         d: LogData {
             version: AUDIT_FORMAT_VER,
             entries: Vec::new(),
@@ -398,10 +540,10 @@ mod tests {
         }
     }
 
-    /// 三条记录的日志（真实落盘于临时目录）。
-    fn three_entries() -> AuditLog {
+    /// 三条记录的日志（真实落盘于临时目录；链语义测试走 legacy 形态）。
+    fn three_entries() -> LegacyLog {
         let dir = TempDir::new("fixture");
-        let mut log = AuditLog::open(dir.path(), &vault_crypto::random_key()).unwrap();
+        let mut log = LegacyLog::open_with_key(dir.path(), &vault_crypto::random_key()).unwrap();
         log.append("session", "unlock").unwrap();
         log.append("vault", "import:1").unwrap();
         log.append("security", "alert:brute-force").unwrap();
@@ -409,10 +551,10 @@ mod tests {
     }
 
     /// 明文往返：改字段后重新解析（保持 JSON 合法）。
-    fn reparse(log: &AuditLog, mutate: impl FnOnce(&mut LogData)) -> AuditLog {
+    fn reparse(log: &LegacyLog, mutate: impl FnOnce(&mut LogData)) -> LegacyLog {
         let mut d: LogData = serde_json::from_slice(&log.to_plaintext_json().unwrap()).unwrap();
         mutate(&mut d);
-        AuditLog::from_plaintext_json(&serde_json::to_vec(&d).unwrap()).unwrap()
+        LegacyLog::from_plaintext_json(&serde_json::to_vec(&d).unwrap()).unwrap()
     }
 
     #[test]
@@ -497,14 +639,17 @@ mod tests {
         let dir = TempDir::new("persist");
         let mk = vault_crypto::random_key();
         let (head, len) = {
-            let mut log = AuditLog::open(dir.path(), &mk).unwrap();
+            let mut log =
+                LegacyLog::open_with_key(dir.path(), &hkdf_sha256_derive(&mk, AUDIT_KEY_INFO))
+                    .unwrap();
             log.append("session", "unlock").unwrap();
             log.append("device", "pair:vd-a").unwrap();
             (log.head_hash(), log.len())
         };
         assert!(dir.path().join("audit.enc").exists());
 
-        let log2 = AuditLog::open(dir.path(), &mk).unwrap();
+        let log2 =
+            LegacyLog::open_with_key(dir.path(), &hkdf_sha256_derive(&mk, AUDIT_KEY_INFO)).unwrap();
         assert_eq!(log2.len(), len);
         assert_eq!(log2.head_hash(), head);
         assert_eq!(log2.entries()[0].detail, "unlock");
@@ -619,15 +764,122 @@ mod tests {
     #[test]
     fn plaintext_json_is_faithful() {
         let log = three_entries();
-        let clone = AuditLog::from_plaintext_json(&log.to_plaintext_json().unwrap()).unwrap();
+        let clone = LegacyLog::from_plaintext_json(&log.to_plaintext_json().unwrap()).unwrap();
         assert_eq!(clone.entries(), log.entries());
         assert_eq!(clone.head_hash(), log.head_hash());
         assert!(clone.verify().ok);
-        assert!(AuditLog::from_plaintext_json(b"not json").is_err());
+        assert!(LegacyLog::from_plaintext_json(b"not json").is_err());
     }
 
     #[test]
     fn self_check_detects_tampering() {
         assert!(self_check());
+    }
+
+    // ==== P6-4 证据测试（VSAU v1 分段化；docs/v2.0/09 §三 P6-4）====
+
+    /// P6-4 证据：audit_segments::chain_links_across_segments
+    /// 多段落盘（每条 append 一个段 + 段描述）后重开：全链连续、段描述
+    /// 覆盖各段、首尾哈希正确。
+    #[test]
+    fn audit_segments_chain_links_across_segments() {
+        let dir = TempDir::new("v3seg");
+        let mk = vault_crypto::random_key();
+        let mut log = AuditLog::open(dir.path(), &mk).unwrap();
+        assert!(matches!(log, AuditLog::Segmented(_)));
+        let mut heads = Vec::new();
+        for i in 0..12u64 {
+            log.append("vault", &format!("import:{i}")).unwrap();
+            heads.push(log.head_hash());
+        }
+        drop(log);
+
+        let log2 = AuditLog::open(dir.path(), &mk).unwrap();
+        assert_eq!(log2.len(), 12);
+        let v = log2.verify();
+        assert!(v.ok, "chain must link across segments: {:?}", v.reason);
+        assert_eq!(v.checked, 12);
+        // 段间链头指针：最后一条的哈希 = 全链头
+        assert_eq!(log2.head_hash(), heads[11]);
+        if let AuditLog::Segmented(seg) = &log2 {
+            let descs = seg.segment_descs();
+            assert!(!descs.is_empty());
+            // 描述里的 seq 区间恰好衔接成 1..=12
+            let mut expected = 1u64;
+            for (_sid, first, last) in &descs {
+                assert_eq!(*first, expected);
+                expected = last + 1;
+            }
+            assert_eq!(expected, 13);
+        }
+    }
+
+    /// P6-4 证据：audit_segments::compaction_preserves_head_hash
+    /// 压实四条硬不变量：头哈希、条目哈希逐条、seq 连续、链连续全不变。
+    #[test]
+    fn audit_segments_compaction_preserves_head_hash() {
+        let dir = TempDir::new("v3compact");
+        let mk = vault_crypto::random_key();
+        let mut log = AuditLog::open(dir.path(), &mk).unwrap();
+        for i in 0..20u64 {
+            log.append("session", &format!("op:{i}")).unwrap();
+        }
+        let head_before = log.head_hash();
+        let entries_before = log.entries().to_vec();
+        drop(log);
+
+        let mut log = AuditLog::open(dir.path(), &mk).unwrap();
+        if let AuditLog::Segmented(seg) = &mut log {
+            seg.compact().expect("compact");
+            // 压实后立即校验
+            assert!(seg.verify().ok);
+        } else {
+            panic!("expected segmented path");
+        }
+        assert_eq!(log.head_hash(), head_before, "head hash invariant");
+        assert_eq!(log.entries(), &entries_before[..], "entry hashes invariant");
+        assert!(log.verify().ok);
+        drop(log);
+
+        // 重开后依然一致
+        let mut log2 = AuditLog::open(dir.path(), &mk).unwrap();
+        assert_eq!(log2.len(), 20);
+        assert_eq!(log2.head_hash(), head_before);
+        assert!(log2.verify().ok);
+        // 压实后继续追加：链从原头继续
+        log2.append("vault", "after-compact").unwrap();
+        assert!(log2.verify().ok);
+        assert_eq!(log2.len(), 21);
+    }
+
+    /// P6-4 证据：audit_segments::append_is_o1
+    /// 单条 append 代价与日志长度无关：在 400 条基础上再追加 200 条，
+    /// 单条耗时相对前 50 条的增长 < 4×（O(n) 会放大 ~8×，此处远低于）。
+    #[test]
+    fn audit_segments_append_is_o1() {
+        let dir = TempDir::new("v3o1");
+        let mk = vault_crypto::random_key();
+        let mut log = AuditLog::open(dir.path(), &mk).unwrap();
+        for i in 0..50u64 {
+            log.append("vault", &format!("warm:{i}")).unwrap();
+        }
+        let t0 = std::time::Instant::now();
+        for i in 0..50u64 {
+            log.append("vault", &format!("early:{i}")).unwrap();
+        }
+        let early_avg = t0.elapsed() / 50;
+        for i in 0..350u64 {
+            log.append("vault", &format!("bulk:{i}")).unwrap();
+        }
+        let t1 = std::time::Instant::now();
+        for i in 0..50u64 {
+            log.append("vault", &format!("late:{i}")).unwrap();
+        }
+        let late_avg = t1.elapsed() / 50;
+        assert!(
+            late_avg.as_nanos() < early_avg.as_nanos() * 4,
+            "append cost grew with log size: early={early_avg:?} late={late_avg:?}"
+        );
+        assert!(log.verify().ok);
     }
 }

@@ -1,4 +1,4 @@
-# 链式哈希审计日志，依赖 crypto（docs/01 §三）。
+# 链式哈希审计日志，依赖 crypto + store（docs/v2.0/02 §三）。
 [package]
 name = "vault-audit"
 version.workspace = true
@@ -7,5 +7,6 @@ license.workspace = true
 
 [dependencies]
 vault-crypto = { path = "../vault-crypto" }
+vault-store = { path = "../vault-store" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

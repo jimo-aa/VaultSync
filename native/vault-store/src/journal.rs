@@ -328,6 +328,18 @@ impl Journal {
         Ok((Some(self), out))
     }
 
+    /// 提交完成后清空：全部预告/完成对已配对消解，journal 无未决状态。
+    /// 原子性：tmp+rename，崩溃要么留旧内容（规则 2/3 幂等消解）要么为空。
+    pub fn truncate(&mut self, master_key: &[u8; 32]) -> Result<(), StoreError> {
+        if self.entries.is_empty() {
+            return Ok(());
+        }
+        self.entries.clear();
+        self.next_commit_seq = 1;
+        self.rewrite(master_key)?;
+        Ok(())
+    }
+
     /// 空库建立空 journal（首写时创建文件）。
     pub fn create_empty(
         data_dir: &Path,
