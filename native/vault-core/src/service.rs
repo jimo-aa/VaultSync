@@ -287,16 +287,29 @@ pub fn rotate_mk(
 
         ks.save().map_err(CoreError::Io)?;
         // 提交点之后才动旧链：改名失败不影响已完成的轮换（旧链仍可被旧 MK 解开）
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         if audit_path.exists() {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
             std::fs::rename(
                 &audit_path,
                 data_dir.join(format!("audit.enc.rotated-{ts}")),
             )
             .map_err(|_| CoreError::Io("cannot archive rotated audit chain"))?;
+        } else if data_dir.join("audit").is_dir() {
+            // VSAU v1 分段审计（P6-4）：整目录改名归档，语义与单文件版一致——
+            // 旧链对新 MK 密码学销毁，但文件不丢，持旧 MK 的备份可事后取证；
+            // 新会话的首次操作在原位起一条新链。
+            std::fs::rename(
+                data_dir.join("audit"),
+                data_dir.join(format!("audit.enc.rotated-{ts}")),
+            )
+            .map_err(|_| CoreError::Io("cannot archive rotated audit chain"))?;
+            let _ = std::fs::remove_file(vault_store::Journal::path(
+                &data_dir,
+                vault_store::Namespace::Audit,
+            ));
         }
         Ok((audit_moved, bio_rewrapped))
     })();
