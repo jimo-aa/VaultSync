@@ -11,6 +11,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 vault-crypto = { path = "../vault-crypto" }
+vault-store = { path = "../vault-store" }
 vault-vault = { path = "../vault-vault" }
 vault-p2p = { path = "../vault-p2p" }
 vault-stego = { path = "../vault-stego" }

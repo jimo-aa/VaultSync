@@ -2115,12 +2115,7 @@ mod tests {
                 if std::io::BufReader::new(&s).read_line(&mut line).is_err() {
                     continue;
                 }
-                let room = line
-                    .trim()
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("")
-                    .to_string();
+                let room = line.split_whitespace().nth(1).unwrap_or("").to_string();
                 let _ = s.write_all(b"OK\n");
                 match rooms.remove(&room) {
                     None => {

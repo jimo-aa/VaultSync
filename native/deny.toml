@@ -1,0 +1,38 @@
+# cargo-deny 配置（P6-7 供应链治理，docs/v2.0/09 §三 P6-7）。
+# 分级策略（R6 处置）：advisories 阻断（安全公告不过夜）；
+# licenses / bans 先告警（引入新 CI 失败面的风险，观察期后再收紧）。
+# 本地复现：cd native && cargo deny check
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+# 告警先行：未列许可证只警告不阻断（R6）
+unlicensed = "warn"
+allow = []
+# 常见宽松许可证白名单（当前依赖实际使用的超集）
+allow-osi-fsf-free = "both"
+
+[[licenses.clarify]]
+name = "unicode-ident"
+expression = "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+# 已知并已统一的重复依赖不在此列；multiple-versions 告警人工复核
+
+[advisories]
+version = 2
+# 安全公告阻断（唯一阻断项）
+vulnerability = "deny"
+unmaintained = "warn"
+unsound = "warn"
+yanked = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

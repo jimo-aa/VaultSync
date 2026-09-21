@@ -1,4 +1,6 @@
 //! P2P 设备配对与增量同步（P3，协议见 docs/05-03、docs/05-04、docs/08）。
+#![deny(warnings)]
+#![forbid(unsafe_code)]
 //!
 //! 中继只转发密文：本 crate 对外的一切网络载荷必须是密文块（加密块=同步块=传输块）。
 //! 模块：`identity` 设备身份 / `channel` Noise 加密信道 / `proto` 信令 /

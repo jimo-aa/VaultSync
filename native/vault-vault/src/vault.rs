@@ -8,6 +8,7 @@
 //! ```
 //! 密钥：FSK(folder)=HKDF(MK,"fsk/<id>") 或索引内 FSK 覆盖（轮换写入的随机值）；
 //! FSKey=索引内覆盖（同步来的 / 轮换后的）或 HKDF(FSK,"fskey/<id>")（docs/05-02 §3.1）。
+#![forbid(unsafe_code)]
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};

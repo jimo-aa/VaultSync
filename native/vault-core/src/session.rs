@@ -25,6 +25,31 @@ pub struct Session {
     /// 隐写引擎开关（P5-3，docs/05-06 §七：默认关闭，启用/停用均记审计）。
     /// 会话级内存标志：每次解锁后由 UI 从设置同步过来（引擎不读 UI 配置）。
     pub(crate) stego_enabled: std::sync::atomic::AtomicBool,
+    /// 单写者租约（P6-2）：解锁即抢独占；他进程持锁 → 只读降级（码 9）。
+    pub(crate) readonly: std::sync::atomic::AtomicBool,
+    pub(crate) lease: Mutex<Option<vault_store::VaultLease>>,
+}
+
+impl Session {
+    /// 解锁后挂接单写者租约：抢独占失败 → 只读降级（readonliness = true）。
+    pub(crate) fn attach_lease(&self) {
+        let res = vault_store::VaultLease::acquire(&self.data_dir(), true);
+        match res {
+            Ok(Ok(lease)) => {
+                self.readonly
+                    .store(!lease.is_exclusive(), std::sync::atomic::Ordering::Relaxed);
+                *self.lease.lock().unwrap_or_else(|e| e.into_inner()) = Some(lease);
+            }
+            _ => {
+                // 连锁文件都开不了：保持可写语义不变（原行为），记诊断
+                eprintln!("vault-core: lease acquire failed; continuing without lease");
+            }
+        }
+    }
+
+    pub(crate) fn is_readonly(&self) -> bool {
+        self.readonly.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl Session {

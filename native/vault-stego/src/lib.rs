@@ -1,4 +1,6 @@
 //! LSB 隐写引擎（P5-3 实现，设计见 docs/05-05 §三 / §六）。
+#![deny(warnings)]
+#![forbid(unsafe_code)]
 //!
 //! 本 crate 只做「位搬运」：把调用方给的**已加密字节**（通常是 vault-vault 的 VSEF 容器密文）
 //! 按位写进 PNG 像素 RGB 通道的最低有效位，并能原样取出；此处**不做任何加密 / 解密**

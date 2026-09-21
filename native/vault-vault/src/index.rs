@@ -16,6 +16,7 @@
 //! - `IndexData.staging`：轮换中「暂存容器」标记（file_id → 随机 tag），是轮换的崩溃恢复锚点：
 //!   密钥与标记在同一次索引提交中生效，读路径据此把「标记指向的暂存容器」与「正式容器」判开
 //!   （详见 `vault.rs::Vault::rotate_containers` 的阶段说明）。
+#![forbid(unsafe_code)]
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 

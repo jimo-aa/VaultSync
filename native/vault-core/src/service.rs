@@ -130,6 +130,8 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
                 p2p: std::sync::Mutex::new(None),
                 audit: std::sync::Mutex::new(None),
                 stego_enabled: std::sync::atomic::AtomicBool::new(false),
+                readonly: std::sync::atomic::AtomicBool::new(false),
+                lease: std::sync::Mutex::new(None),
             })
         }
         Some(_) => Err(CoreError::Internal(
@@ -163,6 +165,8 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
                 p2p: std::sync::Mutex::new(None),
                 audit: std::sync::Mutex::new(None),
                 stego_enabled: std::sync::atomic::AtomicBool::new(false),
+                readonly: std::sync::atomic::AtomicBool::new(false),
+                lease: std::sync::Mutex::new(None),
             })
         }
         Some(_) => Err(CoreError::Internal(

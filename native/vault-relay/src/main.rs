@@ -1,4 +1,6 @@
 //! VaultSync 自建中继服务端（协议见 docs/08）。
+#![deny(warnings)]
+#![forbid(unsafe_code)]
 //!
 //! 零信任语义：
 //! 1. 不落盘——进程无持久化存储，转发缓冲即用即弃；
@@ -56,7 +58,7 @@ fn handle(mut stream: TcpStream, rooms: Arc<Mutex<HashMap<String, Waiting>>>) {
     {
         return;
     }
-    let mut parts = line.trim().split_whitespace();
+    let mut parts = line.split_whitespace();
     if parts.next() != Some(MAGIC) {
         let _ = stream.write_all(b"ERR bad-magic\n");
         return;

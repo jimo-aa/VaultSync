@@ -44,6 +44,26 @@ jobs:
       #（命令行 -D warnings 会压过源码内 allow 属性，测试代码无法豁免）
       - run: cargo clippy --all-targets
       - run: cargo test
+      # P6-7 供应链治理：依赖图审计 + 许可证/封禁检查（advisories 阻断，见 native/deny.toml）
+      - run: cargo install cargo-deny --locked || true
+      - run: cargo deny --version || cargo install cargo-deny --locked
+      - run: cargo deny check advisories bans
+      # libp2p 断言（P6-7）：实现未引入 libp2p，依赖树可证
+      - name: cargo tree 无 libp2p
+        working-directory: native
+        run: |
+          if cargo tree -e normal --workspace | grep -i libp2p; then
+            echo "::error::依赖树中出现了 libp2p（与 docs/09 声明不符）"; exit 1
+          fi
+      # SBOM 产物（P6-7）：cargo tree JSON 作为轻量 SBOM 入 artifacts
+      - name: 生成 SBOM
+        working-directory: native
+        run: cargo tree -e normal,build --workspace --charset utf8 > sbom-dep-tree.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: native/sbom-dep-tree.json
+          retention-days: 90
 
   windows-desktop:
     name: Windows desktop build (FFI integration)

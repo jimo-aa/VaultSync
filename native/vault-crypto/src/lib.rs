@@ -2,6 +2,7 @@
 //!
 //! 安全红线：本 crate 是全系统唯一允许实现加解密/密钥派生逻辑的底层模块；
 //! 上层 crate 只能通过本 crate 暴露的 API 触碰密钥材料（docs/01、docs/06）。
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(warnings)]

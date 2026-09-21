@@ -3,6 +3,7 @@
 //! - `container`  每文件密文容器（VSEF v2：Header + 加密元数据 + CDC 块数据区）
 //! - `index`      加密索引（VSIX v2：文件夹树/标签/倒排搜索，整体 AEAD 落盘）
 //! - `vault`      编排：导入/导出/擦除/分享（FSK/FSKey 派生链在此落地）
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(warnings)]

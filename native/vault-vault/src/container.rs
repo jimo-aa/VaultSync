@@ -7,6 +7,7 @@
 //!                             /块清单(sha256+偏移+密文长)/整文件 SHA-256
 //! 数据区: CDC 块密文顺序排列；块 nonce = prefix(4B BE) ∥ counter(8B BE)（docs/05-02 §3.2）
 //! ```
+#![forbid(unsafe_code)]
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 

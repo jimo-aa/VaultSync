@@ -21,6 +21,16 @@ pub const ERR_BIO_NOT_BOUND: i32 = 5;
 pub const ERR_FORMAT: i32 = 6;
 pub const ERR_INVALID_ARG: i32 = 7;
 pub const ERR_INTERNAL: i32 = 8;
+// V2.0 扩展码（docs/v2.0/01 §6.7）
+pub const ERR_LEASE_BUSY: i32 = 9;
+/// 维护态（P7-3 轮换会话接线；契约位先占）
+#[allow(dead_code)]
+pub const ERR_MAINTENANCE: i32 = 10;
+/// 需要恢复（P7-3 接线；契约位先占）
+#[allow(dead_code)]
+pub const ERR_NEEDS_RECOVERY: i32 = 11;
+pub const ERR_CANCELLED: i32 = 12;
+pub const ERR_CAPABILITY: i32 = 13;
 
 fn map_err(e: &CoreError) -> i32 {
     match e {
@@ -169,7 +179,9 @@ pub unsafe extern "C" fn vault_core_unlock(
                         "unlock"
                     },
                 );
+                s.attach_lease();
                 unsafe { handle_out.write(Box::into_raw(Box::new(s))) };
+                crate::contract::publish_simple(crate::contract::EV_ENGINE_READY);
                 Ok(())
             }
             Err(CoreError::WrongPassword(w)) => {
@@ -205,7 +217,9 @@ pub unsafe extern "C" fn vault_core_unlock_bio(
         match service::unlock_biometric(&p, &store) {
             Ok(s) => {
                 s.audit("session", "unlock biometric");
+                s.attach_lease();
                 unsafe { handle_out.write(Box::into_raw(Box::new(s))) };
+                crate::contract::publish_simple(crate::contract::EV_ENGINE_READY);
                 Ok(())
             }
             Err(CoreError::WrongPassword(w)) => {
@@ -281,6 +295,7 @@ pub unsafe extern "C" fn vault_core_change_password(
     new_password: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if handle.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -306,6 +321,7 @@ pub unsafe extern "C" fn vault_core_lock(handle: *mut Session) {
         let session = unsafe { &*handle };
         session.audit("session", "lock");
         drop(unsafe { Box::from_raw(handle) });
+        crate::contract::publish_simple(crate::contract::EV_LOCKED);
     }
 }
 
@@ -368,12 +384,30 @@ fn summary_line(v: &serde_json::Value) -> String {
     )
 }
 
+/// 只读降级门禁（P6-2/§3.5 只读矩阵）：只读会话上一切「改库内字节」的操作返回 9。
+unsafe fn ensure_writable(handle: *mut Session) -> Result<(), i32> {
+    if handle.is_null() {
+        return Err(ERR_INVALID_ARG);
+    }
+    let session = unsafe { &*handle };
+    if session.is_readonly() {
+        return Err(ERR_LEASE_BUSY);
+    }
+    Ok(())
+}
+
 unsafe fn audit_op(handle: *mut Session, kind: &str, detail: &str) {
     if handle.is_null() {
         return;
     }
     let session = unsafe { &*handle };
     session.audit(kind, detail);
+    // 既有审计点 = 保险箱变更点：同步发布 VAULT_CHANGED（P6-6 事件流）
+    crate::contract::publish(
+        crate::contract::EV_VAULT_CHANGED,
+        0,
+        serde_json::json!({"kind": kind, "detail": detail}),
+    );
 }
 
 fn json_out(v: serde_json::Value) -> *mut c_char {
@@ -398,6 +432,7 @@ pub unsafe extern "C" fn vault_core_vault_mkdir(
     folder_id_out: *mut u64,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if folder_id_out.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -445,6 +480,7 @@ pub unsafe extern "C" fn vault_core_vault_search(
     query: *const c_char,
 ) -> *mut c_char {
     let run = || -> Result<*mut c_char, i32> {
+        unsafe { ensure_writable(handle) }?;
         let q = unsafe { cstr(query) }?;
         let json = vault_op(handle, |v, _| Ok(v.search(q)))?;
         let c = CString::new(json).map_err(|_| ERR_INTERNAL)?;
@@ -526,6 +562,7 @@ pub unsafe extern "C" fn vault_core_vault_rename_file(
     name: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         let name = unsafe { cstr(name) }?;
         vault_op(handle, |v, _| {
             v.rename_file(file_id as u64, name)
@@ -550,6 +587,7 @@ pub unsafe extern "C" fn vault_core_vault_rename_folder(
     name: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         let name = unsafe { cstr(name) }?;
         vault_op(handle, |v, _| {
             v.rename_folder(folder_id as u64, name)
@@ -632,6 +670,7 @@ pub unsafe extern "C" fn vault_core_vault_set_tags(
     tags_csv: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         let csv = unsafe { cstr(tags_csv) }?;
         let tags: Vec<String> = if csv.is_empty() {
             Vec::new()
@@ -662,6 +701,7 @@ pub unsafe extern "C" fn vault_core_vault_share_create(
     max_opens: u32,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         vault_op(handle, |v, _| {
             v.create_share(file_id as u64, ttl_secs, max_opens)
                 .map(|(id, token)| serde_json::json!({"shareId": id, "token": token}))
@@ -689,6 +729,7 @@ pub unsafe extern "C" fn vault_core_vault_share_open(
     dest: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         let token = unsafe { cstr(token) }?;
         let dest = unsafe { cstr(dest) }?;
         vault_op(handle, |v, _| {
@@ -899,6 +940,7 @@ pub unsafe extern "C" fn vault_core_p2p_destroy_queue_all(
     delay_secs: u64,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
         let v = engine
@@ -941,6 +983,7 @@ pub unsafe extern "C" fn vault_core_p2p_pending_orders(handle: *mut Session) -> 
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_p2p_cancel_orders(handle: *mut Session) -> i32 {
     let run = || -> Result<i32, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
         let n = engine.cancel_pending_orders();
@@ -988,6 +1031,7 @@ pub unsafe extern "C" fn vault_core_vault_rotate_file_key(
     file_id: i64,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if handle.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -1015,6 +1059,7 @@ pub unsafe extern "C" fn vault_core_vault_rotate_folder_keys(
     folder_id: i64,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if handle.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -1048,6 +1093,7 @@ pub unsafe extern "C" fn vault_core_rotate_mk(
     password: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if handle.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -1275,6 +1321,7 @@ pub unsafe extern "C" fn vault_core_audit_export(handle: *mut Session, dest: *co
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_destroy_local(handle: *mut Session, secure: i32) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if handle.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -1305,6 +1352,7 @@ pub unsafe extern "C" fn vault_core_destroy_local(handle: *mut Session, secure: 
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_p2p_pair_begin(handle: *mut Session) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
         engine.pair_begin().map_err(|_| ERR_INTERNAL)
@@ -1326,6 +1374,7 @@ pub unsafe extern "C" fn vault_core_p2p_pair_join(
     code: *const c_char,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let a = unsafe { cstr(addr) }?;
         let code = unsafe { cstr(code) }?;
@@ -1348,6 +1397,7 @@ pub unsafe extern "C" fn vault_core_p2p_sync(
     addr: *const c_char,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let a = unsafe { cstr(addr) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
@@ -1370,6 +1420,7 @@ pub unsafe extern "C" fn vault_core_p2p_sync_relay(
     room: *const c_char,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let r = unsafe { cstr(relay) }?;
         let room = unsafe { cstr(room) }?;
@@ -1395,6 +1446,7 @@ pub unsafe extern "C" fn vault_core_p2p_serve_relay(
     room: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let r = unsafe { cstr(relay) }?;
         let room = unsafe { cstr(room) }?;
@@ -1431,6 +1483,7 @@ pub unsafe extern "C" fn vault_core_p2p_unpair(
     device_id: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         if handle.is_null() {
             return Err(ERR_INVALID_ARG);
         }
@@ -1456,6 +1509,7 @@ pub unsafe extern "C" fn vault_core_p2p_destroy_arm(
     delay_secs: u64,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let a = unsafe { cstr(addr) }?;
         let t = unsafe { cstr(target) }?;
@@ -1509,6 +1563,7 @@ pub unsafe extern "C" fn vault_core_p2p_conflict_resolve(
     secure: i32,
 ) -> i32 {
     let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         session
             .with_vault(|v| {
@@ -1527,6 +1582,220 @@ pub unsafe extern "C" fn vault_core_p2p_conflict_resolve(
         Ok(())
     };
     run().err().unwrap_or(OK)
+}
+
+// ==== P6-6 FFI 契约 V2（docs/v2.0/02 §六）====
+
+/// ABI v2 握手。握手必须先于一切调用；`abi_version` 主号不匹配由前端拒绝加载。
+///
+/// # Safety
+/// `out` 非空且指向 VsAbiInfo 布局的内存。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_abi_info(out: *mut crate::contract::VsAbiInfo) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    unsafe {
+        (*out).abi_version = 2;
+        (*out).reserved0 = 0;
+        (*out).capability_bits = crate::contract::capability_bits();
+        // max_write_ver_* 如实报告当前实现（原则 7）：VSVB/VSEF 仍是 v2（v3 是 P7），
+        // VSIX v3 与 VSAU v1 已随 P6-3/P6-4 落地
+        (*out).max_write_ver_vault = 2;
+        (*out).max_write_ver_container = 2;
+        (*out).max_write_ver_index = 3;
+        (*out).max_write_ver_audit = 1;
+        (*out).min_read_ver_vault = 2;
+        (*out).feature_flags = 0;
+        (*out).engine_version = crate::contract::engine_version_bytes();
+        (*out).struct_size = std::mem::size_of::<crate::contract::VsAbiInfo>() as u32;
+    }
+    OK
+}
+
+/// 订阅推送事件流。返回订阅 id；未置位 CAP_EVENTS 返回 13。
+///
+/// # Safety
+/// `callback` 必须为合法函数指针；`user` 原样回传。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_subscribe(
+    callback: extern "C" fn(
+        event: *mut crate::contract::VsEvent,
+        user: *mut std::ffi::c_void,
+    ) -> i32,
+    user: *mut std::ffi::c_void,
+    sub_out: *mut u32,
+) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_EVENTS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if callback as usize == 0 || sub_out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    unsafe { sub_out.write(crate::contract::subscribe(callback, user)) };
+    OK
+}
+
+/// 取消订阅。
+///
+/// # Safety
+/// 无。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_unsubscribe(sub_id: u32) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_EVENTS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if crate::contract::unsubscribe(sub_id) {
+        OK
+    } else {
+        ERR_INVALID_ARG
+    }
+}
+
+/// 拉取缓冲事件（推送模型兜底）。返回 JSON 数组字符串（调用方 free_string）；
+/// 帧含 type/seq/tsMs/taskId/payload。
+///
+/// # Safety
+/// `out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_poll_events(out: *mut *mut c_char) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_EVENTS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let mut events = Vec::new();
+    crate::contract::poll_events(&mut |etype, seq, ts, task_id, payload| {
+        let payload: serde_json::Value = serde_json::from_slice(payload).unwrap_or_default();
+        events.push(serde_json::json!({
+            "type": etype, "seq": seq, "tsMs": ts, "taskId": task_id, "payload": payload,
+        }));
+    });
+    let v = json_out(serde_json::Value::Array(events));
+    unsafe { out.write(v) };
+    OK
+}
+
+/// 任务列表 JSON {"count","tasks":[{id,kind,state,doneBytes,totalBytes}]}。
+///
+/// # Safety
+/// `out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_task_list(out: *mut *mut c_char) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let tasks: Vec<_> = crate::contract::task_list()
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({"id": t.id, "kind": t.kind, "state": t.state,
+                               "doneBytes": t.done_bytes, "totalBytes": t.total_bytes})
+        })
+        .collect();
+    let v = json_out(serde_json::json!({"count": tasks.len(), "tasks": tasks}));
+    unsafe { out.write(v) };
+    OK
+}
+
+/// 单任务状态 JSON，未知 id 返回 7。
+///
+/// # Safety
+/// `out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_task_status(task_id: u32, out: *mut *mut c_char) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    match crate::contract::task_status(task_id) {
+        None => ERR_INVALID_ARG,
+        Some(t) => {
+            let v = json_out(
+                serde_json::json!({"id": t.id, "kind": t.kind, "state": t.state,
+                                 "doneBytes": t.done_bytes, "totalBytes": t.total_bytes}),
+            );
+            unsafe { out.write(v) };
+            OK
+        }
+    }
+}
+
+/// 协作式取消：0=已请求 / 7=未知 / 12=已取消（幂等）。资源 5 s 内释放。
+///
+/// # Safety
+/// 无。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_task_cancel(task_id: u32) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    crate::contract::task_cancel(task_id)
+}
+
+/// 启动一个诊断自检任务（crypto/审计自检循环；进度经 TASK_PROGRESS 推送，
+/// 可被 task_cancel 协作式取消）。任务框架的引擎内生产者，供冒烟与诊断使用。
+///
+/// # Safety
+/// `out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_task_spawn_selfcheck(out: *mut u32) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let id = crate::contract::spawn_task("selfcheck", move |cancel, progress| {
+        for i in 0..20u64 {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            progress(i * 5, 100);
+        }
+        if vault_crypto::self_check() && vault_audit::self_check() {
+            Ok(())
+        } else {
+            Err("self check failed".into())
+        }
+    });
+    unsafe { out.write(id) };
+    OK
+}
+
+/// 会话只读状态（P6-2 只读降级）：1=只读（他进程持租约），0=可写。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄；`out` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_session_readonly(handle: *mut Session, out: *mut i32) -> i32 {
+    if handle.is_null() || out.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    unsafe { out.write(i32::from(session.is_readonly())) };
+    OK
+}
+
+/// 缩略图导出：P7-9 交付（CAP_THUMBNAIL 未置位 → 13）。能力探针。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_thumbnail(
+    handle: *mut Session,
+    file_id: u64,
+    _out_png: *mut *mut u8,
+    _out_len: *mut u64,
+) -> i32 {
+    let _ = (handle, file_id);
+    ERR_CAPABILITY
 }
 
 #[cfg(test)]

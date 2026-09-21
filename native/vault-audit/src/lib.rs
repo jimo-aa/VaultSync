@@ -11,6 +11,7 @@
 //! 导出（docs/05-06 §3.3）：明文为信封 `{"version":1,"exportedMs":…,"entries":[…]}`，
 //! 用调用方给的专用导出密钥（vault-core 传 HKDF(MK,"audit-export")）加密。
 //! 多设备（§3.1）：每设备维护独立链，[`AuditLog::head_hash`] 供跨设备交叉核对。
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![deny(warnings)]
