@@ -234,3 +234,9 @@
 - **过程发现与修复的真实缺陷**：① fsync 用只读句柄在 Windows 必然 AccessDenied（FlushFileBuffers 需写访问）——统一改为写模式 fsync；② journal 每次提交追加且从不截断 → 第 N 次提交 O(N)（正是审计 O(1) 出口的反例）→ 提交完成后安全截断；③ recover 清空 journal 后 RW 会话丢失日志载体（六步协议空转）→ RW 打开保证重建。
 - **已知遗留 / 待补（不阻塞 M6 勾选，均已登记）**：p2p e2e `pair_sync_incremental_conflict_destroy_e2e` 在多线程测试并行+重负载下偶发时序失败（单线程必绿，既有 flaky，建议 CI 加 `--test-threads=1` 或重试）；rotate_mk 完成后旧会话继续审计会在日志里出现一条非致命的「audit append failed」（审计失败不阻断业务，属归档过渡窗口的预期行为）；`11` 回填共 15 行（12 ✅ / 3 ⚠️ 组合，详见该文件）。
 - **验证记录**：`cargo fmt --check` ✅、`cargo clippy --workspace --all-targets` 0 error（deny(warnings) 源码级全 crate 生效）、`cargo test --workspace` 全绿、`cargo bench -p vault-store` 出口判据通过（比值 1.03×/0.98×/1.08×，均 <2×）、`flutter analyze` ✅、`flutter test` ✅、`flutter build windows --debug` ✅、`dart run tool/ffi_check.dart` **assertions=167 failures=0**。
+
+## 2026-09-21 发版 v0.7.0（M6 一致性内核）
+
+- **内容**：P6 全部（P6-1…P6-9）——`vault-store` 分段存储内核（VSSG v1 / 六步提交协议 / 恢复日志 / 单写者租约）、索引 VSIX v3 与审计 VSAU v1 分段化（双路径共存）、FFI 契约 V2（abi_info / 事件流 / 任务 / 错误码 9–13）、供应链治理、崩溃注入与跨进程测试、规模基准进 CI。详见上文 2026-09-21 条目。
+- **验证**：native workspace 全测试绿、clippy 零告警（deny(warnings) 全 crate 源码级）、`ffi_check` 167 断言全 PASS、基准出口判据通过、`flutter analyze/test/build windows --debug` 通过。
+- **已知边界**（如实）：v0.5.0 旧库仍为 legacy 双路径（P7-9 迁移工具统一）；p2p 一条 e2e 用例在并行高负载下偶发时序失败（单线程必绿）；`vault_core_open` 三态接口与依赖无环架构测试归后续任务。
