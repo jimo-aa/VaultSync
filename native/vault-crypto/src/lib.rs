@@ -47,6 +47,18 @@ impl Sha256 {
     pub fn finalize_hex(self) -> String {
         hex_encode(&sha2::Digest::finalize(self.inner))
     }
+
+    /// 完成并输出原始 32B 摘要（VSSG 段 digest / key_scope_tag 用）。
+    pub fn finalize_bytes(self) -> [u8; 32] {
+        sha2::Digest::finalize(self.inner).into()
+    }
+}
+
+/// 一次性 SHA-256（原始 32B）。
+pub fn hash_sha256_bytes(data: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize_bytes()
 }
 
 /// 一次性 SHA-256（十六进制）。

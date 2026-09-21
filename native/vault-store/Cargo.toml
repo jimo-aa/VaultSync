@@ -1,0 +1,14 @@
+# 分段持久化：VSSG v1 不可变段 / 单写者租约 / 恢复日志（docs/v2.0/02 §四）。
+# 依赖方向：vault-crypto 之下无、之上为 vault-audit / vault-vault（docs/v2.0/02 §三）。
+[package]
+name = "vault-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3"

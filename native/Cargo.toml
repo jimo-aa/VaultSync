@@ -5,6 +5,7 @@ resolver = "2"
 members = [
     "vault-core",
     "vault-crypto",
+    "vault-store",
     "vault-vault",
     "vault-p2p",
     "vault-relay",
