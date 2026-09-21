@@ -4,15 +4,72 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use vault_audit::AuditLog;
 use vault_crypto::KEY_LEN;
 use vault_vault::vault::Vault;
 
+/// 从属密钥束（P7-2，docs/v2.0/05-01 §3.2）：8 条 key_id 的明文。
+/// 取值 CSPRNG 一次固定、与 MK 仅通过 DWK 包装绑定；MK 轮换只重包装，取值不变。
+#[derive(Clone, Copy)]
+pub(crate) struct VaultKeys {
+    pub index: [u8; KEY_LEN],        // 1 索引
+    pub search: [u8; KEY_LEN],       // 2 搜索
+    pub share: [u8; KEY_LEN],        // 3 分享
+    pub orders: [u8; KEY_LEN],       // 4 订单
+    pub stego: [u8; KEY_LEN],        // 5 隐写载荷
+    pub audit_chain: [u8; KEY_LEN],  // 6 链键
+    pub audit_export: [u8; KEY_LEN], // 7 审计导出
+    pub discovery: [u8; KEY_LEN],    // 8 发现指纹盐
+}
+
+impl Zeroize for VaultKeys {
+    fn zeroize(&mut self) {
+        self.index.zeroize();
+        self.search.zeroize();
+        self.share.zeroize();
+        self.orders.zeroize();
+        self.stego.zeroize();
+        self.audit_chain.zeroize();
+        self.audit_export.zeroize();
+        self.discovery.zeroize();
+    }
+}
+
+impl VaultKeys {
+    pub(crate) fn from_array(a: [[u8; KEY_LEN]; 8]) -> Self {
+        VaultKeys {
+            index: a[0],
+            search: a[1],
+            share: a[2],
+            orders: a[3],
+            stego: a[4],
+            audit_chain: a[5],
+            audit_export: a[6],
+            discovery: a[7],
+        }
+    }
+
+    pub(crate) fn to_array(self) -> [[u8; KEY_LEN]; 8] {
+        [
+            self.index,
+            self.search,
+            self.share,
+            self.orders,
+            self.stego,
+            self.audit_chain,
+            self.audit_export,
+            self.discovery,
+        ]
+    }
+}
+
 /// 已解锁会话。MK 永不出引擎（零信任红线），FFI 层只传递不透明句柄。
 pub struct Session {
     pub(crate) mk: Zeroizing<[u8; KEY_LEN]>,
+    /// 从属密钥束（零化随会话结束）。
+    pub(crate) keys: Zeroizing<VaultKeys>,
     pub(crate) vault_path: PathBuf,
     /// 伪装空间会话（docs/05-01 §六 Dummy 语义）：操作只作用于伪空间自身的数据目录。
     pub(crate) disguise: bool,
@@ -61,8 +118,13 @@ impl Session {
         let mut guard = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = Some(
-                Vault::open(&self.vault_path, &self.mk)
-                    .map_err(crate::service::CoreError::Internal)?,
+                Vault::open(
+                    &self.vault_path,
+                    &self.mk,
+                    &self.keys.index,
+                    &self.keys.search,
+                )
+                .map_err(crate::service::CoreError::Internal)?,
             );
         }
         // 上一分支刚初始化；Option 在此必然为 Some
@@ -93,7 +155,8 @@ impl Session {
     pub(crate) fn audit(&self, kind: &str, detail: &str) {
         let mut guard = self.audit.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
-            match AuditLog::open(&self.data_dir(), &self.mk) {
+            // P7-2：链键（从属密钥 6）——与 MK 解耦，MK 轮换后链 continues
+            match AuditLog::open_with_key(&self.data_dir(), &self.keys.audit_chain) {
                 Ok(log) => *guard = Some(log),
                 Err(e) => {
                     eprintln!("vsync audit open failed: {e}");
@@ -126,13 +189,12 @@ impl Session {
     /// 隐写载荷密钥（P5-3）：隐写层自己的 AEAD 密钥，
     /// 与容器密钥/索引密钥分离（docs/05-05「加密先行」——隐写载荷本身即密文）。
     pub(crate) fn stego_key(&self) -> [u8; KEY_LEN] {
-        *vault_crypto::kdf::hkdf_sha256_derive(self.mk.as_slice(), b"stego-payload")
+        self.keys.stego
     }
 
     /// 导出密钥（docs/05-06 §3.3：专用导出密钥，不等于索引/块密钥）。
     pub(crate) fn audit_export_key(&self) -> [u8; KEY_LEN] {
-        let k = vault_crypto::kdf::hkdf_sha256_derive(self.mk.as_slice(), b"audit-export");
-        *k
+        self.keys.audit_export
     }
 }
 

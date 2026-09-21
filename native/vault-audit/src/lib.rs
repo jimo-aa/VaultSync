@@ -803,15 +803,18 @@ mod tests {
         // 段间链头指针：最后一条的哈希 = 全链头
         assert_eq!(log2.head_hash(), heads[11]);
         if let AuditLog::Segmented(seg) = &log2 {
+            // P6-4 修正：段描述是**有界 + 节流**的辅助索引（最近 N 段、每 64 条落盘），
+            // 不保证覆盖全链；但已记录的描述必须自身衔接、且落在 1..=12 范围内。
             let descs = seg.segment_descs();
             assert!(!descs.is_empty());
-            // 描述里的 seq 区间恰好衔接成 1..=12
-            let mut expected = 1u64;
+            let mut prev_last = None;
             for (_sid, first, last) in &descs {
-                assert_eq!(*first, expected);
-                expected = last + 1;
+                if let Some(p) = prev_last {
+                    assert_eq!(*first, p + 1, "descs must be contiguous among themselves");
+                }
+                assert!(*first >= 1 && *last <= 12 && first <= last);
+                prev_last = Some(*last);
             }
-            assert_eq!(expected, 13);
         }
     }
 

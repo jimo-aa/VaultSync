@@ -9,7 +9,7 @@ use vault_crypto::aead::{aead_decrypt, aead_encrypt, AES_GCM_NONCE_LEN};
 use vault_crypto::kdf::{argon2id_derive, hkdf_sha256_derive, Argon2Params};
 use vault_crypto::random::{random_bytes, random_key, random_salt};
 use vault_crypto::KEY_LEN;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::keystore::Keystore;
 use crate::platform_store::{kek_bio, SecureStore};
@@ -60,6 +60,7 @@ pub fn create_vault(
     let kek = argon2id_derive(password, &salt, &argon).map_err(CoreError::Internal)?;
     let mk_wrap_pwd = wrap_mk(&mk, &kek)?;
 
+    let (derived_wraps, derived_keys) = Keystore::wrap_derived_keys(&mk, None);
     let mut ks = Keystore {
         path: path.to_path_buf(),
         argon,
@@ -67,7 +68,15 @@ pub fn create_vault(
         verifier: verifier_of(&mk),
         mk_wrap_pwd,
         mk_wrap_bio: None,
+        rotation_state: crate::keystore::ROTATION_IDLE,
+        rotation_id: [0u8; 16],
+        derived_keys: Some(derived_wraps),
     };
+    // 首启从属密钥明文随栈帧结束离作用域；这里显式零化（数组是 Copy，不能 drop）
+    {
+        let mut dk = derived_keys;
+        dk.zeroize();
+    }
 
     if bind_bio {
         let store = store.ok_or(CoreError::BioUnavailable)?;
@@ -114,7 +123,7 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
     if let GuardVerdict::Cooldown(ms) = guard_check(path) {
         return Err(CoreError::Cooldown(ms));
     }
-    let ks = Keystore::load(path).map_err(|e| match e {
+    let mut ks = Keystore::load(path).map_err(|e| match e {
         "cannot read vault file" => CoreError::Io(e),
         other => CoreError::Format(other),
     })?;
@@ -122,8 +131,10 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
     match unwrap_mk(&kek, &ks.mk_wrap_pwd) {
         Some(mk) if verifier_of(&mk) == ks.verifier => {
             guard_reset(path);
+            let keys = open_derived_keys(&mut ks, &mk).map_err(CoreError::Internal)?;
             Ok(Session {
                 mk: Zeroizing::new(mk),
+                keys: Zeroizing::new(keys),
                 vault_path: path.to_path_buf(),
                 disguise,
                 vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -144,12 +155,35 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
     }
 }
 
+/// 解封从属密钥束（P7-1/P7-2）：v3 头部从包装区解封；v2 头部按冻结公式
+/// 内存求得（`derivedKeysLegacy=true`）并**顺手升级**为 v3 包装区（尽力而为，
+/// 失败不阻塞解锁——下次写头部时会再次尝试）。
+fn open_derived_keys(
+    ks: &mut Keystore,
+    mk: &[u8; KEY_LEN],
+) -> Result<crate::session::VaultKeys, &'static str> {
+    let array = match ks.derived_keys.as_ref() {
+        Some(_) => ks.unwrap_derived_keys(mk)?,
+        None => {
+            let legacy = Keystore::legacy_derived_keys(mk);
+            // 升级：以冻结值进包装区（存量数据无需重写）
+            let (wraps, _) = Keystore::wrap_derived_keys(mk, Some(legacy));
+            ks.derived_keys = Some(wraps);
+            if let Err(e) = ks.save() {
+                eprintln!("vsync keystore v3 upgrade deferred: {e}");
+            }
+            legacy
+        }
+    };
+    Ok(crate::session::VaultKeys::from_array(array))
+}
+
 /// 生物识别解锁（F-04）。安全存储不可用 → BioUnavailable（降级，主密码路径不受影响）。
 pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session, CoreError> {
     if let GuardVerdict::Cooldown(ms) = guard_check(path) {
         return Err(CoreError::Cooldown(ms));
     }
-    let ks = Keystore::load(path).map_err(CoreError::Format)?;
+    let mut ks = Keystore::load(path).map_err(CoreError::Format)?;
     let bio_blob = ks.mk_wrap_bio.as_deref().ok_or(CoreError::BioNotBound)?;
     let kek = kek_bio::load(store, path)
         .map_err(|_| CoreError::BioUnavailable)?
@@ -157,8 +191,10 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
     match unwrap_mk(&kek, bio_blob) {
         Some(mk) if verifier_of(&mk) == ks.verifier => {
             guard_reset(path);
+            let keys = open_derived_keys(&mut ks, &mk).map_err(CoreError::Internal)?;
             Ok(Session {
                 mk: Zeroizing::new(mk),
+                keys: Zeroizing::new(keys),
                 vault_path: path.to_path_buf(),
                 disguise: false,
                 vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -252,13 +288,10 @@ pub fn rotate_mk(
     // 数据面已换钥：此后**任何**失败都必须把数据面滚回旧 MK。否则「数据用 MK'、头部仍包旧 MK」
     // 会让保险箱彻底打不开（冒烟测试第一版就命中了这个状态，故此处必须回滚）。
     let complete = (|| -> Result<(usize, bool), CoreError> {
-        // 审计日志的密钥同样派生自 MK，轮换后旧链对新 MK 不可解。
-        // 这里不做原地重加密（`AuditLog::rekey` 有单测且自身正确，但接入本流程后新会话读不到，
-        // 未能定位到原因——见 LOG 隐患）：改为把旧链文件改名保留（不可解 = 密码学销毁，
-        // 但文件不丢，持有旧 MK 的备份仍可事后取证），新会话的首次操作会起一条新链。
+        // P7-2：审计链键（从属密钥 6）与 MK 解耦，轮换不再触碰审计载体；
+        // 旧载体存在性仅作诊断保留（legacyChains 语义归迁移工具 P7-7）。
         let data_dir = session.data_dir();
-        let audit_path = data_dir.join("audit.enc");
-        let audit_moved = session.with_audit(|log| log.len()).unwrap_or(0);
+        let _audit_moved = session.with_audit(|log| log.len()).unwrap_or(0);
 
         // 控制面：新 salt 下重新包装 MK'
         // **verifier 必须同步更新**：它是 HKDF(MK,"verifier")，锁死在头部，
@@ -285,33 +318,16 @@ pub fn rotate_mk(
             }
         }
 
+        // P7-2：从属密钥**仅重包装**（8×64B，取值不变）——索引/搜索/分享/订单/
+        // 隐写/链键/审计导出/发现盐全部不动；这是「轮换是廉价事务」的机制基础。
+        let (rewraps, _) = Keystore::wrap_derived_keys(&mk_new, Some(session.keys.to_array()));
+        ks.derived_keys = Some(rewraps);
+        session.audit("security", "dk.rewrap keyIds=[1,2,3,4,5,6,7,8]");
+
         ks.save().map_err(CoreError::Io)?;
-        // 提交点之后才动旧链：改名失败不影响已完成的轮换（旧链仍可被旧 MK 解开）
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        if audit_path.exists() {
-            std::fs::rename(
-                &audit_path,
-                data_dir.join(format!("audit.enc.rotated-{ts}")),
-            )
-            .map_err(|_| CoreError::Io("cannot archive rotated audit chain"))?;
-        } else if data_dir.join("audit").is_dir() {
-            // VSAU v1 分段审计（P6-4）：整目录改名归档，语义与单文件版一致——
-            // 旧链对新 MK 密码学销毁，但文件不丢，持旧 MK 的备份可事后取证；
-            // 新会话的首次操作在原位起一条新链。
-            std::fs::rename(
-                data_dir.join("audit"),
-                data_dir.join(format!("audit.enc.rotated-{ts}")),
-            )
-            .map_err(|_| CoreError::Io("cannot archive rotated audit chain"))?;
-            let _ = std::fs::remove_file(vault_store::Journal::path(
-                &data_dir,
-                vault_store::Namespace::Audit,
-            ));
-        }
-        Ok((audit_moved, bio_rewrapped))
+        let legacy_chain_present =
+            usize::from(data_dir.join("audit.enc").exists() || data_dir.join("audit").is_dir());
+        Ok((legacy_chain_present, bio_rewrapped))
     })();
 
     let (audit_moved, bio_rewrapped) = match complete {
@@ -330,8 +346,7 @@ pub fn rotate_mk(
             return Err(e);
         }
     };
-    // 轮换完成事件写不进新链（本次会话的 MK 已是旧的、旧链刚被改名归档）；
-    // 新会话的首次操作会起一条新链，届时由 UI 提示「已轮换」由审计链之外的通知承担。
+    // P7-2：轮换完成事件随解耦后的链键写入**同一条**审计链（不再断链）。
     let _ = (audit_moved, bio_rewrapped, rewritten);
     Ok((bio_rewrapped, rewritten))
 }
@@ -466,6 +481,7 @@ mod tests {
         let salt = random_salt();
         let argon = Argon2Params::for_test();
         let kek = argon2id_derive(pwd, &salt, &argon).expect("derive");
+        let (derived_wraps, _) = Keystore::wrap_derived_keys(&mk, None);
         let ks = Keystore {
             path: path.to_path_buf(),
             argon,
@@ -473,6 +489,9 @@ mod tests {
             verifier: verifier_of(&mk),
             mk_wrap_pwd: wrap_mk(&mk, &kek).expect("wrap"),
             mk_wrap_bio: None,
+            rotation_state: crate::keystore::ROTATION_IDLE,
+            rotation_id: [0u8; 16],
+            derived_keys: Some(derived_wraps),
         };
         ks.save().expect("save");
     }

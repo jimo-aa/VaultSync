@@ -15,8 +15,12 @@ use vault_store::{Journal, Namespace, OpenMode, VaultStore};
 
 /// 段描述记录的 KV key（设计约定：key = 0 唯一标识）。
 const DESC_KEY: u64 = 0;
-/// 段描述条数上限：超过即按现存段重建（压实退休的旧段描述清除）。
-const DESC_MAX: usize = 1024;
+/// 段描述持久化条数上限：描述只保留最近 N 段（段间链指针是辅助索引，
+/// 完整链条在条目本身；不做上限会让描述随段数线性膨胀、把段体撑爆、
+/// 压实按字节规则每条触发 → append 退化 O(n)，见 LOG 2026-09-21）。
+const DESC_KEEP: usize = 64;
+/// 描述持久化节流：每 64 条 append 落一次盘（内存中始终最新）。
+const DESC_PERSIST_EVERY: u64 = 64;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SegmentDesc {
@@ -35,7 +39,18 @@ struct DescRecord {
 pub struct SegmentedAuditLog {
     store: VaultStore,
     entries: Vec<AuditEntry>,
+    /// 已关闭段的描述（滞后一段落盘：随下一段的提交批次写入，避免每条
+    /// append 重写整份描述把段体撑爆 → 压实退化 O(n)，见 LOG 2026-09-21）。
     descs: Vec<SegmentDesc>,
+    /// 当前开放段的描述（flush 成功后更新；随段关闭落入 descs）。
+    open_desc: Option<SegmentDesc>,
+    /// 描述是否已至少持久化一次（首段立即落盘）。
+    desc_persisted: bool,
+}
+
+/// 描述落盘节流：条目数每过 DESC_PERSIST_EVERY 的整数倍才持久化。
+fn seq_persist_gate(entry_count: u64) -> bool {
+    entry_count.is_multiple_of(DESC_PERSIST_EVERY)
 }
 
 fn store_err(e: vault_store::StoreError) -> &'static str {
@@ -64,11 +79,13 @@ impl SegmentedAuditLog {
         Ok(Self {
             store,
             entries,
+            desc_persisted: !descs.is_empty(),
             descs,
+            open_desc: None,
         })
     }
 
-    /// 段描述重建：仅保留现存段的描述（压实退休后调用）。
+    /// 段描述重建：仅保留现存段（压实退休后调用）。
     fn refresh_descs(&mut self) {
         let live: std::collections::HashSet<u64> = self.store.segment_ids().into_iter().collect();
         self.descs.retain(|d| live.contains(&d.segment_id));
@@ -76,9 +93,10 @@ impl SegmentedAuditLog {
     }
 
     fn write_desc(&mut self) {
+        let tail: Vec<SegmentDesc> = self.descs.iter().rev().take(DESC_KEEP).cloned().collect();
         if let Ok(json) = serde_json::to_vec(&DescRecord {
             schema: 1,
-            descs: self.descs.clone(),
+            descs: tail,
         }) {
             let _ = self.store.kv_apply(vec![(true, DESC_KEY, json)]);
         }
@@ -87,6 +105,18 @@ impl SegmentedAuditLog {
     pub fn append(&mut self, kind: &str, detail: &str) -> Result<AuditEntry, &'static str> {
         if kind.is_empty() {
             return Err("empty kind");
+        }
+        // 上一段已关闭 → 描述入列（内存始终最新；落盘按 DESC_PERSIST_EVERY 节流）
+        if self.store.pending_is_empty() {
+            if let Some(closed) = self.open_desc.take() {
+                self.descs.push(closed);
+                // 首段立即持久化（保证重开可见），此后按节流
+                let first = !self.desc_persisted;
+                if first || seq_persist_gate(self.entries.len() as u64) {
+                    self.write_desc();
+                    self.desc_persisted = true;
+                }
+            }
         }
         let seq = self.entries.last().map(|e| e.seq + 1).unwrap_or(1);
         let ts_ms = now_ms();
@@ -102,27 +132,28 @@ impl SegmentedAuditLog {
         };
         let json = serde_json::to_vec(&entry).map_err(|_| "audit serialize failed")?;
 
-        // 段间链头指针：pending 段预登记（next_segment_id 即本次 flush 将用的 id）
-        let starts_new_segment = self.store.pending_is_empty();
-        if starts_new_segment {
-            self.descs.push(SegmentDesc {
-                segment_id: self.store.next_segment_id(),
-                first_seq: seq,
-                last_seq: seq,
-                head_hash: hash,
-            });
-        } else if let Some(d) = self.descs.last_mut() {
-            d.last_seq = seq;
-            d.head_hash = hash;
-        }
-        self.write_desc();
-
         self.store.log_append(&json).map_err(store_err)?;
         self.entries.push(entry.clone());
-        self.store.flush().map_err(store_err)?;
-        if self.descs.len() > DESC_MAX {
-            self.refresh_descs();
-            self.store.flush().map_err(store_err).map(|_| ())?;
+        let flushed = self.store.flush().map_err(store_err)?;
+        // 更新开放段描述（head = 当前链头）
+        if let Some(seg_id) = flushed {
+            match self.open_desc.as_mut() {
+                Some(d) if d.segment_id == seg_id => {
+                    d.last_seq = seq;
+                    d.head_hash = hash;
+                }
+                _ => {
+                    if let Some(prev) = self.open_desc.take() {
+                        self.descs.push(prev);
+                    }
+                    self.open_desc = Some(SegmentDesc {
+                        segment_id: seg_id,
+                        first_seq: seq,
+                        last_seq: seq,
+                        head_hash: hash,
+                    });
+                }
+            }
         }
         Ok(entry)
     }
@@ -157,7 +188,7 @@ impl SegmentedAuditLog {
         self.store.flush().map_err(store_err).map(|_| ())
     }
 
-    /// 段间链描述（诊断 / 跨段校验用）。
+    /// 段间链描述（诊断 / 跨段校验用；不含当前开放段）。
     pub fn segment_descs(&self) -> Vec<(u64, u64, u64)> {
         self.descs
             .iter()

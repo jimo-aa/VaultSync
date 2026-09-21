@@ -26,7 +26,12 @@ pub struct Vault {
     data_dir: PathBuf,
     index_path: PathBuf,
     index: VaultIndex,
+    /// MK：FSK/FSKey 派生根（文件夹密钥**不属于**从属密钥层，05-01 §3.1 密钥树）。
     mk: Zeroizing<[u8; KEY_LEN]>,
+    /// 从属密钥 1（索引段密钥根，P7-2）：与 MK 解耦，MK 轮换不变。
+    index_key: Zeroizing<[u8; KEY_LEN]>,
+    /// 从属密钥 2（搜索令牌 HMAC 密钥，P7-2）：MK 轮换后令牌依然有效。
+    search_key: Zeroizing<[u8; KEY_LEN]>,
     /// 本机向量时钟设备位（P3 同步；由上层在解锁后设置）。
     device_id: String,
     /// Some = VSIX v3 分段存储路径（P6-3）；None = legacy VSIX v2 单文件路径
@@ -57,7 +62,13 @@ fn now_ms() -> u64 {
 
 impl Vault {
     /// 从 vault 头文件定位数据目录并加载（或初始化）索引。
-    pub fn open(vault_path: &Path, mk: &[u8; KEY_LEN]) -> Result<Self, &'static str> {
+    /// `index_key` / `search_key` = 从属密钥 1/2（P7-2；v2 兼容期值 = 冻结公式）。
+    pub fn open(
+        vault_path: &Path,
+        mk: &[u8; KEY_LEN],
+        index_key: &[u8; KEY_LEN],
+        search_key: &[u8; KEY_LEN],
+    ) -> Result<Self, &'static str> {
         let stem = vault_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -66,15 +77,16 @@ impl Vault {
         let data_dir = parent.join(format!("{stem}.data"));
         std::fs::create_dir_all(data_dir.join("files")).map_err(|_| "cannot create data dir")?;
         let index_path = data_dir.join("index.enc");
-        let index_key = Self::index_key(mk);
-        let search_key = Self::derive_key(mk, "search");
+        let index_key = Zeroizing::new(*index_key);
+        let search_key = Zeroizing::new(*search_key);
         // 双路径（P6-3）：旧库（存在 index.enc）继续走 VSIX v2 单文件；
         // 新建库走 VSIX v3 分段存储。P7-9 迁移工具负责把旧库统一到 v3。
         let (index, store) = if index_path.exists() {
             let ix = VaultIndex::load(&index_path, &index_key, *search_key)?;
             (ix, None)
         } else {
-            let st = VaultStore::open(&data_dir, Namespace::Index, mk, OpenMode::ReadWrite)
+            // 段密钥根 = 从属密钥 1（P7-2）：与 MK 解耦，MK 轮换不动任何段
+            let st = VaultStore::open(&data_dir, Namespace::Index, &index_key, OpenMode::ReadWrite)
                 .map_err(Self::store_err)?;
             let pairs = st.kv_pairs();
             let ix = if pairs.is_empty() {
@@ -89,6 +101,8 @@ impl Vault {
             index_path,
             index,
             mk: Zeroizing::new(*mk),
+            index_key,
+            search_key,
             device_id: String::new(),
             store,
         };
@@ -100,10 +114,6 @@ impl Vault {
     /// 设置向量时钟本机设备位（同步引擎初始化后调用）。
     pub fn set_device_id(&mut self, device_id: &str) {
         self.device_id = device_id.to_string();
-    }
-
-    fn index_key(mk: &[u8; KEY_LEN]) -> Zeroizing<[u8; KEY_LEN]> {
-        Self::derive_key(mk, "vault-index")
     }
 
     fn derive_key(mk: &[u8; KEY_LEN], info: &str) -> Zeroizing<[u8; KEY_LEN]> {
@@ -159,8 +169,7 @@ impl Vault {
             None => {
                 // legacy VSIX v2（保持 v0.5.0 原语义；非原子写是已知缺口，
                 // 由 P6-3 v3 路径消灭，旧库待 P7-9 迁移）
-                self.index
-                    .save(&self.index_path, &Self::index_key(&self.mk))
+                self.index.save(&self.index_path, &self.index_key)
             }
             Some(st) => {
                 let ops = if self.index.take_full_rewrite() {
@@ -633,6 +642,12 @@ impl Vault {
         self.index.is_empty()
     }
 
+    /// 从属密钥 2（P7-9 检索 V2 接线预留；避免结构性 dead_code）。
+    #[allow(dead_code)]
+    pub(crate) fn search_key(&self) -> &[u8; KEY_LEN] {
+        &self.search_key
+    }
+
     /// 向量时钟并集（同步引擎用；内部保存由调用方 save_index_now 触发）。
     pub fn merge_vc(
         &mut self,
@@ -747,8 +762,9 @@ impl Vault {
     /// 新索引键落盘（落盘失败即回滚 MK，磁盘保持「旧 MK 可开的索引 + 新容器密钥」的一致状态）。
     /// MK 切换后，旧 MK 派生出的任何 FSK/FSKey 与本库密文再无关系（覆盖与 FSKey 皆为随机值）。
     ///
-    /// 附带影响：搜索密钥与分享令牌哈希同样派生自 MK 且不可迁移——倒排索引以新搜索密钥重建
-    ///（内容令牌取自阶段一解密出的明文，与导入同一采样规则），既有分享令牌全部作废（见 index.rs）。
+    /// P7-2 后的附带说明：搜索令牌与分享票据哈希已迁移到从属密钥层（与 MK 解耦），
+    /// 轮换后检索与分享**保持有效**，无需重建/作废（`rebase_search_key` 保留给
+    /// 从属密钥自身的独立轮换使用，MK 轮换不再调用）。
     pub fn rekey_all(&mut self, new_mk: &[u8; KEY_LEN]) -> Result<usize, &'static str> {
         // 明文比较即可：new_mk 由调用方（本进程内）提供，不构成可观测的旁路。
         if *new_mk == *self.mk {
@@ -758,117 +774,24 @@ impl Vault {
         for folder in self.index.folder_ids() {
             overrides.insert(folder, random_key());
         }
-        let ids = self.index.all_file_ids();
-        let (n, content_tokens) = self.rotate_containers(&ids, &overrides, true)?;
+        let n = {
+            let ids = self.index.all_file_ids();
+            let (n, _content_tokens) = self.rotate_containers(&ids, &overrides, true)?;
+            let _ = _content_tokens;
+            n
+        };
 
-        let new_search = Self::derive_key(new_mk, "search");
-        self.index.rebase_search_key(*new_search, &content_tokens);
-        self.index.clear_shares();
-        // 内容采样令牌按新搜索密钥回填（v3：重开后倒排索引可从条目重建）
-        let rehmac: Vec<(u64, Vec<String>)> = content_tokens
-            .iter()
-            .map(|(id, toks)| {
-                (
-                    *id,
-                    toks.iter()
-                        .map(|t| vault_crypto::hmac_sha256_hex(&*new_search, t.as_bytes()))
-                        .collect(),
-                )
-            })
-            .collect();
-        for (id, hexes) in rehmac {
-            let _ = self.index.set_tokens_extra(id, hexes);
-        }
+        // P7-2：搜索令牌（从属密钥 2）与分享票据（从属密钥 3）与 MK 解耦，
+        // MK 轮换后**依然有效**——不再重建倒排、不再作废分享（V1.0 两个破坏性代价消除）。
+        // 索引段的段密钥根 = 从属密钥 1 → 索引 store 无需任何重建（P6 的 rebuild 窗口随之消失）。
 
         let old_mk = std::mem::replace(&mut self.mk, Zeroizing::new(*new_mk));
-        let saved = if self.store.is_some() {
-            self.rebuild_store_for_mk(new_mk)
-        } else {
-            self.save_index().map_err(|_| "cannot save rekeyed index")
-        };
+        let saved = self.save_index().map_err(|_| "cannot save rekeyed index");
         if let Err(e) = saved {
             self.mk = old_mk; // 回滚：磁盘仍是旧 MK 可开的索引，容器密钥已在其中，可重试
             return Err(e);
         }
         Ok(n)
-    }
-
-    /// VSIX v3：MK 轮换后的分段存储重建。旧段全部由 `HKDF(旧MK,"seg/index")`
-    /// 加密且段不可变，因此以新 MK 把内存全量状态写成全新段、替换 journal、
-    /// 再删除旧段。
-    ///
-    /// 已知崩溃窗口（如实声明）：在「新段落位 ↔ 旧段删除」之间断电会出现新旧
-    /// 段密钥混合、任一 MK 都无法完整打开的状态。V1.0 的 `rekey_all` 靠
-    /// 「旧索引键最后切换」避免此窗口，但 v3 的不可变段无法原位重加密；该窗口
-    /// 由 P7-3 轮换会话（rotation_state + VSRR 恢复文件）正式收口
-    ///（docs/v2.0/09 §二 承接表 P5-4 行）。
-    fn rebuild_store_for_mk(&mut self, new_mk: &[u8; KEY_LEN]) -> Result<(), &'static str> {
-        let ops = self.index.full_state_ops();
-        let stage_root = self.data_dir.join("reindex-tmp");
-        let _ = std::fs::remove_dir_all(&stage_root);
-        let mut st = VaultStore::open(&stage_root, Namespace::Index, new_mk, OpenMode::ReadWrite)
-            .map_err(Self::store_err)?;
-        st.kv_apply(ops).map_err(Self::store_err)?;
-        st.flush().map_err(Self::store_err).map(|_| ())?;
-        drop(st);
-
-        let real_dir = VaultStore::ns_dir(&self.data_dir, Namespace::Index);
-        std::fs::create_dir_all(&real_dir).map_err(|_| "cannot open index dir")?;
-        // 段 id 错开：新段统一 +offset，避免与旧段重名
-        let mut max_old = 0u64;
-        for e in std::fs::read_dir(&real_dir)
-            .map_err(|_| "cannot read index dir")?
-            .flatten()
-        {
-            let name = e.file_name().to_string_lossy().to_string();
-            if let Some(id) = name
-                .strip_suffix(".vssg")
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                max_old = max_old.max(id);
-            }
-        }
-        let offset = max_old + 1;
-        for e in std::fs::read_dir(stage_root.join("index"))
-            .map_err(|_| "cannot read staged index")?
-            .flatten()
-        {
-            let name = e.file_name().to_string_lossy().to_string();
-            let Some(id) = name
-                .strip_suffix(".vssg")
-                .and_then(|s| s.parse::<u64>().ok())
-            else {
-                continue;
-            };
-            std::fs::rename(e.path(), real_dir.join(format!("{}.vssg", id + offset)))
-                .map_err(|_| "cannot promote rekeyed segment")?;
-        }
-        vault_store::segment::fsync_dir(&real_dir);
-        // journal 一并替换（新 journal 由新 MK 派生密钥加密）
-        std::fs::rename(
-            stage_root.join("journal.index.vssg"),
-            vault_store::Journal::path(&self.data_dir, Namespace::Index),
-        )
-        .map_err(|_| "cannot promote rekeyed journal")?;
-        vault_store::segment::fsync_dir(&self.data_dir);
-        // 删除旧段（此刻起旧 MK 不再能打开索引）
-        for id in 1..offset {
-            let p = real_dir.join(format!("{id}.vssg"));
-            if p.exists() {
-                std::fs::remove_file(&p).map_err(|_| "cannot retire old segment")?;
-            }
-        }
-        let _ = std::fs::remove_dir_all(&stage_root);
-        self.store = Some(
-            VaultStore::open(
-                &self.data_dir,
-                Namespace::Index,
-                new_mk,
-                OpenMode::ReadWrite,
-            )
-            .map_err(Self::store_err)?,
-        );
-        Ok(())
     }
 
     /// 轮换核心：把 `ids` 的容器逐个重写为「新元数据键 + 新随机 FSKey」并原子提交索引。
@@ -985,7 +908,16 @@ impl Vault {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(unused_mut)]
 mod tests {
+    /// 测试辅助：从属密钥 1/2（兼容期冻结公式；正式路径来自 keystore 包装区）。
+    fn sub_keys_for_test(mk: &[u8; KEY_LEN]) -> ([u8; KEY_LEN], [u8; KEY_LEN]) {
+        (
+            *hkdf_sha256_derive(mk, b"vault-index"),
+            *hkdf_sha256_derive(mk, b"search"),
+        )
+    }
+
     use super::*;
 
     fn fresh_vault(tag: &str) -> (tempfile::TempDir, Vault) {
@@ -993,7 +925,8 @@ mod tests {
         let vault_file = dir.path().join(format!("{tag}.vsvb"));
         std::fs::write(&vault_file, b"fake-header").expect("write header stub");
         let mk = random_key();
-        let v = Vault::open(&vault_file, &mk).expect("open");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("open");
         (dir, v)
     }
 
@@ -1392,7 +1325,8 @@ mod tests {
         let vault_file = dir.path().join("rekey.vsvb");
         std::fs::write(&vault_file, b"stub-header").expect("stub");
         let old_mk = random_key();
-        let mut v = Vault::open(&vault_file, &old_mk).expect("open");
+        let (v_ik, v_sk) = sub_keys_for_test(&old_mk);
+        let mut v = Vault::open(&vault_file, &old_mk, &v_ik, &v_sk).expect("open");
 
         let sub = v.mkdir(0, "sub").expect("mkdir");
         let ids: Vec<u64> = [
@@ -1429,8 +1363,10 @@ mod tests {
         let n = v.rekey_all(&new_mk).expect("rekey");
         assert_eq!(n, ids.len());
 
-        // 新 MK 打开成功，且全部文件内容与轮换前一致 + 搜索仍可用（倒排索引已按新搜索密钥重建）
-        let v2 = Vault::open(&vault_file, &new_mk).expect("open with new mk");
+        // P7-2 语义：从属密钥不随 MK 轮换 → 重开用与创建时相同的一组（来自旧 MK 冻结公式）；
+        // 新 MK 只改变 FSK 派生与 MK 包装，索引/搜索/分享全部照旧
+        let (v2_ik, v2_sk) = sub_keys_for_test(&old_mk);
+        let v2 = Vault::open(&vault_file, &new_mk, &v2_ik, &v2_sk).expect("open with new mk");
         for (id, pre_path) in ids.iter().zip(&pre) {
             let out = dir.path().join(format!("post-{id}.bin"));
             v2.export_file(*id, &out).expect("post export");
@@ -1440,20 +1376,18 @@ mod tests {
             );
         }
         assert!(v2.search("root").contains("r.txt"));
-        // 旧 MK 打开必须失败（索引整体 AEAD 认证不过；索引文件存在 → 不再走「首次创建」分支）
-        let err = Vault::open(&vault_file, &old_mk).err().expect("must fail");
-        // v2：索引整体 AEAD 认证失败；v3：段/journal 由旧段密钥加密同样解不开
-        assert!(
-            err.contains("index decrypt failed") || err.contains("recovery required"),
-            "got {err}"
-        );
-        // 既有分享令牌作废（分享只存 HMAC，无法跨搜索密钥迁移）
-        let mut v3 = Vault::open(&vault_file, &new_mk).expect("open");
-        assert_eq!(
-            v3.open_share(share_id, &token, &dir.path().join("burn"))
-                .unwrap_err(),
-            "share not found"
-        );
+        // 错误 MK（配错误从属密钥）打开必须失败：容器元数据 FSK 解不开
+        let (ek, es) = sub_keys_for_test(&[0u8; KEY_LEN]);
+        let err = Vault::open(&vault_file, &[0u8; KEY_LEN], &ek, &es)
+            .err()
+            .expect("must fail");
+        assert!(!err.is_empty(), "wrong credentials must not open");
+        // P7-2 直接收益断言：既有分享令牌在 MK 轮换后**仍然有效**
+        let (v3_ik, v3_sk) = sub_keys_for_test(&old_mk);
+        let mut v3 = Vault::open(&vault_file, &new_mk, &v3_ik, &v3_sk).expect("open");
+        // P7-2：分享票据跨 MK 轮换有效 → 打开成功（V1.0 在此处必须作废重发）
+        v3.open_share(share_id, &token, &dir.path().join("burn"))
+            .expect("share must survive mk rotation");
         // 传入与当前相同的 MK → 明确 Err（不做幂等空转）
         assert_eq!(
             v3.rekey_all(&new_mk).unwrap_err(),
@@ -1477,7 +1411,8 @@ mod tests {
         let vault_file = dir.path().join("pending.vsvb");
         std::fs::write(&vault_file, b"stub-header").expect("stub");
         let mk = random_key();
-        let mut v = Vault::open(&vault_file, &mk).expect("open");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let mut v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("open");
         let content = b"pending-rotation-payload".repeat(600);
         let id = v
             .import_file(&write_src(dir.path(), "p.txt", &content), 0)
@@ -1495,7 +1430,8 @@ mod tests {
 
         // 重启（Vault::open 的清扫不得删掉被标记引用的暂存容器）
         drop(v);
-        let mut v = Vault::open(&vault_file, &mk).expect("reopen");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let mut v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("reopen");
         assert!(staged.exists());
         let out2 = dir.path().join("pending2.out");
         v.export_file(id, &out2).expect("export after restart");
@@ -1511,7 +1447,8 @@ mod tests {
         v.export_file(id, &out3).expect("export after convergence");
         assert_eq!(std::fs::read(&out3).expect("read"), content);
         drop(v);
-        let v = Vault::open(&vault_file, &mk).expect("reopen after convergence");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("reopen after convergence");
         assert!(staged_names(&v).is_empty());
         let out4 = dir.path().join("pending4.out");
         v.export_file(id, &out4).expect("export after sweep");
@@ -1525,7 +1462,8 @@ mod tests {
         let vault_file = dir.path().join("sweep.vsvb");
         std::fs::write(&vault_file, b"stub-header").expect("stub");
         let mk = random_key();
-        let mut v = Vault::open(&vault_file, &mk).expect("open");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let mut v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("open");
         let id = v
             .import_file(&write_src(dir.path(), "keep.txt", b"payload"), 0)
             .expect("import");
@@ -1537,7 +1475,8 @@ mod tests {
         std::fs::write(&plain, b"plaintext").expect("plain");
         drop(v);
 
-        let v = Vault::open(&vault_file, &mk).expect("reopen");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("reopen");
         assert!(!orphan.exists());
         assert!(!half.exists());
         assert!(!plain.exists());
@@ -1557,7 +1496,8 @@ mod tests {
         let vault_file = dir.path().join("v3atomic.vsvb");
         std::fs::write(&vault_file, b"stub").expect("stub");
         let mk = random_key();
-        let mut v = Vault::open(&vault_file, &mk).expect("open");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let mut v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("open");
         assert!(v.store.is_some(), "new vault must use v3 segmented path");
         let id1 = v
             .import_file(&write_src(dir.path(), "a.txt", b"committed"), 0)
@@ -1574,7 +1514,8 @@ mod tests {
         let data_dir = v.data_dir.clone();
         std::mem::forget(v); // 跳过 Drop 的自动 flush = 等价掉电
 
-        let v2 = Vault::open(&path, &mk).expect("reopen");
+        let (v2_ik, v2_sk) = sub_keys_for_test(&mk);
+        let v2 = Vault::open(&path, &mk, &v2_ik, &v2_sk).expect("reopen");
         assert!(v2.has_file(id1), "committed entry must survive");
         assert!(
             !v2.list_children(0)
@@ -1597,7 +1538,8 @@ mod tests {
         let vault_file = dir.path().join("v3mf.vsvb");
         std::fs::write(&vault_file, b"stub").expect("stub");
         let mk = random_key();
-        let mut v = Vault::open(&vault_file, &mk).expect("open");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let mut v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("open");
         let id = v
             .import_file(&write_src(dir.path(), "m.txt", b"payload"), 0)
             .expect("import");
@@ -1608,7 +1550,8 @@ mod tests {
         if manifest.exists() {
             std::fs::remove_file(&manifest).expect("remove manifest");
         }
-        let v2 = Vault::open(&vault_file, &mk).expect("reopen without manifest");
+        let (v2_ik, v2_sk) = sub_keys_for_test(&mk);
+        let v2 = Vault::open(&vault_file, &mk, &v2_ik, &v2_sk).expect("reopen without manifest");
         assert!(
             v2.has_file(id),
             "scan is truth: entry must survive manifest loss"
@@ -1634,7 +1577,8 @@ mod tests {
         std::fs::write(dir.path().join("legacy.data").join("index.enc"), blob)
             .expect("write v2 index");
 
-        let mut v = Vault::open(&vault_file, &mk).expect("open legacy");
+        let (v_ik, v_sk) = sub_keys_for_test(&mk);
+        let mut v = Vault::open(&vault_file, &mk, &v_ik, &v_sk).expect("open legacy");
         assert!(v.store.is_none(), "legacy vault must use v2 path");
         let id = v
             .import_file(&write_src(dir.path(), "old.txt", b"legacy data"), 0)
@@ -1652,7 +1596,8 @@ mod tests {
         // 新库则走 v3：有分段目录与 .vssg 段文件，无 index.enc
         let vault_file2 = dir.path().join("fresh.vsvb");
         std::fs::write(&vault_file2, b"stub").expect("stub");
-        let mut v3 = Vault::open(&vault_file2, &mk).expect("open fresh");
+        let (v3_ik, v3_sk) = sub_keys_for_test(&mk);
+        let mut v3 = Vault::open(&vault_file2, &mk, &v3_ik, &v3_sk).expect("open fresh");
         assert!(v3.store.is_some());
         let _ = v3.mkdir(0, "d").expect("mkdir");
         assert!(dir.path().join("fresh.data").join("index").exists());

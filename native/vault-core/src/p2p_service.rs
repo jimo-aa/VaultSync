@@ -17,6 +17,14 @@ pub(crate) fn p2p_engine(session: &Session) -> Result<Arc<P2pEngine>, CoreError>
         return Ok(Arc::clone(e));
     }
     let mk = *session.mk;
+    let k = &session.keys;
+    let keys = vault_p2p::engine::EngineKeys {
+        mk,
+        orders: k.orders,
+        ident: k.discovery,
+        index: k.index,
+        search: k.search,
+    };
     let vault_path = session.vault_path.clone();
     let wipe_path = vault_path.clone();
     let wipe: vault_p2p::engine::WipeFn =
@@ -24,7 +32,7 @@ pub(crate) fn p2p_engine(session: &Session) -> Result<Arc<P2pEngine>, CoreError>
 
     let engine = match P2pEngine::new(
         &vault_path,
-        &mk,
+        &keys,
         "desktop",
         Arc::clone(&session.vault),
         wipe,

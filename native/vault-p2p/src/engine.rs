@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use vault_crypto::kdf::hkdf_sha256_derive;
 use vault_crypto::{aead_decrypt, aead_encrypt, hex_encode, random_bytes, KEY_LEN};
 use vault_vault::vault::Vault;
 
@@ -95,6 +94,19 @@ fn dialable_addr(observed: Option<std::net::SocketAddr>, peer_port: u16) -> Opti
     Some(format!("{}:{port}", obs.ip()))
 }
 
+/// 引擎密钥束（P7-2）：从属密钥由调用方（会话）注入，引擎不接触 keystore。
+#[derive(Clone, Copy)]
+pub struct EngineKeys {
+    pub mk: [u8; KEY_LEN],
+    /// 从属密钥 4：orders.enc
+    pub orders: [u8; KEY_LEN],
+    /// 从属密钥 8：设备身份 / 发现指纹
+    pub ident: [u8; KEY_LEN],
+    /// 从属密钥 1/2：索引与搜索（保险箱槽位打开用）
+    pub index: [u8; KEY_LEN],
+    pub search: [u8; KEY_LEN],
+}
+
 pub struct EngineInner {
     ident: Identity,
     device_name: String,
@@ -139,11 +151,12 @@ impl P2pEngine {
     /// 创建引擎：加载/生成设备身份（AEAD 于 MK 子密钥落盘），打开保险箱槽位并启动监听。
     pub fn new(
         vault_path: &Path,
-        mk: &[u8; KEY_LEN],
+        keys: &EngineKeys,
         device_name: &str,
         vault_slot: Arc<Mutex<Option<Vault>>>,
         wipe: WipeFn,
     ) -> Result<Self, &'static str> {
+        let mk = &keys.mk;
         let stem = vault_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -153,7 +166,9 @@ impl P2pEngine {
         let p2p_dir = data_dir.join("p2p");
         std::fs::create_dir_all(&p2p_dir).map_err(|_| "cannot create p2p dir")?;
 
-        let ident_key = *hkdf_sha256_derive(mk, b"p2p-ident");
+        // P7-2：身份/发现密钥（从属密钥 8）与订单密钥（从属密钥 4）由调用方注入；
+        // 对端表（p2p-peers）不在从属密钥层，仍由 MK 派生。
+        let ident_key = keys.ident;
         let ident = match std::fs::read(p2p_dir.join("device.id")) {
             Ok(blob) => {
                 let pt = aead_decrypt(&ident_key, &blob).ok_or("identity decrypt failed")?;
@@ -174,7 +189,7 @@ impl P2pEngine {
         };
 
         let peers = PeerStore::load_or_new(&p2p_dir, mk)?;
-        let orders = OrderStore::load_or_new(&p2p_dir, mk)?;
+        let orders = OrderStore::load_or_new(&p2p_dir, &keys.orders)?;
         let engine = Self {
             inner: Arc::new(EngineInner {
                 ident,
@@ -201,7 +216,7 @@ impl P2pEngine {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if guard.is_none() {
-                let mut v = Vault::open(vault_path, mk)?;
+                let mut v = Vault::open(vault_path, mk, &keys.index, &keys.search)?;
                 v.set_device_id(&engine.inner.ident.device_id());
                 *guard = Some(v);
             }
@@ -1834,6 +1849,7 @@ pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+    use vault_crypto::kdf::hkdf_sha256_derive;
 
     #[test]
     fn base64_roundtrip() {
@@ -1867,7 +1883,8 @@ mod tests {
         let vp = dir.path().join("m.vsvb");
         std::fs::write(&vp, b"h").unwrap();
         let mk = vault_crypto::random_key();
-        let mut v = Vault::open(&vp, &mk).unwrap();
+        let keys = test_keys(&mk);
+        let mut v = Vault::open(&vp, &mk, &keys.index, &keys.search).unwrap();
         v.set_device_id("vd-x");
         let src = dir.path().join("f.txt");
         std::fs::write(&src, b"manual decrypt probe ".repeat(5000)).unwrap();
@@ -1909,6 +1926,17 @@ mod tests {
         })
     }
 
+    /// 测试密钥束：从属密钥取 V1.0 冻结公式（与正式 v2 兼容路径同值）。
+    fn test_keys(mk: &[u8; KEY_LEN]) -> EngineKeys {
+        EngineKeys {
+            mk: *mk,
+            orders: *hkdf_sha256_derive(mk, b"p2p-orders"),
+            ident: *hkdf_sha256_derive(mk, b"p2p-ident"),
+            index: *hkdf_sha256_derive(mk, b"vault-index"),
+            search: *hkdf_sha256_derive(mk, b"search"),
+        }
+    }
+
     fn mk_dev(tag: &str) -> TestDev {
         let dir = tempfile::tempdir().unwrap();
         let vault_path = dir.path().join(format!("{tag}.vsvb"));
@@ -1917,7 +1945,8 @@ mod tests {
         let slot: Arc<Mutex<Option<Vault>>> = Arc::new(Mutex::new(None));
         let wipes = Arc::new(AtomicUsize::new(0));
         let wipe = wipe_counter(wipes.clone(), vault_path.clone());
-        let engine = P2pEngine::new(&vault_path, &mk, tag, slot.clone(), wipe).unwrap();
+        let keys = test_keys(&mk);
+        let engine = P2pEngine::new(&vault_path, &keys, tag, slot.clone(), wipe).unwrap();
         TestDev {
             dir,
             vault_path,
@@ -1930,9 +1959,10 @@ mod tests {
 
     /// 在同一临时目录上重开引擎：读回同一份 peers.enc / orders.enc（落盘往返断言用）。
     fn reopen(dev: &TestDev) -> P2pEngine {
+        let keys = test_keys(&dev.mk);
         P2pEngine::new(
             &dev.vault_path,
-            &dev.mk,
+            &keys,
             "reopened",
             dev.slot.clone(),
             wipe_counter(dev.wipes.clone(), dev.vault_path.clone()),
