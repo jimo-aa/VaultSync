@@ -84,6 +84,8 @@ pub struct Session {
     pub(crate) stego_enabled: std::sync::atomic::AtomicBool,
     /// 单写者租约（P6-2）：解锁即抢独占；他进程持锁 → 只读降级（码 9）。
     pub(crate) readonly: std::sync::atomic::AtomicBool,
+    /// 维护态（P7-3）：轮换/迁移中业务写冻结（码 10）；擦除/销毁不受冻结。
+    pub(crate) maintenance: std::sync::atomic::AtomicBool,
     pub(crate) lease: Mutex<Option<vault_store::VaultLease>>,
 }
 
@@ -106,6 +108,20 @@ impl Session {
 
     pub(crate) fn is_readonly(&self) -> bool {
         self.readonly.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn enter_maintenance(&self) {
+        self.maintenance
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn exit_maintenance(&self) {
+        self.maintenance
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_maintenance(&self) -> bool {
+        self.maintenance.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -175,7 +191,8 @@ impl Session {
     pub(crate) fn with_audit<T>(&self, f: impl FnOnce(&AuditLog) -> T) -> Option<T> {
         let mut guard = self.audit.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
-            match AuditLog::open(&self.data_dir(), &self.mk) {
+            // P7-2：链键（从属密钥 6）
+            match AuditLog::open_with_key(&self.data_dir(), &self.keys.audit_chain) {
                 Ok(log) => *guard = Some(log),
                 Err(e) => {
                     eprintln!("vsync audit open failed: {e}");

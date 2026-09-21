@@ -149,6 +149,17 @@ pub(crate) fn dominates(a: &BTreeMap<String, u64>, b: &BTreeMap<String, u64>) ->
 
 impl P2pEngine {
     /// 创建引擎：加载/生成设备身份（AEAD 于 MK 子密钥落盘），打开保险箱槽位并启动监听。
+    /// 是否存在已配对设备（P7-3 轮换传播空集判定）。
+    pub fn has_paired_peers(&self) -> bool {
+        !self
+            .inner
+            .peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .list()
+            .is_empty()
+    }
+
     pub fn new(
         vault_path: &Path,
         keys: &EngineKeys,

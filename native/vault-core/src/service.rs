@@ -25,6 +25,10 @@ pub enum CoreError {
     BioNotBound,
     Io(&'static str),
     Format(&'static str),
+    /// 需要恢复（P7-3，码 11）：轮换恢复文件缺失 / 校验不过
+    NeedsRecovery(&'static str),
+    /// 维护态（P7-3，码 10）：业务写冻结
+    Maintenance,
     Internal(&'static str),
 }
 
@@ -132,7 +136,7 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
         Some(mk) if verifier_of(&mk) == ks.verifier => {
             guard_reset(path);
             let keys = open_derived_keys(&mut ks, &mk).map_err(CoreError::Internal)?;
-            Ok(Session {
+            let s = Session {
                 mk: Zeroizing::new(mk),
                 keys: Zeroizing::new(keys),
                 vault_path: path.to_path_buf(),
@@ -142,8 +146,14 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
                 audit: std::sync::Mutex::new(None),
                 stego_enabled: std::sync::atomic::AtomicBool::new(false),
                 readonly: std::sync::atomic::AtomicBool::new(false),
+                maintenance: std::sync::atomic::AtomicBool::new(false),
                 lease: std::sync::Mutex::new(None),
-            })
+            };
+            // P7-3：头部停在轮换态 → 会话进维护态（FFI 层随即自动续做）
+            if ks.rotation_state != crate::keystore::ROTATION_IDLE {
+                s.enter_maintenance();
+            }
+            Ok(s)
         }
         Some(_) => Err(CoreError::Internal(
             "MK verifier mismatch: wrapped copy tampered",
@@ -202,6 +212,7 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
                 audit: std::sync::Mutex::new(None),
                 stego_enabled: std::sync::atomic::AtomicBool::new(false),
                 readonly: std::sync::atomic::AtomicBool::new(false),
+                maintenance: std::sync::atomic::AtomicBool::new(false),
                 lease: std::sync::Mutex::new(None),
             })
         }
@@ -267,88 +278,224 @@ pub fn rotate_mk(
     password: &str,
     store: Option<&dyn SecureStore>,
 ) -> Result<(bool, usize), CoreError> {
+    rotate_mk_begin(session, password, store).map(|rewritten| (true, rewritten))
+}
+
+/// P7-3 轮换会话 · begin：确认密码 → VSRR → state=1 → 数据面重加密 →
+/// 重包装从属密钥 + 头部提交（state=2）→ 删 VSRR。任一步崩溃，重启后
+/// `rotate_mk_resume` 从断点续做（state 是唯一真值）。
+///
+/// 维护态语义：state != 0 期间业务写冻结（码 10）；擦除/销毁不受冻结。
+/// 无已配对设备时传播为空集 → state 直接归 0；有对端时停在 2 等 P7-4 传播。
+pub fn rotate_mk_begin(
+    session: &Session,
+    password: &str,
+    store: Option<&dyn SecureStore>,
+) -> Result<usize, CoreError> {
     if session.disguise {
         return Err(CoreError::Internal("disguise session cannot rotate MK"));
     }
+    if session.is_readonly() {
+        return Err(CoreError::Internal("lease readonly")); // → 9
+    }
+    let data_dir = session.data_dir();
     let mut ks = Keystore::load(&session.vault_path).map_err(CoreError::Format)?;
-    // 强确认：必须持有当前 MK 的会话 + 正确的主密码（用于重新包装 MK'）
+    if ks.rotation_state != crate::keystore::ROTATION_IDLE {
+        return Err(CoreError::Maintenance); // 已在轮换 → 10
+    }
+    // 强确认：必须持有当前 MK 的会话 + 正确的主密码（重新包装 MK' 用）
     let kek = argon2id_derive(password, &ks.salt, &ks.argon).map_err(CoreError::Internal)?;
     match unwrap_mk(&kek, &ks.mk_wrap_pwd) {
         Some(mk) if mk == *session.mk => {}
         _ => return Err(CoreError::WrongPassword(0)),
     }
+    session.audit("security", "rotation.begin mk");
 
-    // 先记审计：此刻旧 MK 仍有效，这条会随旧链一起被归档（持有旧 MK 者可事后核对）
-    session.audit("security", "MK rotation started (whole-vault rekey)");
-
+    // ③ VSRR（写入失败 → 码 3，不进入轮换，头部仍 idle）
+    let rotation_id: [u8; 16] = vault_crypto::random_bytes(16)
+        .as_slice()
+        .try_into()
+        .map_err(|_| CoreError::Internal("rand"))?;
     let mk_new = random_key();
-    // 数据面：索引 + 全部容器（含每文件新 FSKey 与各文件夹新 FSK 覆盖）
-    let rewritten = session.with_vault(|v| v.rekey_all(&mk_new).map_err(CoreError::Internal))?;
+    crate::rotation::write_vsrr(&data_dir, &rotation_id, &mk_new, &session.mk)
+        .map_err(CoreError::Io)?;
 
-    // 数据面已换钥：此后**任何**失败都必须把数据面滚回旧 MK。否则「数据用 MK'、头部仍包旧 MK」
-    // 会让保险箱彻底打不开（冒烟测试第一版就命中了这个状态，故此处必须回滚）。
-    let complete = (|| -> Result<(usize, bool), CoreError> {
-        // P7-2：审计链键（从属密钥 6）与 MK 解耦，轮换不再触碰审计载体；
-        // 旧载体存在性仅作诊断保留（legacyChains 语义归迁移工具 P7-7）。
-        let data_dir = session.data_dir();
-        let _audit_moved = session.with_audit(|log| log.len()).unwrap_or(0);
+    // ④ 头部置 state=1 + rotation_id（先于任何数据面变更；tmp+rename 提交点）
+    ks.rotation_state = crate::keystore::ROTATION_IN_PROGRESS;
+    ks.rotation_id = rotation_id;
+    ks.save().map_err(CoreError::Io)?;
+    session.enter_maintenance();
+    session.audit(
+        "security",
+        &format!(
+            "rotation.state=1 id={}",
+            vault_crypto::hex_encode(&rotation_id)
+        ),
+    );
 
-        // 控制面：新 salt 下重新包装 MK'
-        // **verifier 必须同步更新**：它是 HKDF(MK,"verifier")，锁死在头部，
-        // 不同步会让下一次解锁判定为「wrapped 副本被调包」而拒绝解封（冒烟抓到过）。
-        ks.verifier = verifier_of(&mk_new);
-        ks.salt = random_salt();
-        let kek_new =
-            argon2id_derive(password, &ks.salt, &ks.argon).map_err(CoreError::Internal)?;
-        ks.mk_wrap_pwd = wrap_mk(&mk_new, &kek_new)?;
-
-        let mut bio_rewrapped = false;
-        if ks.mk_wrap_bio.is_some() {
-            match store {
-                Some(st) => match kek_bio::load(st, &session.vault_path) {
-                    // 安全区里的 KEK_bio 可读 → 无需再次刷指纹即可包装 MK'
-                    Ok(Some(kek_bio_key)) => {
-                        ks.mk_wrap_bio = Some(wrap_mk(&mk_new, &kek_bio_key)?);
-                        bio_rewrapped = true;
-                    }
-                    // 安全区不可用 / 无后端：主密码路径不受影响，生物路径失效
-                    _ => ks.mk_wrap_bio = None,
-                },
-                None => ks.mk_wrap_bio = None,
-            }
-        }
-
-        // P7-2：从属密钥**仅重包装**（8×64B，取值不变）——索引/搜索/分享/订单/
-        // 隐写/链键/审计导出/发现盐全部不动；这是「轮换是廉价事务」的机制基础。
-        let (rewraps, _) = Keystore::wrap_derived_keys(&mk_new, Some(session.keys.to_array()));
-        ks.derived_keys = Some(rewraps);
-        session.audit("security", "dk.rewrap keyIds=[1,2,3,4,5,6,7,8]");
-
-        ks.save().map_err(CoreError::Io)?;
-        let legacy_chain_present =
-            usize::from(data_dir.join("audit.enc").exists() || data_dir.join("audit").is_dir());
-        Ok((legacy_chain_present, bio_rewrapped))
-    })();
-
-    let (audit_moved, bio_rewrapped) = match complete {
-        Ok(v) => v,
+    // ⑤ 数据面重加密（可中断：崩溃后 resume 以 VSRR 恢复 MK' 续做）
+    let rewritten = match session.with_vault(|v| v.rekey_all(&mk_new).map_err(CoreError::Internal))
+    {
+        Ok(n) => n,
         Err(e) => {
-            // 回滚数据面到旧 MK。审计文件此时尚未改名（改名在 ks.save() 之后），
-            // 因此回滚不需要额外处理审计。
-            if session
-                .with_vault(|v| v.rekey_all(&session.mk).map_err(CoreError::Internal))
-                .is_err()
-            {
-                return Err(CoreError::Internal(
-                    "MK rotation failed and rollback failed: vault requires the new MK",
-                ));
-            }
+            // 状态保持 state=1 + VSRR：resume 续做（rekey_all 以旧索引键批次
+            // 提交，中断即回滚到一致旧状态，见 vault.rs）
+            eprintln!("vsync rotation data-face interrupted: {:?}; resumable", e);
             return Err(e);
         }
     };
-    // P7-2：轮换完成事件随解耦后的链键写入**同一条**审计链（不再断链）。
-    let _ = (audit_moved, bio_rewrapped, rewritten);
-    Ok((bio_rewrapped, rewritten))
+
+    // ⑥⑦ 从属密钥仅重包装 + 控制面提交（state=2）
+    finish_rotation(session, &mut ks, &mk_new, rotation_id, password, store)?;
+
+    // 传播：无已配对设备 → 空集即完成，state 归 0；有对端 → 停在 2（P7-4 接管）
+    if rotation_propagation_pending(session) {
+        session.audit("security", "rotation.state=2 pending_ack");
+    } else {
+        finish_rotation_idle(session, &data_dir, rotation_id);
+    }
+    Ok(rewritten)
+}
+
+/// ⑥⑦ 共用：从属密钥重包装 + 新 salt/verifier + MK' 重包装 + 头部 state=2 提交 + 删 VSRR。
+fn finish_rotation(
+    session: &Session,
+    ks: &mut Keystore,
+    mk_new: &[u8; KEY_LEN],
+    rotation_id: [u8; 16],
+    password: &str,
+    store: Option<&dyn SecureStore>,
+) -> Result<(), CoreError> {
+    let (rewraps, _) = Keystore::wrap_derived_keys(mk_new, Some(session.keys.to_array()));
+    ks.derived_keys = Some(rewraps);
+    session.audit("security", "dk.rewrap keyIds=[1,2,3,4,5,6,7,8]");
+
+    // 主密码不随轮换改变（F-07 零影响）：新 salt 派生 KEK' 重包装 MK'。
+    // 偏差（记 LOG）：resume 需要密码参数——规范签名无参，但 KEK 只能由
+    // 密码派生，无参 resume 在密码学上无法完成 mk_wrap_pwd 的重包装。
+    ks.verifier = verifier_of(mk_new);
+    ks.salt = random_salt();
+    let kek_new = argon2id_derive(password, &ks.salt, &ks.argon).map_err(CoreError::Internal)?;
+    ks.mk_wrap_pwd = wrap_mk(mk_new, &kek_new)?;
+
+    if ks.mk_wrap_bio.is_some() {
+        match store {
+            Some(st) => match kek_bio::load(st, &session.vault_path) {
+                Ok(Some(kek_bio_key)) => {
+                    ks.mk_wrap_bio = Some(wrap_mk(mk_new, &kek_bio_key)?);
+                }
+                _ => ks.mk_wrap_bio = None,
+            },
+            None => ks.mk_wrap_bio = None,
+        }
+    }
+    ks.rotation_state = crate::keystore::ROTATION_COMPLETED_PENDING_ACK;
+    ks.rotation_id = rotation_id;
+    ks.save().map_err(CoreError::Io)?;
+    let p = crate::rotation::vsrr_path(&session.data_dir());
+    let _ = std::fs::remove_file(p);
+    Ok(())
+}
+
+/// state=2 → 0：传播完成（空集或全部 acked 后由 P7-4 调用）。
+fn finish_rotation_idle(session: &Session, data_dir: &std::path::Path, rotation_id: [u8; 16]) {
+    if let Ok(mut ks) = Keystore::load(&session.vault_path) {
+        if ks.rotation_id == rotation_id {
+            ks.rotation_state = crate::keystore::ROTATION_IDLE;
+            ks.rotation_id = [0u8; 16];
+            if ks.save().is_ok() {
+                session.exit_maintenance();
+                session.audit("security", "rotation.state=0 propagated");
+                let _ = std::fs::remove_file(crate::rotation::vsrr_path(data_dir));
+            }
+        }
+    }
+}
+
+/// 是否存在已配对设备（P7-3 范围内的传播判定；逐设备 ack 归 P7-4）。
+fn rotation_propagation_pending(session: &Session) -> bool {
+    session
+        .p2p
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|e| e.has_paired_peers()))
+        .unwrap_or(false)
+}
+
+/// P7-3 轮换会话 · resume：状态机恢复（不需要密码：MK' 由 VSRR + 会话内旧 MK 恢复）。
+/// 返回重写的文件数；state=0 幂等成功；state=1 缺 VSRR/校验不过 → NeedsRecovery（11）。
+pub fn rotate_mk_resume(session: &Session, password: &str) -> Result<usize, CoreError> {
+    let data_dir = session.data_dir();
+    let mut ks = Keystore::load(&session.vault_path).map_err(CoreError::Format)?;
+    match ks.rotation_state {
+        crate::keystore::ROTATION_IDLE => {
+            // state=0：VSRR 是孤儿（state 是唯一真值）
+            if crate::rotation::remove_orphan_vsrr(&data_dir) {
+                session.audit("diagnostic", "rotation.orphanRecoverRemoved");
+            }
+            session.exit_maintenance();
+            Ok(0)
+        }
+        crate::keystore::ROTATION_IN_PROGRESS => {
+            let v = crate::rotation::read_vsrr(&data_dir).map_err(|e| match e {
+                crate::rotation::VsrrError::Missing => CoreError::NeedsRecovery("vsrr missing"),
+                crate::rotation::VsrrError::Corrupt(m) => CoreError::NeedsRecovery(m),
+            })?;
+            if v.rotation_id != ks.rotation_id {
+                return Err(CoreError::NeedsRecovery("vsrr rotation_id mismatch"));
+            }
+            let mk_new = v
+                .unwrap_mk(&session.mk)
+                .map_err(|_| CoreError::NeedsRecovery("vsrr mk unwrap failed"))?;
+            session.audit("security", "rotation.resume");
+            // 数据面续做（幂等：中断发生在批次提交前即整体回滚；已提交项重跑等价）
+            let rewritten =
+                session.with_vault(|v| v.rekey_all(&mk_new).map_err(CoreError::Internal))?;
+            // 生物重包装走下一次解锁的降级路径（resume 无密码上下文）
+            let rid = ks.rotation_id;
+            finish_rotation(session, &mut ks, &mk_new, rid, password, None)?;
+            if rotation_propagation_pending(session) {
+                session.audit("security", "rotation.state=2 pending_ack");
+            } else {
+                finish_rotation_idle(session, &data_dir, ks.rotation_id);
+            }
+            Ok(rewritten)
+        }
+        crate::keystore::ROTATION_COMPLETED_PENDING_ACK => {
+            // VSRR 残留：删除；等待 P7-4 传播（P7-3 内无对端即归 idle）
+            let _ = std::fs::remove_file(crate::rotation::vsrr_path(&data_dir));
+            if !rotation_propagation_pending(session) {
+                let rid = ks.rotation_id;
+                finish_rotation_idle(session, &data_dir, rid);
+            }
+            Ok(0)
+        }
+        _ => Err(CoreError::Internal("unknown rotation_state")),
+    }
+}
+
+/// P7-3 轮换会话 · status：JSON 载荷（字段对齐 03 §4.10）。
+pub fn rotate_mk_status(session: &Session) -> Result<serde_json::Value, CoreError> {
+    let ks = Keystore::load(&session.vault_path).map_err(CoreError::Format)?;
+    let state = match ks.rotation_state {
+        crate::keystore::ROTATION_IDLE => "idle",
+        crate::keystore::ROTATION_IN_PROGRESS => "in_progress",
+        _ => "pending_ack",
+    };
+    Ok(serde_json::json!({
+        "schema": 1,
+        "rotationState": state,
+        "rotationId": vault_crypto::hex_encode(&ks.rotation_id),
+        "phase": match ks.rotation_state {
+            crate::keystore::ROTATION_IDLE => "done",
+            crate::keystore::ROTATION_IN_PROGRESS => "rekey",
+            _ => "propagate",
+        },
+        "interrupted": ks.rotation_state == crate::keystore::ROTATION_IN_PROGRESS,
+        "autoResumeExhausted": false,
+        "maintenance": session.is_maintenance(),
+        "propagation": [],
+    }))
 }
 
 /// 查询保险箱文件是否存在（首次运行判定）。
@@ -494,6 +641,135 @@ mod tests {
             derived_keys: Some(derived_wraps),
         };
         ks.save().expect("save");
+    }
+
+    /// P7-2 证据：rotation_chain::audit_chain_continues_after_mk_rotation
+    /// 链键（从属密钥 6）与 MK 解耦：轮换前后审计链逐条衔接。
+    #[test]
+    fn audit_chain_continues_after_mk_rotation() {
+        let (_d, p) = tmp_vault("chain");
+        create_fast(&p, "pw-1234");
+        let s = unlock(&p, "pw-1234", false).expect("unlock");
+        s.audit("session", "e1");
+        s.audit("vault", "e2");
+        let head_before = s
+            .with_audit(|log| (log.len(), log.head_hash()))
+            .expect("audit");
+        let _ = head_before;
+        assert_eq!(head_before.0, 2);
+
+        rotate_mk(&s, "pw-1234", None).expect("rotate");
+        // 轮换后同会话继续追加：同一条链
+        s.audit("vault", "e3-after-rotation");
+        let v = s
+            .with_audit(|log| {
+                let verdict = log.verify();
+                let entries = log.entries().to_vec();
+                (verdict, entries)
+            })
+            .expect("audit open");
+        assert!(v.0.ok, "chain must stay intact: {:?}", v.0.reason);
+        // 轮换事件本身也写入同一条链（begin/state=1/dk.rewrap/state=0）→ 条目数 > 3
+        assert!(v.1.len() > 3, "rotation events should be in the same chain");
+        // 全链逐条衔接（含跨轮换点）
+        for w in v.1.windows(2) {
+            assert_eq!(
+                w[1].prev_hash, w[0].hash,
+                "chain continues across mk rotation"
+            );
+        }
+        // 新会话（新 MK 解锁）读同一条链
+        drop(s);
+        let s2 = unlock(&p, "pw-1234", false).expect("unlock after rotate");
+        let check = s2
+            .with_audit(|log| (log.len(), log.verify().ok))
+            .expect("audit open");
+        assert!(check.0 > 3);
+        assert!(check.1);
+    }
+
+    /// P7-3 证据：rotation_session::resume_after_kill
+    /// 数据面中断（state=1 + VSRR）→ resume 续做 → 新 MK 解锁、文件可读。
+    #[test]
+    fn rotation_session_resume_after_kill() {
+        let (_d, p) = tmp_vault("rsess");
+        create_fast(&p, "pw-1234");
+        let s = unlock(&p, "pw-1234", false).expect("unlock");
+        // 放一个文件（数据面）
+        let src = {
+            let d = p.parent().unwrap().join("src.txt");
+            std::fs::write(&d, b"rotation payload").expect("src");
+            d
+        };
+        let file_id = s
+            .with_vault(|v| v.import_file(&src, 0).map_err(CoreError::Internal))
+            .expect("import");
+
+        // 模拟 I3：begin 的 ④⑤ 之间被杀 —— 手工构造 state=1 + VSRR 现场
+        let rotation_id = [0xABu8; 16];
+        let mk_new = random_key();
+        crate::rotation::write_vsrr(s.data_dir().as_path(), &rotation_id, &mk_new, &s.mk)
+            .expect("vsrr");
+        let mut ks = Keystore::load(&p).expect("ks");
+        ks.rotation_state = crate::keystore::ROTATION_IN_PROGRESS;
+        ks.rotation_id = rotation_id;
+        ks.save().expect("save");
+        s.enter_maintenance();
+
+        // resume：不需要 begin 上下文，密码重包装 MK'
+        let n = rotate_mk_resume(&s, "pw-1234").expect("resume");
+        let _ = n;
+        assert!(
+            !s.is_maintenance(),
+            "无对端（传播空集）→ 轮换完成后应回到 Active"
+        );
+        drop(s);
+
+        // 新 MK 生效：同一密码解锁，文件仍可读，状态 idle
+        let s2 = unlock(&p, "pw-1234", false).expect("unlock with same password");
+        let st = rotate_mk_status(&s2).expect("status");
+        assert_eq!(st["rotationState"], "idle");
+        let out = p.parent().unwrap().join("after-rotate.bin");
+        s2.with_vault(|v| v.export_file(file_id, &out).map_err(CoreError::Internal))
+            .expect("export after resume");
+        assert_eq!(std::fs::read(&out).expect("read"), b"rotation payload");
+
+        // 错误密码 → 拒绝
+        drop(s2);
+        assert!(unlock(&p, "wrong-pw", false).is_err());
+    }
+
+    /// P7-3：VSRR 校验失败 → 11（NeedsRecovery），不猜测。
+    #[test]
+    fn rotation_resume_corrupt_vsrr_is_needs_recovery() {
+        let (_d, p) = tmp_vault("rvsrr");
+        create_fast(&p, "pw-1234");
+        let s = unlock(&p, "pw-1234", false).expect("unlock");
+        let rotation_id = [0x11u8; 16];
+        crate::rotation::write_vsrr(s.data_dir().as_path(), &rotation_id, &random_key(), &s.mk)
+            .expect("vsrr");
+        // 篡改 digest 区
+        let pp = crate::rotation::vsrr_path(s.data_dir().as_path());
+        let mut raw = std::fs::read(&pp).expect("read");
+        let last = raw.len() - 1;
+        raw[last] ^= 0x01;
+        std::fs::write(&pp, &raw).expect("write");
+        let mut ks = Keystore::load(&p).expect("ks");
+        ks.rotation_state = crate::keystore::ROTATION_IN_PROGRESS;
+        ks.rotation_id = rotation_id;
+        ks.save().expect("save");
+
+        match rotate_mk_resume(&s, "pw-1234") {
+            Err(CoreError::NeedsRecovery(_)) => {}
+            other => panic!("expected NeedsRecovery, got {:?}", other.map(|_| ())),
+        }
+        // state=0：孤儿 VSRR 清理 + 幂等成功
+        let mut ks2 = Keystore::load(&p).expect("ks");
+        ks2.rotation_state = crate::keystore::ROTATION_IDLE;
+        ks2.save().expect("save");
+        assert!(crate::rotation::vsrr_path(s.data_dir().as_path()).exists());
+        rotate_mk_resume(&s, "pw-1234").expect("idle resume");
+        assert!(!crate::rotation::vsrr_path(s.data_dir().as_path()).exists());
     }
 
     #[test]

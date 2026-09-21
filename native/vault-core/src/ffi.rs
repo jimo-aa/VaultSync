@@ -34,6 +34,8 @@ pub const ERR_CAPABILITY: i32 = 13;
 
 fn map_err(e: &CoreError) -> i32 {
     match e {
+        CoreError::NeedsRecovery(_) => ERR_NEEDS_RECOVERY,
+        CoreError::Maintenance => ERR_MAINTENANCE,
         CoreError::WrongPassword(_) => ERR_WRONG_PASSWORD,
         CoreError::Cooldown(_) => ERR_COOLDOWN,
         CoreError::Io(_) => ERR_IO,
@@ -180,6 +182,13 @@ pub unsafe extern "C" fn vault_core_unlock(
                     },
                 );
                 s.attach_lease();
+                // P7-3 自动续做：头部停在轮换中态 → 以本密码续做（失败不阻塞解锁）
+                if s.is_maintenance() {
+                    match service::rotate_mk_resume(&s, pwd) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("vsync rotation auto-resume: {:?}", e),
+                    }
+                }
                 unsafe { handle_out.write(Box::into_raw(Box::new(s))) };
                 crate::contract::publish_simple(crate::contract::EV_ENGINE_READY);
                 Ok(())
@@ -1582,6 +1591,94 @@ pub unsafe extern "C" fn vault_core_p2p_conflict_resolve(
         Ok(())
     };
     run().err().unwrap_or(OK)
+}
+
+// ==== P7-3 轮换会话三件套（docs/v2.0/05-01 §3.6）====
+
+/// 轮换会话 · begin。0=完成（无对端）/ 1=密码错（进冷却）/ 9=只读 /
+/// 10=已在轮换 / 3=VSRR 写失败。中断后由 [`vault_core_rotate_mk_resume`] 续做。
+/// 偏差（记 LOG）：同步执行（数据面重加密在本调用内完成），`out_task_id`
+/// 恒写 0——异步任务化归 P8-1 传输队列统一处理。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄；`password`/`out_task_id` 语义同上。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_rotate_mk_begin(
+    handle: *mut Session,
+    password: *const c_char,
+    out_task_id: *mut u32,
+) -> i32 {
+    if let Err(code) = unsafe { ensure_writable(handle) } {
+        return code;
+    }
+    let session = unsafe { &*handle };
+    let pwd = match unsafe { cstr(password) } {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    if !out_task_id.is_null() {
+        unsafe { out_task_id.write(0) };
+    }
+    let store = open_os_store();
+    match service::rotate_mk_begin(
+        session,
+        pwd,
+        store.as_ref().map(|st| st as &dyn SecureStore),
+    ) {
+        Ok(rewritten) => {
+            audit_op(handle, "security", "rotation.begin done");
+            let _ = rewritten;
+            OK
+        }
+        Err(CoreError::WrongPassword(w)) => {
+            write_wait(std::ptr::null_mut(), w);
+            ERR_WRONG_PASSWORD
+        }
+        Err(e) => map_err(&e),
+    }
+}
+
+/// 轮换会话 · resume（需要密码重包装 MK'；偏差见 service.rs）。0=完成 /
+/// 11=恢复文件缺失或校验不过 / 10=已待传播。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_rotate_mk_resume(
+    handle: *mut Session,
+    password: *const c_char,
+) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    if session.is_readonly() {
+        return ERR_LEASE_BUSY;
+    }
+    let pwd = match unsafe { cstr(password) } {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    match service::rotate_mk_resume(session, pwd) {
+        Ok(_) => OK,
+        Err(e) => map_err(&e),
+    }
+}
+
+/// 轮换会话 · status：JSON 载荷（03 §4.10）。失败返回 NULL。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_rotate_mk_status(handle: *mut Session) -> *mut c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    let session = unsafe { &*handle };
+    match service::rotate_mk_status(session) {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 // ==== P6-6 FFI 契约 V2（docs/v2.0/02 §六）====

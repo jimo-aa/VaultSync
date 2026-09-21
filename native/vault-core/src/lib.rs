@@ -17,6 +17,7 @@ mod ffi;
 mod keystore;
 mod p2p_service;
 mod platform_store;
+pub mod rotation;
 mod service;
 mod session;
 
