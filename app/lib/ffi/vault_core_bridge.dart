@@ -21,6 +21,12 @@ abstract final class VaultStatus {
   static const format = 6;
   static const invalidArg = 7;
   static const internal = 8;
+  // ==== V2.0 扩展码（docs/v2.0/02 §六.6；中继 R1–R17 另有独立错误空间，不得原样透传）====
+  static const leaseBusy = 9;
+  static const maintenance = 10;
+  static const needsRecovery = 11;
+  static const cancelled = 12;
+  static const capability = 13;
 
   static String message(int code) => switch (code) {
         ok => 'OK',
@@ -32,6 +38,11 @@ abstract final class VaultStatus {
         format => '保险箱格式不支持（引擎过旧或文件损坏）',
         invalidArg => '参数非法',
         internal => '引擎内部错误',
+        leaseBusy => '保险箱被他进程/会话占用（已降级为只读）',
+        maintenance => '引擎维护中，业务写入暂不可用',
+        needsRecovery => '保险箱需要恢复后才能继续',
+        cancelled => '操作已取消',
+        capability => '当前引擎不支持该能力',
         _ => '未知状态 $code',
       };
 }
@@ -197,6 +208,48 @@ abstract class VaultCoreBridge {
   int p2pConflictResolve(Object sessionHandle, int keepId, int dropId,
       {bool secure = false});
 
+  // ==== P6 ABI 握手 / 事件流 / 任务框架 / 租约（docs/v2.0/02 §6.2–§6.5）====
+
+  /// ABI v2 握手：调用一次并解析 VsAbiInfo。
+  ///
+  /// 返回键：structSize / abiVersion / capabilityBits / maxWriteVerVault /
+  /// maxWriteVerContainer / maxWriteVerIndex / maxWriteVerAudit /
+  /// minReadVerVault / featureFlags / engineVersion。
+  /// 返回 null 表示调用失败（握手必须先于一切业务导出）。
+  Map<String, dynamic>? abiInfo();
+
+  /// 订阅引擎事件流，返回订阅 id（失败返回负状态码）。
+  ///
+  /// Dart 侧仅注册原生回调把事件投递回 isolate（内容以 pollEvents 轮询为准）；
+  /// 推送通道到 UI 外壳的接线属 P6 后续工作，本层不承诺回调语义。
+  int subscribe();
+
+  /// 取消订阅；0 = 成功，7 = 未知订阅 id。
+  void unsubscribe(int subId);
+
+  /// 拉取并清空缓冲事件（轮询为主通道）。每帧含
+  /// type / seq / tsMs / taskId / payload（JSON 对象）。
+  List<Map<String, dynamic>> pollEvents();
+
+  /// 任务列表 JSON：{"count","tasks":[{id,kind,state,doneBytes,totalBytes}]}。
+  List<Map<String, dynamic>> taskList();
+
+  /// 单任务状态，字段同 taskList 条目；未知 id 返回 null。
+  Map<String, dynamic>? taskStatus(int id);
+
+  /// 协作式取消：0 = 已请求 / 7 = 未知 / 12 = 已取消（幂等）。
+  int taskCancel(int id);
+
+  /// 启动诊断自检任务（约 0.5 s，进度经 TASK_PROGRESS 事件上报），返回任务 id。
+  int taskSpawnSelfcheck();
+
+  /// 会话只读状态：1 = 只读（他进程/他会话持租约），0 = 可写；
+  /// 负值为错误码。
+  int sessionReadonly(Object sessionHandle);
+
+  /// 缩略图能力探针：当前恒返回 13（CAP_THUMBNAIL 未置位，P7-9 交付）。
+  int vaultThumbnailProbe(Object sessionHandle, int fileId);
+
   /// 按平台返回动态库文件名。
   static String get libraryName {
     if (Platform.isWindows) return 'vault_core.dll';
@@ -276,6 +329,58 @@ typedef _P2pDestroyArmC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Uint64);
 typedef _P2pConflictResolveC = Int32 Function(
     Pointer<Void>, Int64, Int64, Int32);
+// P6 ABI 握手 / 事件流 / 任务框架 / 租约（每函数独立 typedef：参数个数不同严禁复用）
+
+/// ABI v2 握手结构（与 native/vault-core/src/contract.rs 的 VsAbiInfo 逐字段对齐）。
+final class VsAbiInfo extends Struct {
+  @Uint32()
+  external int structSize;
+
+  @Uint16()
+  external int abiVersion;
+
+  @Uint16()
+  external int reserved0;
+
+  @Uint64()
+  external int capabilityBits;
+
+  @Uint32()
+  external int maxWriteVerVault;
+
+  @Uint32()
+  external int maxWriteVerContainer;
+
+  @Uint32()
+  external int maxWriteVerIndex;
+
+  @Uint32()
+  external int maxWriteVerAudit;
+
+  @Uint32()
+  external int minReadVerVault;
+
+  @Uint32()
+  external int featureFlags;
+
+  @Array(32)
+  external Array<Uint8> engineVersion;
+}
+
+typedef _AbiInfoC = Int32 Function(Pointer<VsAbiInfo>);
+typedef _EventCallbackC = Void Function(Pointer<Void>, Pointer<Void>);
+typedef _SubscribeC = Int32 Function(
+    Pointer<NativeFunction<_EventCallbackC>>, Pointer<Void>, Pointer<Uint32>);
+typedef _UnsubscribeC = Int32 Function(Uint32);
+typedef _PollEventsC = Int32 Function(Pointer<Pointer<Utf8>>);
+typedef _TaskListC = Int32 Function(Pointer<Pointer<Utf8>>);
+typedef _TaskStatusC = Int32 Function(Uint32, Pointer<Pointer<Utf8>>);
+typedef _TaskCancelC = Int32 Function(Uint32);
+typedef _TaskSpawnC = Int32 Function(Pointer<Uint32>);
+typedef _SessionReadonlyC = Int32 Function(Pointer<Void>, Pointer<Int32>);
+typedef _ThumbnailC = Int32 Function(
+    Pointer<Void>, Uint64, Pointer<Pointer<Uint8>>, Pointer<Uint64>);
+
 
 class VaultCoreBridgeFfi implements VaultCoreBridge {
   VaultCoreBridgeFfi._(this._lib) {
@@ -449,6 +554,28 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
         _P2pConflictResolveC,
         int Function(
             Pointer<Void>, int, int, int)>('vault_core_p2p_conflict_resolve');
+    _abiInfo = _lib.lookupFunction<_AbiInfoC, int Function(Pointer<VsAbiInfo>)>(
+        'vault_core_abi_info');
+    _subscribe = _lib.lookupFunction<_SubscribeC,
+        int Function(Pointer<NativeFunction<_EventCallbackC>>, Pointer<Void>,
+            Pointer<Uint32>)>('vault_core_subscribe');
+    _unsubscribe = _lib
+        .lookupFunction<_UnsubscribeC, int Function(int)>('vault_core_unsubscribe');
+    _pollEvents = _lib.lookupFunction<_PollEventsC,
+        int Function(Pointer<Pointer<Utf8>>)>('vault_core_poll_events');
+    _taskList = _lib.lookupFunction<_TaskListC, int Function(Pointer<Pointer<Utf8>>)>(
+        'vault_core_task_list');
+    _taskStatus = _lib.lookupFunction<_TaskStatusC,
+        int Function(int, Pointer<Pointer<Utf8>>)>('vault_core_task_status');
+    _taskCancel =
+        _lib.lookupFunction<_TaskCancelC, int Function(int)>('vault_core_task_cancel');
+    _taskSpawn = _lib.lookupFunction<_TaskSpawnC, int Function(Pointer<Uint32>)>(
+        'vault_core_task_spawn_selfcheck');
+    _sessionReadonly = _lib.lookupFunction<_SessionReadonlyC,
+        int Function(Pointer<Void>, Pointer<Int32>)>('vault_core_session_readonly');
+    _thumbnail = _lib.lookupFunction<_ThumbnailC,
+        int Function(Pointer<Void>, int, Pointer<Pointer<Uint8>>,
+            Pointer<Uint64>)>('vault_core_vault_thumbnail');
     _version = version;
     _freeString = freeString;
   }
@@ -522,6 +649,22 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int) _p2pDestroyArm;
   late final int Function(Pointer<Void>) _p2pDestroyCancel;
   late final int Function(Pointer<Void>, int, int, int) _p2pConflictResolve;
+  late final int Function(Pointer<VsAbiInfo>) _abiInfo;
+  late final int Function(
+      Pointer<NativeFunction<_EventCallbackC>>, Pointer<Void>, Pointer<Uint32>)
+      _subscribe;
+  late final int Function(int) _unsubscribe;
+  late final int Function(Pointer<Pointer<Utf8>>) _pollEvents;
+  late final int Function(Pointer<Pointer<Utf8>>) _taskList;
+  late final int Function(int, Pointer<Pointer<Utf8>>) _taskStatus;
+  late final int Function(int) _taskCancel;
+  late final int Function(Pointer<Uint32>) _taskSpawn;
+  late final int Function(Pointer<Void>, Pointer<Int32>) _sessionReadonly;
+  late final int Function(
+      Pointer<Void>, int, Pointer<Pointer<Uint8>>, Pointer<Uint64>) _thumbnail;
+
+  /// 引擎事件回调：订阅进程内注册一次、随进程存活（引擎侧为全局事件总线）。
+  NativeCallable<_EventCallbackC>? _eventCallable;
 
   Pointer<Utf8> _toNative(String s) => s.toNativeUtf8();
 
@@ -1018,6 +1161,143 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
     return _p2pConflictResolve(
         _handle(sessionHandle), keepId, dropId, secure ? 1 : 0);
   }
+
+  @override
+  Map<String, dynamic>? abiInfo() {
+    final info = calloc<VsAbiInfo>();
+    try {
+      if (_abiInfo(info) != VaultStatus.ok) return null;
+      // engineVersion：NUL 填充的 SemVer 字节，截到首个 0。
+      final bytes = <int>[];
+      for (var i = 0; i < 32; i++) {
+        final b = info.ref.engineVersion[i];
+        if (b == 0) break;
+        bytes.add(b);
+      }
+      return <String, dynamic>{
+        'structSize': info.ref.structSize,
+        'abiVersion': info.ref.abiVersion,
+        'capabilityBits': info.ref.capabilityBits,
+        'maxWriteVerVault': info.ref.maxWriteVerVault,
+        'maxWriteVerContainer': info.ref.maxWriteVerContainer,
+        'maxWriteVerIndex': info.ref.maxWriteVerIndex,
+        'maxWriteVerAudit': info.ref.maxWriteVerAudit,
+        'minReadVerVault': info.ref.minReadVerVault,
+        'featureFlags': info.ref.featureFlags,
+        'engineVersion': latin1.decode(bytes),
+      };
+    } finally {
+      calloc.free(info);
+    }
+  }
+
+  /// 原生事件回调空实现：仅满足引擎「非 0 函数指针」要求；
+  /// 事件消费走 pollEvents 轮询（推送通道到外壳的接线为 P6 后续工作）。
+  static void _onEngineEvent(Pointer<Void> event, Pointer<Void> user) {}
+
+  @override
+  int subscribe() {
+    final callable = _eventCallable ??=
+        NativeCallable<_EventCallbackC>.listener(_onEngineEvent);
+    final subId = calloc<Uint32>();
+    try {
+      final status =
+          _subscribe(callable.nativeFunction, Pointer<Void>.fromAddress(0), subId);
+      if (status != VaultStatus.ok) return -status;
+      return subId.value;
+    } finally {
+      calloc.free(subId);
+    }
+  }
+
+  @override
+  void unsubscribe(int subId) {
+    _unsubscribe(subId);
+  }
+
+  @override
+  List<Map<String, dynamic>> pollEvents() {
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      if (_pollEvents(out) != VaultStatus.ok) return const [];
+      if (out.value.address == 0) return const [];
+      final raw = _takeJson(out.value);
+      if (raw == null || raw.isEmpty) return const [];
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list.cast<Map<String, dynamic>>();
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  @override
+  List<Map<String, dynamic>> taskList() {
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      if (_taskList(out) != VaultStatus.ok) return const [];
+      if (out.value.address == 0) return const [];
+      final raw = _takeJson(out.value);
+      if (raw == null) return const [];
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return (map['tasks'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>();
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  @override
+  Map<String, dynamic>? taskStatus(int id) {
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      if (_taskStatus(id, out) != VaultStatus.ok) return null;
+      if (out.value.address == 0) return null;
+      final raw = _takeJson(out.value);
+      if (raw == null) return null;
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  @override
+  int taskCancel(int id) => _taskCancel(id);
+
+  @override
+  int taskSpawnSelfcheck() {
+    final id = calloc<Uint32>();
+    try {
+      final status = _taskSpawn(id);
+      if (status != VaultStatus.ok) return -status;
+      return id.value;
+    } finally {
+      calloc.free(id);
+    }
+  }
+
+  @override
+  int sessionReadonly(Object sessionHandle) {
+    final out = calloc<Int32>();
+    try {
+      final status = _sessionReadonly(_handle(sessionHandle), out);
+      if (status != VaultStatus.ok) return -status;
+      return out.value;
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  @override
+  int vaultThumbnailProbe(Object sessionHandle, int fileId) {
+    final png = calloc<Pointer<Uint8>>();
+    final len = calloc<Uint64>();
+    try {
+      return _thumbnail(_handle(sessionHandle), fileId, png, len);
+    } finally {
+      calloc.free(png);
+      calloc.free(len);
+    }
+  }
 }
 
 /// 桩实现：原生库不可用时（纯 Dart 测试 / CI 无 DLL）。
@@ -1244,4 +1524,47 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
   int p2pConflictResolve(Object sessionHandle, int keepId, int dropId,
           {bool secure = false}) =>
       throw UnsupportedError('stub: native not linked');
+
+  @override
+  Map<String, dynamic>? abiInfo() => <String, dynamic>{
+        // 与引擎 ABI v2 同布局的假数据（供无 DLL 环境的 UI / 测试走通流程）。
+        'structSize': 72,
+        'abiVersion': 2,
+        'capabilityBits': (1 << 0) | (1 << 1) | (1 << 14) | (1 << 15),
+        'maxWriteVerVault': 2,
+        'maxWriteVerContainer': 2,
+        'maxWriteVerIndex': 3,
+        'maxWriteVerAudit': 1,
+        'minReadVerVault': 2,
+        'featureFlags': 0,
+        'engineVersion': '0.0.0-stub',
+      };
+
+  @override
+  int subscribe() => 1;
+
+  @override
+  void unsubscribe(int subId) {}
+
+  @override
+  List<Map<String, dynamic>> pollEvents() => const [];
+
+  @override
+  List<Map<String, dynamic>> taskList() => const [];
+
+  @override
+  Map<String, dynamic>? taskStatus(int id) => null;
+
+  @override
+  int taskCancel(int id) => VaultStatus.invalidArg;
+
+  @override
+  int taskSpawnSelfcheck() => 1;
+
+  @override
+  int sessionReadonly(Object sessionHandle) => 0;
+
+  @override
+  int vaultThumbnailProbe(Object sessionHandle, int fileId) =>
+      VaultStatus.capability;
 }

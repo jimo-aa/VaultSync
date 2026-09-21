@@ -167,6 +167,69 @@ typedef FileSha256Dart = Pointer<Utf8> Function(Pointer<Utf8>);
 late VerifyManifestDart _verifyManifest;
 late FileSha256Dart _fileSha256;
 
+// ===== P6 ABI 握手 / 事件流 / 任务框架 / 租约（每函数独立 typedef）=====
+/// ABI v2 握手结构（与 native/vault-core/src/contract.rs 的 VsAbiInfo 对齐）。
+final class VsAbiInfo extends Struct {
+  @Uint32()
+  external int structSize;
+  @Uint16()
+  external int abiVersion;
+  @Uint16()
+  external int reserved0;
+  @Uint64()
+  external int capabilityBits;
+  @Uint32()
+  external int maxWriteVerVault;
+  @Uint32()
+  external int maxWriteVerContainer;
+  @Uint32()
+  external int maxWriteVerIndex;
+  @Uint32()
+  external int maxWriteVerAudit;
+  @Uint32()
+  external int minReadVerVault;
+  @Uint32()
+  external int featureFlags;
+  @Array(32)
+  external Array<Uint8> engineVersion;
+}
+
+typedef AbiInfoC = Int32 Function(Pointer<VsAbiInfo>);
+typedef AbiInfoDart = int Function(Pointer<VsAbiInfo>);
+typedef EventCallbackC = Void Function(Pointer<Void>, Pointer<Void>);
+typedef SubscribeC = Int32 Function(
+    Pointer<NativeFunction<EventCallbackC>>, Pointer<Void>, Pointer<Uint32>);
+typedef SubscribeDart = int Function(
+    Pointer<NativeFunction<EventCallbackC>>, Pointer<Void>, Pointer<Uint32>);
+typedef UnsubscribeC = Int32 Function(Uint32);
+typedef UnsubscribeDart = int Function(int);
+typedef PollEventsC = Int32 Function(Pointer<Pointer<Utf8>>);
+typedef PollEventsDart = int Function(Pointer<Pointer<Utf8>>);
+typedef TaskListC = Int32 Function(Pointer<Pointer<Utf8>>);
+typedef TaskListDart = int Function(Pointer<Pointer<Utf8>>);
+typedef TaskStatusC = Int32 Function(Uint32, Pointer<Pointer<Utf8>>);
+typedef TaskStatusDart = int Function(int, Pointer<Pointer<Utf8>>);
+typedef TaskCancelC = Int32 Function(Uint32);
+typedef TaskCancelDart = int Function(int);
+typedef TaskSpawnC = Int32 Function(Pointer<Uint32>);
+typedef TaskSpawnDart = int Function(Pointer<Uint32>);
+typedef SessionReadonlyC = Int32 Function(Pointer<Void>, Pointer<Int32>);
+typedef SessionReadonlyDart = int Function(Pointer<Void>, Pointer<Int32>);
+typedef ThumbnailC = Int32 Function(
+    Pointer<Void>, Uint64, Pointer<Pointer<Uint8>>, Pointer<Uint64>);
+typedef ThumbnailDart = int Function(
+    Pointer<Void>, int, Pointer<Pointer<Uint8>>, Pointer<Uint64>);
+late AbiInfoDart _abiInfo;
+late SubscribeDart _subscribe;
+late UnsubscribeDart _unsubscribe;
+late PollEventsDart _pollEvents;
+late TaskListDart _taskList;
+late TaskStatusDart _taskStatus;
+late TaskCancelDart _taskCancel;
+late TaskSpawnDart _taskSpawn;
+late SessionReadonlyDart _sessionReadonly;
+late ThumbnailDart _vaultThumbnail;
+
 /// 最小 PNG 生成器（8 位 RGB，无过滤）：隐写往返断言用，避免引入图像依赖。
 Uint8List makePng(int w, int h) {
   final raw = <int>[];
@@ -249,10 +312,77 @@ UnlockResult runUnlock(Runner fn, String path, String pw) {
 }
 
 int fails = 0;
+int total = 0;
 
 void check(bool cond, String label) {
+  total++;
   print('${cond ? "PASS" : "FAIL"}  $label');
   if (!cond) fails++;
+}
+
+// ===== P6 事件流辅助：拉取并清空全局环形缓冲，累积帧供 seq 单调性检查 =====
+final List<Map<String, dynamic>> allFrames = [];
+
+List<Map<String, dynamic>> pollDrain() {
+  final out = calloc<Pointer<Utf8>>();
+  try {
+    if (_pollEvents(out) != 0) return const [];
+    if (out.value.address == 0) return const [];
+    final raw = out.value.toDartString();
+    _free(out.value);
+    final list = jsonDecode(raw) as List<dynamic>;
+    final frames = list.cast<Map<String, dynamic>>();
+    allFrames.addAll(frames);
+    return frames;
+  } finally {
+    calloc.free(out);
+  }
+}
+
+/// 轮询等待某类事件出现（引擎事件发布在工作线程，需留出投递时间）。
+/// 扫描游标越过已匹配的帧，保证 QUEUED → PROGRESS → DONE 顺序各匹配一次。
+int evCursor = 0;
+
+Map<String, dynamic>? waitForEvent(int type,
+    {Duration timeout = const Duration(seconds: 3)}) {
+  final deadline = DateTime.now().add(timeout);
+  while (true) {
+    while (evCursor < allFrames.length) {
+      final f = allFrames[evCursor++];
+      if (f['type'] == type) return f;
+    }
+    if (DateTime.now().isAfter(deadline)) return null;
+    pollDrain();
+    sleep(const Duration(milliseconds: 20));
+  }
+}
+
+/// 单任务状态 JSON；未知 id（返回 7 / 空指针）→ null。
+Map<String, dynamic>? taskStatusOf(int id) {
+  final out = calloc<Pointer<Utf8>>();
+  try {
+    if (_taskStatus(id, out) != 0) return null;
+    if (out.value.address == 0) return null;
+    final raw = out.value.toDartString();
+    _free(out.value);
+    return jsonDecode(raw) as Map<String, dynamic>;
+  } finally {
+    calloc.free(out);
+  }
+}
+
+/// 拉取 JSON 字符串导出（task_list / poll_events 复用）。
+String? takeOutJson(int Function(Pointer<Pointer<Utf8>>) fn) {
+  final out = calloc<Pointer<Utf8>>();
+  try {
+    if (fn(out) != 0) return null;
+    if (out.value.address == 0) return null;
+    final raw = out.value.toDartString();
+    _free(out.value);
+    return raw;
+  } finally {
+    calloc.free(out);
+  }
 }
 
 void main(List<String> args) {
@@ -356,11 +486,72 @@ void main(List<String> args) {
       'vault_core_p2p_remember_addr');
   _p2pDestroyArm = lib.lookupFunction<P2pDestroyArmC, P2pDestroyArmDart>(
       'vault_core_p2p_destroy_arm');
+  _abiInfo = lib.lookupFunction<AbiInfoC, AbiInfoDart>('vault_core_abi_info');
+  _subscribe =
+      lib.lookupFunction<SubscribeC, SubscribeDart>('vault_core_subscribe');
+  _unsubscribe = lib
+      .lookupFunction<UnsubscribeC, UnsubscribeDart>('vault_core_unsubscribe');
+  _pollEvents = lib
+      .lookupFunction<PollEventsC, PollEventsDart>('vault_core_poll_events');
+  _taskList =
+      lib.lookupFunction<TaskListC, TaskListDart>('vault_core_task_list');
+  _taskStatus = lib
+      .lookupFunction<TaskStatusC, TaskStatusDart>('vault_core_task_status');
+  _taskCancel =
+      lib.lookupFunction<TaskCancelC, TaskCancelDart>('vault_core_task_cancel');
+  _taskSpawn = lib
+      .lookupFunction<TaskSpawnC, TaskSpawnDart>('vault_core_task_spawn_selfcheck');
+  _sessionReadonly = lib.lookupFunction<SessionReadonlyC, SessionReadonlyDart>(
+      'vault_core_session_readonly');
+  _vaultThumbnail = lib
+      .lookupFunction<ThumbnailC, ThumbnailDart>('vault_core_vault_thumbnail');
 
   check(_hello() == 0, 'hello 自检');
   final v = _version();
   print('INFO  version=${str(v)}');
   _free(v);
+
+  // ===== P6-6 ABI 握手（必须先于一切业务调用）=====
+  final abi = calloc<VsAbiInfo>();
+  check(_abiInfo(abi) == 0, 'P6 abi_info 返回 OK');
+  check(abi.ref.abiVersion == 2, 'P6 abi_version == 2');
+  check(abi.ref.capabilityBits & (1 << 0) != 0, 'P6 能力位 bit0 CAP_EVENTS 置位');
+  check(abi.ref.capabilityBits & (1 << 1) != 0, 'P6 能力位 bit1 CAP_TASKS 置位');
+  check(abi.ref.capabilityBits & (1 << 14) != 0, 'P6 能力位 bit14 CAP_BIO 置位');
+  check(
+      abi.ref.capabilityBits & (1 << 15) != 0, 'P6 能力位 bit15 CAP_SECURE_STORE 置位');
+  check(abi.ref.capabilityBits & (1 << 18) == 0, 'P6 能力位 bit18 THUMBNAIL 未置位');
+  check(abi.ref.maxWriteVerIndex == 3, 'P6 max_write_ver_index == 3');
+  check(abi.ref.maxWriteVerAudit == 1, 'P6 max_write_ver_audit == 1');
+  check(abi.ref.maxWriteVerVault == 2, 'P6 max_write_ver_vault == 2');
+  final engVer = <int>[];
+  for (var i = 0; i < 32; i++) {
+    final b = abi.ref.engineVersion[i];
+    if (b == 0) break;
+    engVer.add(b);
+  }
+  check(engVer.isNotEmpty, 'P6 engine_version 非空（${latin1.decode(engVer)}）');
+  check(abi.ref.structSize == sizeOf<VsAbiInfo>(),
+      'P6 struct_size 与 Dart 侧 sizeof 一致（${abi.ref.structSize}）');
+  check(_abiInfo(Pointer<VsAbiInfo>.fromAddress(0)) == 7, 'P6 abi_info(null) 返回 7');
+  calloc.free(abi);
+
+  // 事件订阅（须在解锁前；引擎侧订阅 id 从 0 起分配，仅断言调用成功）
+  final evCb =
+      NativeCallable<EventCallbackC>.listener((Pointer<Void> e, Pointer<Void> u) {});
+  final subOut = calloc<Uint32>();
+  check(
+      _subscribe(evCb.nativeFunction, Pointer<Void>.fromAddress(0), subOut) == 0,
+      'P6 解锁前事件订阅成功');
+  final subId = subOut.value;
+  print('INFO  P6 subId=$subId');
+  check(_pollEvents(Pointer<Pointer<Utf8>>.fromAddress(0)) == 7,
+      'P6 poll_events(null) 返回 7');
+  check(_taskSpawn(Pointer<Uint32>.fromAddress(0)) == 7, 'P6 task_spawn(null) 返回 7');
+  final roOut = calloc<Int32>();
+  check(_sessionReadonly(Pointer<Void>.fromAddress(0), roOut) == 7,
+      'P6 session_readonly(null) 返回 7');
+  calloc.free(roOut);
 
   final dir = Directory.systemTemp.createTempSync('vaultsync_p1_');
   final vault = '${dir.path}${Platform.pathSeparator}primary.vsvb';
@@ -439,6 +630,11 @@ void main(List<String> args) {
   check(
       _vaultImport(h2, sbin, 0, idOut) == 0 && idOut.value > txtId, '导入二进制文件');
   final binId = idOut.value;
+
+  // P6 事件流：解锁产生 ENGINE_READY(1)，导入产生 VAULT_CHANGED(5)
+  final evs = pollDrain();
+  check(evs.any((e) => e['type'] == 1), 'P6 事件流含 ENGINE_READY(1)');
+  check(evs.any((e) => e['type'] == 5), 'P6 导入产生 VAULT_CHANGED(5)');
 
   // 列表：根目录应有 2 个文件
   final lst = _vaultList(h2, 0);
@@ -535,6 +731,12 @@ void main(List<String> args) {
   check(_vaultExport(h2, binId, ep) != 0, '擦除后导出被拒');
 
   _lock(h2);
+  // P6 事件流：lock 产生 LOCKED(4)；退订成功、重复退订被拒
+  check(pollDrain().any((e) => e['type'] == 4), 'P6 lock 产生 LOCKED(4)');
+  check(_unsubscribe(subId) == 0, 'P6 退订事件流返回 0');
+  check(_unsubscribe(subId) != 0, 'P6 重复退订被拒（非 0）');
+  evCb.close();
+  calloc.free(subOut);
   calloc.free(idOut);
   calloc.free(mkOut);
   calloc.free(stxt);
@@ -836,8 +1038,10 @@ void main(List<String> args) {
       'P5 MK 轮换后新会话可写新审计链（旧链 $auditBefore 条已改名保留、随轮换不可解）');
   final rotated = Directory('${p5dir.path}${Platform.pathSeparator}p5.data')
       .listSync()
-      .whereType<File>()
-      .any((f) => f.path.contains('audit.enc.rotated-'));
+      // P6-4 起审计有单文件（audit.enc）与分段目录（audit/）两种载体，
+      // 归档件相应为文件或同名前缀目录，语义相同：旧链保留可取证
+      .where((f) => f.path.contains('audit.enc.rotated-'))
+      .isNotEmpty;
   check(rotated, 'P5 旧审计链文件已改名保留（未删除，可由持有旧 MK 的备份取证）');
   _lock(hAfter);
 
@@ -870,6 +1074,121 @@ void main(List<String> args) {
   calloc.free(vp5);
   p5dir.deleteSync(recursive: true);
 
+  // ===== P6 任务框架：spawn / 进度 / 完成 / 协作式取消 =====
+  final tl1 = takeOutJson(_taskList);
+  check(tl1 != null && tl1.contains('"count"'), 'P6 task_list 返回 JSON');
+  final idOut2 = calloc<Uint32>();
+  check(_taskSpawn(idOut2) == 0 && idOut2.value > 0, 'P6 启动自检任务（id>0）');
+  final task1 = idOut2.value;
+  var st1 = taskStatusOf(task1);
+  final deadline1 = DateTime.now().add(const Duration(seconds: 5));
+  while (st1 != null && st1['state'] != 'done' && DateTime.now().isBefore(deadline1)) {
+    sleep(const Duration(milliseconds: 50));
+    st1 = taskStatusOf(task1);
+  }
+  check(st1 != null && st1['state'] == 'done', 'P6 自检任务轮询至 done');
+  check(waitForEvent(6) != null, 'P6 事件流含 TASK_QUEUED(6)');
+  check(waitForEvent(7) != null, 'P6 事件流含 TASK_PROGRESS(7)');
+  check(waitForEvent(8) != null, 'P6 事件流含 TASK_DONE(8)');
+  check(_taskCancel(0xDEADBEEF) == 7, 'P6 取消未知任务返回 7');
+  check(_taskCancel(task1) == 0, 'P6 终态任务再取消幂等返回 0');
+  final stOut = calloc<Pointer<Utf8>>();
+  check(_taskStatus(0xDEADBEEF, stOut) == 7, 'P6 task_status 未知 id 返回 7');
+  calloc.free(stOut);
+  check(_taskSpawn(idOut2) == 0 && idOut2.value > task1, 'P6 启动第二个自检任务');
+  final task2 = idOut2.value;
+  check(_taskCancel(task2) == 0, 'P6 运行中任务取消请求返回 0');
+  check(waitForEvent(10) != null, 'P6 事件流含 TASK_CANCELLED(10)');
+  calloc.free(idOut2);
+
+  // seq 全程单调递增（环形缓冲按全局 seq 排队，poll 顺序即发布顺序）
+  var seqOk = true;
+  var lastSeq = -1;
+  for (final f in allFrames) {
+    final sq = (f['seq'] as num).toInt();
+    if (sq <= lastSeq) seqOk = false;
+    lastSeq = sq;
+  }
+  check(seqOk && allFrames.length >= 5, 'P6 事件 seq 单调递增（共 ${allFrames.length} 帧）');
+
+  // ===== P6 租约只读（同进程两次解锁同一保险箱 = 两会话竞争租约）=====
+  final p6dir = Directory.systemTemp.createTempSync('vsync_p6_');
+  final leaseVault = '${p6dir.path}${Platform.pathSeparator}lease.vsvb';
+  final vlp = n(leaseVault);
+  check(_create(vlp, pw, 0) == 0, 'P6 创建租约测试保险箱');
+  final sLA = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), leaseVault, 'pw-1234');
+  check(sLA.status == 0 && sLA.handle != 0, 'P6 解锁会话 A');
+  final hLA = Pointer<Void>.fromAddress(sLA.handle);
+  final roA = calloc<Int32>();
+  _sessionReadonly(hLA, roA);
+  check(roA.value == 0, 'P6 会话 A（先解锁者）可写');
+  final sLB = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), leaseVault, 'pw-1234');
+  check(sLB.status == 0 && sLB.handle != 0, 'P6 同一保险箱第二次解锁得会话 B');
+  final hLB = Pointer<Void>.fromAddress(sLB.handle);
+  _sessionReadonly(hLB, roA);
+  check(roA.value == 1, 'P6 会话 B（后解锁者）只读');
+  final mkL = calloc<Uint64>();
+  check(_vaultMkdir(hLB, 0, n('ro-folder'), mkL) == 9, 'P6 只读会话 vaultMkdir 返回 9（租约被占）');
+  final lstL = _vaultList(hLB, 0);
+  check(lstL.address != 0, 'P6 只读会话 vaultList 仍成功（只读可看）');
+  if (lstL.address != 0) _free(lstL);
+  _lock(hLA);
+  _sessionReadonly(hLB, roA);
+  check(roA.value == 1, 'P6 会话 A lock 后 B 仍只读（租约在会话创建时判定）');
+  _lock(hLB);
+  final sLC = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), leaseVault, 'pw-1234');
+  check(sLC.status == 0 && sLC.handle != 0, 'P6 全部会话锁后重新解锁得会话 C');
+  final hLC = Pointer<Void>.fromAddress(sLC.handle);
+  _sessionReadonly(hLC, roA);
+  check(roA.value == 0, 'P6 无人持锁时会话 C 可写');
+  calloc.free(roA);
+  calloc.free(mkL);
+
+  // ===== P6 崩溃恢复路径（轻量）：索引文件丢失后重新解锁仍可用 =====
+  final recovVault = '${p6dir.path}${Platform.pathSeparator}recov.vsvb';
+  final rvp = n(recovVault);
+  check(_create(rvp, pw, 0) == 0, 'P6 创建恢复测试保险箱');
+  final sR1 = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), recovVault, 'pw-1234');
+  check(sR1.status == 0 && sR1.handle != 0, 'P6 恢复测试首次解锁');
+  final hR1 = Pointer<Void>.fromAddress(sR1.handle);
+  final recSrc = '${p6dir.path}${Platform.pathSeparator}rec.txt';
+  File(recSrc).writeAsStringSync('recovery payload');
+  check(_vaultImport(hR1, n(recSrc), 0, mkL) == 0, 'P6 恢复测试导入文件');
+  _lock(hR1);
+  final dataDir = Directory(
+      '${p6dir.path}${Platform.pathSeparator}recov.data');
+  check(dataDir.existsSync(), 'P6 数据目录存在');
+  final manifest = File('${dataDir.path}${Platform.pathSeparator}manifest.index.vssg');
+  if (manifest.existsSync()) manifest.deleteSync();
+  final sR2 = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), recovVault, 'pw-1234');
+  check(sR2.status == 0 && sR2.handle != 0, 'P6 删 manifest.index.vssg 后重新解锁成功');
+  final hR2 = Pointer<Void>.fromAddress(sR2.handle);
+  final lstR = _vaultList(hR2, 0);
+  check(lstR.address != 0 && lstR.toDartString().contains('rec.txt'),
+      'P6 索引重建后文件仍在列表');
+  if (lstR.address != 0) _free(lstR);
+  _lock(hR2);
+  final journal = File('${dataDir.path}${Platform.pathSeparator}journal.index.vssg');
+  if (journal.existsSync()) journal.deleteSync();
+  final sR3 = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), recovVault, 'pw-1234');
+  check(sR3.status == 0 && sR3.handle != 0, 'P6 删 journal.index.vssg 后重新解锁仍成功');
+  final hR3 = Pointer<Void>.fromAddress(sR3.handle);
+  // hR3 在末尾统一 lock（会话句柄 lock 后即失效，严禁二次 lock）
+
+  // ===== P6 能力探针：缩略图（CAP_THUMBNAIL 未置位 → 13）=====
+  final thumbPng = calloc<Pointer<Uint8>>();
+  final thumbLen = calloc<Uint64>();
+  check(_vaultThumbnail(hLC, 1, thumbPng, thumbLen) == 13, 'P6 缩略图能力探针返回 13');
+  calloc.free(thumbPng);
+  calloc.free(thumbLen);
+
+  _lock(hLC);
+  _lock(hR3);
+  calloc.free(rvp);
+  calloc.free(vlp);
+  p6dir.deleteSync(recursive: true);
+
+
   _lock(hA);
   _lock(hB);
   calloc.free(vpA2);
@@ -884,6 +1203,6 @@ void main(List<String> args) {
   calloc.free(vp);
   calloc.free(vp2);
   calloc.free(cw);
-  print('DONE  failures=$fails');
+  print('DONE  assertions=$total failures=$fails');
   exitCode = fails == 0 ? 0 : 1;
 }
