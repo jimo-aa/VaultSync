@@ -132,14 +132,22 @@ pub struct Journal {
 }
 
 impl Journal {
-    pub fn path(data_dir: &Path) -> PathBuf {
-        data_dir.join("journal.vssg")
+    /// journal 按命名空间隔离（`journal.<ns>.vssg`）。偏差（记 LOG）：设计 §4.4
+    /// 是单文件 `<data_dir>/journal.vssg`；实现中 index / audit 两个
+    /// VaultStore 实例共存于同一 data_dir，共用单文件会互相覆盖预告/完成对，
+    /// 故按命名空间分文件，条目格式与恢复语义不变。
+    pub fn path(data_dir: &Path, ns: crate::Namespace) -> PathBuf {
+        data_dir.join(format!("journal.{}.vssg", ns.as_str()))
     }
 
     /// 打开 / 解码现有 journal。返回 None 表示文件不存在（全新库）。
     /// 注意：此处只解码不执行恢复；恢复动作由 `recover` 在持有租约后执行。
-    pub fn load(data_dir: &Path, master_key: &[u8; 32]) -> Result<Option<Journal>, StoreError> {
-        let path = Self::path(data_dir);
+    pub fn load(
+        data_dir: &Path,
+        ns: crate::Namespace,
+        master_key: &[u8; 32],
+    ) -> Result<Option<Journal>, StoreError> {
+        let path = Self::path(data_dir, ns);
         if !path.exists() {
             return Ok(None);
         }
@@ -321,9 +329,13 @@ impl Journal {
     }
 
     /// 空库建立空 journal（首写时创建文件）。
-    pub fn create_empty(data_dir: &Path, master_key: &[u8; 32]) -> Result<Journal, StoreError> {
+    pub fn create_empty(
+        data_dir: &Path,
+        ns: crate::Namespace,
+        master_key: &[u8; 32],
+    ) -> Result<Journal, StoreError> {
         let j = Journal {
-            path: Self::path(data_dir),
+            path: Self::path(data_dir, ns),
             entries: Vec::new(),
             next_commit_seq: 1,
         };
@@ -381,7 +393,7 @@ mod tests {
     fn rollback_on_torn_tail() {
         let dir = tmpdir();
         let key = mk();
-        let mut j = Journal::create_empty(dir.path(), &key).unwrap();
+        let mut j = Journal::create_empty(dir.path(), Namespace::State, &key).unwrap();
         j.append(
             JournalEntry {
                 kind: JournalEntryKind::CommitIntent,
@@ -403,18 +415,26 @@ mod tests {
         )
         .unwrap();
         // 模拟崩溃撕裂：截掉最后 N 字节（尾条 CRC 必然不过）
-        let raw = std::fs::read(Journal::path(dir.path())).unwrap();
-        std::fs::write(Journal::path(dir.path()), &raw[..raw.len() - 10]).unwrap();
+        let raw = std::fs::read(Journal::path(dir.path(), Namespace::State)).unwrap();
+        std::fs::write(
+            Journal::path(dir.path(), Namespace::State),
+            &raw[..raw.len() - 10],
+        )
+        .unwrap();
 
         // 解码端把撕裂视为 Corrupt——这正是规则 1 的回滚信号：
         // store 层据此把 journal 截断到前一条边界。这里直接验证：
         // 撕裂的段不可整体读出，而截断重写后恢复干净。
         assert!(matches!(
-            segment::read_segment(&Journal::path(dir.path()), Namespace::State, &key),
+            segment::read_segment(
+                &Journal::path(dir.path(), Namespace::State),
+                Namespace::State,
+                &key
+            ),
             Err(StoreError::Corrupt(_)) | Err(StoreError::NeedsRecovery(_))
         ));
         // 重建（模拟恢复时丢弃撕裂段，回滚到上一致状态）
-        let j2 = Journal::create_empty(dir.path(), &key).unwrap();
+        let j2 = Journal::create_empty(dir.path(), Namespace::State, &key).unwrap();
         assert!(j2.is_empty());
     }
 
@@ -425,7 +445,7 @@ mod tests {
         let dir = tmpdir();
         let key = mk();
         seg_file(dir.path(), 100);
-        let mut j = Journal::create_empty(dir.path(), &key).unwrap();
+        let mut j = Journal::create_empty(dir.path(), Namespace::State, &key).unwrap();
         j.append(
             JournalEntry {
                 kind: JournalEntryKind::CommitIntent,
@@ -454,7 +474,7 @@ mod tests {
     fn rollback_when_segment_missing() {
         let dir = tmpdir();
         let key = mk();
-        let mut j = Journal::create_empty(dir.path(), &key).unwrap();
+        let mut j = Journal::create_empty(dir.path(), Namespace::State, &key).unwrap();
         j.append(
             JournalEntry {
                 kind: JournalEntryKind::CommitIntent,
@@ -469,7 +489,7 @@ mod tests {
         assert_eq!(out.rolled_back, vec![200]);
         // 预告被丢弃后 journal 清空为文件删除
         assert!(j2.is_none());
-        assert!(!Journal::path(dir.path()).exists());
+        assert!(!Journal::path(dir.path(), Namespace::State).exists());
     }
 
     /// P6-5 证据：journal::manifest_is_cache_not_truth
@@ -504,7 +524,7 @@ mod tests {
     fn maintenance_active_enters_maintenance() {
         let dir = tmpdir();
         let key = mk();
-        let mut j = Journal::create_empty(dir.path(), &key).unwrap();
+        let mut j = Journal::create_empty(dir.path(), Namespace::State, &key).unwrap();
         j.append(
             JournalEntry {
                 kind: JournalEntryKind::Maintenance,
@@ -524,7 +544,9 @@ mod tests {
             .iter()
             .any(|e| e.kind == JournalEntryKind::LeaseTakeover));
         // rotation_state_idle = true → 不进维护态
-        let j = Journal::load(dir.path(), &key).unwrap().unwrap();
+        let j = Journal::load(dir.path(), Namespace::State, &key)
+            .unwrap()
+            .unwrap();
         let (_, out) = j.recover(&key, &|_| false, true).unwrap();
         assert!(!out.entered_maintenance);
     }

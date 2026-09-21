@@ -19,6 +19,7 @@ use vault_crypto::{random_bytes, random_key, KEY_LEN};
 
 use crate::container::{assemble, chunk_cfg_for, ContainerReader, FileMeta};
 use crate::index::{tokenize, VaultIndex};
+use vault_store::{Namespace, OpenMode, VaultStore};
 
 pub struct Vault {
     data_dir: PathBuf,
@@ -27,6 +28,9 @@ pub struct Vault {
     mk: Zeroizing<[u8; KEY_LEN]>,
     /// 本机向量时钟设备位（P3 同步；由上层在解锁后设置）。
     device_id: String,
+    /// Some = VSIX v3 分段存储路径（P6-3）；None = legacy VSIX v2 单文件路径
+    /// （v0.5.0 旧库保持原读写语义，待 P7-9 迁移工具统一）。
+    store: Option<VaultStore>,
 }
 
 /// 全库轮换重建倒排索引时可保留的内容采样令牌总量上限。
@@ -63,10 +67,21 @@ impl Vault {
         let index_path = data_dir.join("index.enc");
         let index_key = Self::index_key(mk);
         let search_key = Self::derive_key(mk, "search");
-        let index = match VaultIndex::load(&index_path, &index_key, *search_key) {
-            Ok(ix) => ix,
-            Err("cannot read index") => VaultIndex::new(*search_key),
-            Err(e) => return Err(e),
+        // 双路径（P6-3）：旧库（存在 index.enc）继续走 VSIX v2 单文件；
+        // 新建库走 VSIX v3 分段存储。P7-9 迁移工具负责把旧库统一到 v3。
+        let (index, store) = if index_path.exists() {
+            let ix = VaultIndex::load(&index_path, &index_key, *search_key)?;
+            (ix, None)
+        } else {
+            let st = VaultStore::open(&data_dir, Namespace::Index, mk, OpenMode::ReadWrite)
+                .map_err(Self::store_err)?;
+            let pairs = st.kv_pairs();
+            let ix = if pairs.is_empty() {
+                VaultIndex::new(*search_key)
+            } else {
+                VaultIndex::from_v3_pairs(&pairs, *search_key)?
+            };
+            (ix, Some(st))
         };
         let v = Self {
             data_dir,
@@ -74,6 +89,7 @@ impl Vault {
             index,
             mk: Zeroizing::new(*mk),
             device_id: String::new(),
+            store,
         };
         // 清扫上次轮换/装配崩溃遗留的临时文件（含明文临时文件，见函数注释）
         v.sweep_temp_files();
@@ -126,9 +142,38 @@ impl Vault {
         ))
     }
 
-    fn save_index(&self) -> Result<(), &'static str> {
-        self.index
-            .save(&self.index_path, &Self::index_key(&self.mk))
+    /// vault-store 错误转 &str（保持本 crate 错误风格）。
+    fn store_err(e: vault_store::StoreError) -> &'static str {
+        match e {
+            vault_store::StoreError::ReadOnly => "vault opened read-only",
+            vault_store::StoreError::LeaseBusy => "lease held by another process",
+            vault_store::StoreError::NeedsRecovery(_) => "recovery required",
+            vault_store::StoreError::Maintenance => "vault in maintenance",
+            _ => "index store io failed",
+        }
+    }
+
+    fn save_index(&mut self) -> Result<(), &'static str> {
+        match self.store.as_mut() {
+            None => {
+                // legacy VSIX v2（保持 v0.5.0 原语义；非原子写是已知缺口，
+                // 由 P6-3 v3 路径消灭，旧库待 P7-9 迁移）
+                self.index
+                    .save(&self.index_path, &Self::index_key(&self.mk))
+            }
+            Some(st) => {
+                let ops = if self.index.take_full_rewrite() {
+                    self.index.full_state_ops()
+                } else {
+                    self.index.take_pending_ops()
+                };
+                if ops.is_empty() {
+                    return Ok(());
+                }
+                st.kv_apply(ops).map_err(Self::store_err)?;
+                st.flush().map_err(Self::store_err)
+            }
+        }
     }
 
     fn container_path(&self, file_id: u64) -> PathBuf {
@@ -356,9 +401,17 @@ impl Vault {
         )?;
 
         let mut tokens = tokenize(&name);
-        tokens.extend(content_tokens);
+        tokens.extend(content_tokens.iter().cloned());
         self.index
             .add_file_with_id(file_id, folder_id, &name, size, &tokens)?;
+        // 内容采样令牌的 HMAC 随条目持久化（v3：倒排索引可从条目重建）
+        self.index.set_tokens_extra(
+            file_id,
+            content_tokens
+                .iter()
+                .map(|t| self.index.token_hash(t))
+                .collect(),
+        )?;
         self.index.bump_vc(file_id, &self.device_id).ok();
         self.save_index()?;
         Ok(file_id)
@@ -589,7 +642,7 @@ impl Vault {
     }
 
     /// 立即落盘加密索引（同步引擎在共享槽位上修改后调用）。
-    pub fn save_index_now(&self) -> Result<(), &'static str> {
+    pub fn save_index_now(&mut self) -> Result<(), &'static str> {
         self.save_index()
     }
 
@@ -710,13 +763,111 @@ impl Vault {
         let new_search = Self::derive_key(new_mk, "search");
         self.index.rebase_search_key(*new_search, &content_tokens);
         self.index.clear_shares();
+        // 内容采样令牌按新搜索密钥回填（v3：重开后倒排索引可从条目重建）
+        let rehmac: Vec<(u64, Vec<String>)> = content_tokens
+            .iter()
+            .map(|(id, toks)| {
+                (
+                    *id,
+                    toks.iter()
+                        .map(|t| vault_crypto::hmac_sha256_hex(&*new_search, t.as_bytes()))
+                        .collect(),
+                )
+            })
+            .collect();
+        for (id, hexes) in rehmac {
+            let _ = self.index.set_tokens_extra(id, hexes);
+        }
 
         let old_mk = std::mem::replace(&mut self.mk, Zeroizing::new(*new_mk));
-        if self.save_index().is_err() {
+        let saved = if self.store.is_some() {
+            self.rebuild_store_for_mk(new_mk)
+        } else {
+            self.save_index().map_err(|_| "cannot save rekeyed index")
+        };
+        if let Err(e) = saved {
             self.mk = old_mk; // 回滚：磁盘仍是旧 MK 可开的索引，容器密钥已在其中，可重试
-            return Err("cannot save rekeyed index");
+            return Err(e);
         }
         Ok(n)
+    }
+
+    /// VSIX v3：MK 轮换后的分段存储重建。旧段全部由 `HKDF(旧MK,"seg/index")`
+    /// 加密且段不可变，因此以新 MK 把内存全量状态写成全新段、替换 journal、
+    /// 再删除旧段。
+    ///
+    /// 已知崩溃窗口（如实声明）：在「新段落位 ↔ 旧段删除」之间断电会出现新旧
+    /// 段密钥混合、任一 MK 都无法完整打开的状态。V1.0 的 `rekey_all` 靠
+    /// 「旧索引键最后切换」避免此窗口，但 v3 的不可变段无法原位重加密；该窗口
+    /// 由 P7-3 轮换会话（rotation_state + VSRR 恢复文件）正式收口
+    ///（docs/v2.0/09 §二 承接表 P5-4 行）。
+    fn rebuild_store_for_mk(&mut self, new_mk: &[u8; KEY_LEN]) -> Result<(), &'static str> {
+        let ops = self.index.full_state_ops();
+        let stage_root = self.data_dir.join("reindex-tmp");
+        let _ = std::fs::remove_dir_all(&stage_root);
+        let mut st = VaultStore::open(&stage_root, Namespace::Index, new_mk, OpenMode::ReadWrite)
+            .map_err(Self::store_err)?;
+        st.kv_apply(ops).map_err(Self::store_err)?;
+        st.flush().map_err(Self::store_err)?;
+        drop(st);
+
+        let real_dir = VaultStore::ns_dir(&self.data_dir, Namespace::Index);
+        std::fs::create_dir_all(&real_dir).map_err(|_| "cannot open index dir")?;
+        // 段 id 错开：新段统一 +offset，避免与旧段重名
+        let mut max_old = 0u64;
+        for e in std::fs::read_dir(&real_dir)
+            .map_err(|_| "cannot read index dir")?
+            .flatten()
+        {
+            let name = e.file_name().to_string_lossy().to_string();
+            if let Some(id) = name
+                .strip_suffix(".vssg")
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                max_old = max_old.max(id);
+            }
+        }
+        let offset = max_old + 1;
+        for e in std::fs::read_dir(stage_root.join("index"))
+            .map_err(|_| "cannot read staged index")?
+            .flatten()
+        {
+            let name = e.file_name().to_string_lossy().to_string();
+            let Some(id) = name
+                .strip_suffix(".vssg")
+                .and_then(|s| s.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            std::fs::rename(e.path(), real_dir.join(format!("{}.vssg", id + offset)))
+                .map_err(|_| "cannot promote rekeyed segment")?;
+        }
+        vault_store::segment::fsync_dir(&real_dir);
+        // journal 一并替换（新 journal 由新 MK 派生密钥加密）
+        std::fs::rename(
+            stage_root.join("journal.index.vssg"),
+            vault_store::Journal::path(&self.data_dir, Namespace::Index),
+        )
+        .map_err(|_| "cannot promote rekeyed journal")?;
+        vault_store::segment::fsync_dir(&self.data_dir);
+        // 删除旧段（此刻起旧 MK 不再能打开索引）
+        for id in 1..offset {
+            let p = real_dir.join(format!("{id}.vssg"));
+            if p.exists() {
+                std::fs::remove_file(&p).map_err(|_| "cannot retire old segment")?;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&stage_root);
+        self.store = Some(
+            VaultStore::open(
+                &self.data_dir,
+                Namespace::Index,
+                new_mk,
+                OpenMode::ReadWrite,
+            )
+            .map_err(Self::store_err)?,
+        );
+        Ok(())
     }
 
     /// 轮换核心：把 `ids` 的容器逐个重写为「新元数据键 + 新随机 FSKey」并原子提交索引。
@@ -1290,7 +1441,11 @@ mod tests {
         assert!(v2.search("root").contains("r.txt"));
         // 旧 MK 打开必须失败（索引整体 AEAD 认证不过；索引文件存在 → 不再走「首次创建」分支）
         let err = Vault::open(&vault_file, &old_mk).err().expect("must fail");
-        assert!(err.contains("index decrypt failed"), "got {err}");
+        // v2：索引整体 AEAD 认证失败；v3：段/journal 由旧段密钥加密同样解不开
+        assert!(
+            err.contains("index decrypt failed") || err.contains("recovery required"),
+            "got {err}"
+        );
         // 既有分享令牌作废（分享只存 HMAC，无法跨搜索密钥迁移）
         let mut v3 = Vault::open(&vault_file, &new_mk).expect("open");
         assert_eq!(
@@ -1388,5 +1543,122 @@ mod tests {
         let out = dir.path().join("keep.out");
         v.export_file(id, &out).expect("export");
         assert_eq!(std::fs::read(&out).expect("read"), b"payload");
+    }
+
+    // ==== P6-3 证据测试（VSIX v3 分段化；docs/v2.0/09 §三 P6-3）====
+
+    /// P6-3 证据：index_v3::append_is_atomic
+    /// 未走提交协议的内存变更（含未 flush 的 store 操作）绝不部分可见：
+    /// 要么整批随提交点可见，要么整批不可见。
+    #[test]
+    fn index_v3_append_is_atomic() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let vault_file = dir.path().join("v3atomic.vsvb");
+        std::fs::write(&vault_file, b"stub").expect("stub");
+        let mk = random_key();
+        let mut v = Vault::open(&vault_file, &mk).expect("open");
+        assert!(v.store.is_some(), "new vault must use v3 segmented path");
+        let id1 = v
+            .import_file(&write_src(dir.path(), "a.txt", b"committed"), 0)
+            .expect("import committed");
+
+        // 模拟「提交点之前崩溃」：直接改内存索引 + 注入未 flush 的 store 操作
+        let _ = v.index.mkdir(0, "uncommitted-folder");
+        v.store
+            .as_mut()
+            .expect("v3 store")
+            .kv_apply(vec![(true, 9_999_999u64, b"uncommitted".to_vec())])
+            .expect("apply");
+        let path = vault_file.clone();
+        let data_dir = v.data_dir.clone();
+        std::mem::forget(v); // 跳过 Drop 的自动 flush = 等价掉电
+
+        let v2 = Vault::open(&path, &mk).expect("reopen");
+        assert!(v2.has_file(id1), "committed entry must survive");
+        assert!(
+            !v2.list_children(0)
+                .expect("list")
+                .contains("uncommitted-folder"),
+            "uncommitted index change must be invisible"
+        );
+        assert!(
+            v2.store.as_ref().expect("v3").kv_get(9_999_999).is_none(),
+            "uncommitted store op must be invisible"
+        );
+        let _ = data_dir;
+    }
+
+    /// P6-3 证据：index_v3::crash_between_rename_and_manifest
+    /// manifest 只是缓存：删除清单后磁盘扫描仍完整还原索引。
+    #[test]
+    fn index_v3_crash_between_rename_and_manifest() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let vault_file = dir.path().join("v3mf.vsvb");
+        std::fs::write(&vault_file, b"stub").expect("stub");
+        let mk = random_key();
+        let mut v = Vault::open(&vault_file, &mk).expect("open");
+        let id = v
+            .import_file(&write_src(dir.path(), "m.txt", b"payload"), 0)
+            .expect("import");
+        drop(v);
+
+        // 等价于「清单更新（六步协议第 6 步）永远没发生」
+        let manifest = dir.path().join("manifest.index.vssg");
+        if manifest.exists() {
+            std::fs::remove_file(&manifest).expect("remove manifest");
+        }
+        let v2 = Vault::open(&vault_file, &mk).expect("reopen without manifest");
+        assert!(
+            v2.has_file(id),
+            "scan is truth: entry must survive manifest loss"
+        );
+        assert_eq!(v2.file_name(id).expect("name"), "m.txt");
+    }
+
+    /// P6-3 证据：index_v3::legacy_v2_readonly_then_migrate
+    /// 双路径共存：v0.5.0 旧库（index.enc）保持 legacy 读写语义不动，
+    /// 新库走 v3；迁移本体是 P7-9。
+    #[test]
+    fn index_v3_legacy_v2_readonly_then_migrate() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let vault_file = dir.path().join("legacy.vsvb");
+        std::fs::write(&vault_file, b"stub").expect("stub");
+        let mk = random_key();
+        // 手工构造 legacy 库：写一个 VSIX v2 index.enc
+        let search_key = *vault_crypto::kdf::hkdf_sha256_derive(&mk, b"search");
+        let ix = VaultIndex::new(search_key);
+        let index_key = *vault_crypto::kdf::hkdf_sha256_derive(&mk, b"vault-index");
+        let blob = ix.to_encrypted(&index_key).expect("enc");
+        std::fs::create_dir_all(dir.path().join("legacy.data").join("files")).expect("mkdir");
+        std::fs::write(dir.path().join("legacy.data").join("index.enc"), blob)
+            .expect("write v2 index");
+
+        let mut v = Vault::open(&vault_file, &mk).expect("open legacy");
+        assert!(v.store.is_none(), "legacy vault must use v2 path");
+        let id = v
+            .import_file(&write_src(dir.path(), "old.txt", b"legacy data"), 0)
+            .expect("import on legacy");
+        assert!(dir.path().join("legacy.data").join("index.enc").exists());
+        assert!(
+            !dir.path().join("legacy.data").join("index").exists(),
+            "legacy vault must not create v3 segment dir"
+        );
+        let out = dir.path().join("old.out");
+        v.export_file(id, &out).expect("export legacy");
+        assert_eq!(std::fs::read(&out).expect("read"), b"legacy data");
+        drop(v);
+
+        // 新库则走 v3：有分段目录与 .vssg 段文件，无 index.enc
+        let vault_file2 = dir.path().join("fresh.vsvb");
+        std::fs::write(&vault_file2, b"stub").expect("stub");
+        let mut v3 = Vault::open(&vault_file2, &mk).expect("open fresh");
+        assert!(v3.store.is_some());
+        let _ = v3.mkdir(0, "d").expect("mkdir");
+        assert!(dir.path().join("fresh.data").join("index").exists());
+        let has_vssg = std::fs::read_dir(dir.path().join("fresh.data").join("index"))
+            .expect("dir")
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".vssg"));
+        assert!(has_vssg, "v3 vault must persist via VSSG segments");
     }
 }

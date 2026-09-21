@@ -1052,6 +1052,7 @@ dependencies = [
  "tempfile",
  "vault-audit",
  "vault-crypto",
+ "vault-store",
  "zeroize",
 ]
 

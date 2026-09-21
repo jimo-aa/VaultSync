@@ -88,7 +88,7 @@ impl VaultStore {
         // journal 恢复（只读实例不写 journal：跳过恢复动作，视为无未完成提交）
         let mut maintenance = false;
         let mut recovery = RecoveryOutcome::default();
-        let journal = match Journal::load(data_dir, master_key)? {
+        let journal = match Journal::load(data_dir, ns, master_key)? {
             Some(j) if !readonly => {
                 let exists = |id: u64| {
                     let p = data_dir.join(ns.as_str()).join(format!("{id}.vssg"));
@@ -100,7 +100,7 @@ impl VaultStore {
                 j
             }
             // 全新库：RW 打开即建空 journal（六步提交协议依赖它）
-            None if !readonly => Some(Journal::create_empty(data_dir, master_key)?),
+            None if !readonly => Some(Journal::create_empty(data_dir, ns, master_key)?),
             other => other,
         };
 
@@ -217,6 +217,36 @@ impl VaultStore {
     /// KV 读取（LWW 由打开时的应用序保证）。
     pub fn kv_get(&self, key: u64) -> Option<&Vec<u8>> {
         self.kv.get(&key).map(|(_, v)| v)
+    }
+
+    /// KV 全量视图（key 升序）。VSIX v3 打开时由此重建条目空间。
+    pub fn kv_pairs(&self) -> Vec<(u64, Vec<u8>)> {
+        self.kv.iter().map(|(k, (_, v))| (*k, v.clone())).collect()
+    }
+
+    /// 批量 KV 应用（VSIX v3 的一次索引提交 = 一批条目 upsert/delete）。
+    /// 全部进 pending，由调用方 `flush` 经六步提交协议落段。
+    pub fn kv_apply(&mut self, ops: Vec<(bool, u64, Vec<u8>)>) -> Result<(), StoreError> {
+        self.ensure_writable()?;
+        for (is_put, key, value) in ops {
+            let seq = self.alloc_seq();
+            if is_put {
+                self.kv.insert(key, (seq, value.clone()));
+            } else {
+                self.kv.remove(&key);
+            }
+            self.pending.push(Record {
+                op: if is_put {
+                    RecordOp::Upsert
+                } else {
+                    RecordOp::Delete
+                },
+                key,
+                record_seq: seq,
+                value,
+            });
+        }
+        Ok(())
     }
 
     /// LOG 追加（O(1)：内存链更新 + pending，不重写历史）。
@@ -767,9 +797,11 @@ mod tests {
         // 手工把 journal 重写成「段 2 有预告无完成」——等价于崩溃发生在
         // rename（提交点）之后、journal 完成条目写盘之前。
         {
-            let j = Journal::load(dir.path(), &mk()).unwrap().unwrap();
+            let j = Journal::load(dir.path(), Namespace::Index, &mk())
+                .unwrap()
+                .unwrap();
             let entries: Vec<_> = j.entries().to_vec();
-            let mut j2 = Journal::create_empty(dir.path(), &mk()).unwrap();
+            let mut j2 = Journal::create_empty(dir.path(), Namespace::Index, &mk()).unwrap();
             let mut seq = 0u64;
             let mut trimmed = entries.clone();
             let last = trimmed.pop().unwrap();

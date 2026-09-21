@@ -25,6 +25,16 @@ use vault_crypto::KEY_LEN;
 pub const ROOT_FOLDER: u64 = 0;
 pub const INDEX_MAGIC: &[u8; 4] = b"VSIX";
 pub const INDEX_FORMAT_VER: u16 = 2;
+/// VSIX v3（分段存储，docs/v2.0/05-02 §3.2）：条目值布局
+/// `entry_ver u16=3 | reserved u16 | payload_len u32 | JSON payload`。
+pub const INDEX_FORMAT_VER_V3: u16 = 3;
+
+/// V3 键空间命名空间（key 高位段）。
+/// 设计定义 bit62=分享票据、bit63=索引元数据；bit61=文件夹（P6 实现扩展：
+/// 本实现的文件夹与文件共用 next_id 计数器，必须再加一段区分，偏差记 LOG）。
+pub const NS_FOLDER: u64 = 1 << 61;
+pub const NS_SHARE: u64 = 1 << 62;
+pub const NS_META: u64 = 1 << 63;
 
 const MAX_TOKENS_PER_FILE: usize = 10000;
 
@@ -57,6 +67,23 @@ pub struct FileEntry {
     /// 向量时钟（device_id → 计数）。
     #[serde(default)]
     pub vc: BTreeMap<String, u64>,
+    // ==== VSIX v3 新增字段（docs/v2.0/05-02 §3.2，serde default 保证 v2 可读）====
+    /// 条目版本号（原地编辑 / 冲突判定，P8-8 启用；P6 先占位）。
+    #[serde(default)]
+    pub rev: u64,
+    /// 该条目密文最后一次轮换时的轮换代标识（P7-3 启用；P6 先占位）。
+    #[serde(default)]
+    pub rotated_with: Option<String>,
+    /// 全文提取器版本（P7-9 启用；0 = 未提取）。
+    #[serde(default)]
+    pub extract_ver: u16,
+    /// 提取是否被 64 MiB 上限截断（P7-9 启用）。
+    #[serde(default)]
+    pub truncated: bool,
+    /// 内容采样令牌的 HMAC 列表（v3 起随条目持久化：倒排索引可从条目重建，
+    /// 不再整体落盘。名称 / 标签令牌仍实时派生，只有内容采样需要存）。
+    #[serde(default)]
+    pub tokens_extra: Vec<String>,
 }
 
 /// 删除墓碑：同步时向对端传播"该 id 已删除"及其因果历史。
@@ -94,9 +121,22 @@ struct IndexData {
     next_id: u64,
 }
 
+/// VSIX v3 变更日志条目：条目级 upsert/delete（key 含命名空间位）。
+enum PendingOp {
+    Upsert(u64, Vec<u8>),
+    Delete(u64),
+}
+
 pub struct VaultIndex {
     d: IndexData,
     search_key: [u8; KEY_LEN],
+    /// v3 变更日志：每次 mutation 追加条目级 upsert/delete，由保存方
+    /// `take_pending_ops` 取走经 vault-store 六步提交协议落段（P6-3）。
+    pending: Vec<PendingOp>,
+    /// 元数据条目（next_id / staging / tombstones）是否变脏。
+    meta_dirty: bool,
+    /// 整表重写标记（rebase_search_key 后倒排不可增量迁移）。
+    full_rewrite: bool,
 }
 
 fn now_ms() -> u64 {
@@ -180,7 +220,13 @@ impl VaultIndex {
                 fskey: None,
             },
         );
-        Self { d, search_key }
+        Self {
+            d,
+            search_key,
+            pending: Vec::new(),
+            meta_dirty: false,
+            full_rewrite: false,
+        }
     }
 
     fn hmac_token(&self, token: &str) -> String {
@@ -192,10 +238,52 @@ impl VaultIndex {
         self.hmac_token(token)
     }
 
+    fn push_file(&mut self, id: u64) {
+        if let Some(f) = self.d.files.get(&id) {
+            if let Ok(json) = serde_json::to_vec(f) {
+                self.pending.push(PendingOp::Upsert(id, json));
+            }
+        }
+    }
+
+    fn push_folder(&mut self, id: u64) {
+        if let Some(f) = self.d.folders.get(&id) {
+            if let Ok(json) = serde_json::to_vec(f) {
+                self.pending.push(PendingOp::Upsert(NS_FOLDER | id, json));
+            }
+        }
+    }
+
+    fn push_share(&mut self, id: u64) {
+        if let Some(sh) = self.d.shares.get(&id) {
+            if let Ok(json) = serde_json::to_vec(sh) {
+                self.pending.push(PendingOp::Upsert(NS_SHARE | id, json));
+            }
+        }
+    }
+
+    fn push_meta(&mut self) {
+        if !self.meta_dirty {
+            return;
+        }
+        self.meta_dirty = false;
+        let meta = MetaV3 {
+            schema: 3,
+            next_id: self.d.next_id,
+            staging: self.d.staging.clone(),
+            tombstones: self.d.tombstones.clone(),
+            tokenizer_ver: 2,
+        };
+        if let Ok(json) = serde_json::to_vec(&meta) {
+            self.pending.push(PendingOp::Upsert(NS_META, json));
+        }
+    }
+
     /// 预分配 id（FSKey 派生需要 file_id，先于加密分配）。
     pub fn alloc_id(&mut self) -> u64 {
         let id = self.d.next_id;
         self.d.next_id += 1;
+        self.meta_dirty = true; // next_id 变更随元数据条目落盘
         id
     }
 
@@ -229,9 +317,15 @@ impl VaultIndex {
                 modified_ms: now,
                 fskey: None,
                 vc: BTreeMap::new(),
+                rev: 0,
+                rotated_with: None,
+                extract_ver: 0,
+                truncated: false,
+                tokens_extra: Vec::new(),
             },
         );
         self.index_tokens(id, tokens);
+        self.push_file(id);
         Ok(())
     }
 
@@ -271,6 +365,7 @@ impl VaultIndex {
                 fskey: None,
             },
         );
+        self.push_folder(id);
         Ok(id)
     }
 
@@ -283,6 +378,7 @@ impl VaultIndex {
             return Err("invalid folder name");
         }
         f.name = name.to_string();
+        self.push_folder(id);
         Ok(())
     }
 
@@ -297,6 +393,7 @@ impl VaultIndex {
         // 名称令牌重索引
         self.deindex_name(id, &old_name);
         self.index_tokens(id, &tokenize(name));
+        self.push_file(id);
         Ok(())
     }
 
@@ -328,9 +425,15 @@ impl VaultIndex {
                 modified_ms: now,
                 fskey: None,
                 vc: BTreeMap::new(),
+                rev: 0,
+                rotated_with: None,
+                extract_ver: 0,
+                truncated: false,
+                tokens_extra: Vec::new(),
             },
         );
         self.index_tokens(id, tokens);
+        self.push_file(id);
         Ok(id)
     }
 
@@ -342,6 +445,8 @@ impl VaultIndex {
         for t in &e.tags {
             self.deindex_name(id, t);
         }
+        self.pending.push(PendingOp::Delete(id));
+        self.meta_dirty = true; // staging 变更
         Ok(e)
     }
 
@@ -376,6 +481,7 @@ impl VaultIndex {
                 removed.push(fid);
             }
             self.d.folders.remove(&cur);
+            self.pending.push(PendingOp::Delete(NS_FOLDER | cur));
         }
         Ok(removed)
     }
@@ -385,6 +491,7 @@ impl VaultIndex {
         if !self.d.files.contains_key(&id) {
             let f = self.d.folders.get_mut(&id).ok_or("entry not found")?;
             f.tags = tags;
+            self.push_folder(id);
             return Ok(());
         }
         let old = {
@@ -400,6 +507,7 @@ impl VaultIndex {
             .flat_map(|t| tokenize(t))
             .collect();
         self.index_tokens(id, &new_tokens);
+        self.push_file(id);
         Ok(())
     }
 
@@ -494,24 +602,29 @@ impl VaultIndex {
                 opens: 0,
             },
         );
+        self.push_share(id);
         Ok(id)
     }
 
     /// 校验并消耗一次打开机会；成功返回 file_id。
     pub fn consume_share(&mut self, share_id: u64, token: &str) -> Result<u64, &'static str> {
         let token_hash = self.hmac_token(token);
-        let sh = self.d.shares.get_mut(&share_id).ok_or("share not found")?;
-        if sh.opens >= sh.max_opens {
-            return Err("share exhausted");
-        }
-        if now_ms() > sh.expires_ms {
-            return Err("share expired");
-        }
-        if token_hash != sh.token_hash {
-            return Err("share token mismatch");
-        }
-        sh.opens += 1;
-        Ok(sh.file_id)
+        let file_id = {
+            let sh = self.d.shares.get_mut(&share_id).ok_or("share not found")?;
+            if sh.opens >= sh.max_opens {
+                return Err("share exhausted");
+            }
+            if now_ms() > sh.expires_ms {
+                return Err("share expired");
+            }
+            if token_hash != sh.token_hash {
+                return Err("share token mismatch");
+            }
+            sh.opens += 1;
+            sh.file_id
+        };
+        self.push_share(share_id);
+        Ok(file_id)
     }
 
     // ==== P3 同步支撑（docs/05-03）====
@@ -545,6 +658,7 @@ impl VaultIndex {
         self.d.staging.remove(&id);
         if id >= self.d.next_id {
             self.d.next_id = id + 1;
+            self.meta_dirty = true;
         }
         self.d.files.insert(
             id,
@@ -557,10 +671,16 @@ impl VaultIndex {
                 modified_ms,
                 fskey: Some(fskey_hex.to_string()),
                 vc,
+                rev: 0,
+                rotated_with: None,
+                extract_ver: 0,
+                truncated: false,
+                tokens_extra: Vec::new(),
             },
         );
         self.index_tokens(id, tokens);
         let _ = now;
+        self.push_file(id);
         Ok(())
     }
 
@@ -569,6 +689,7 @@ impl VaultIndex {
         let c = self.d.files.get_mut(&id).ok_or("file not found")?;
         let next = c.vc.get(device).copied().unwrap_or(0) + 1;
         c.vc.insert(device.to_string(), next);
+        self.push_file(id);
         Ok(())
     }
 
@@ -585,6 +706,7 @@ impl VaultIndex {
                 *slot = *cnt;
             }
         }
+        self.push_file(id);
         Ok(())
     }
 
@@ -642,6 +764,7 @@ impl VaultIndex {
             .get_mut(&folder_id)
             .ok_or("folder not found")?;
         f.fskey = Some(fskey_hex.to_string());
+        self.push_folder(folder_id);
         Ok(())
     }
 
@@ -649,6 +772,7 @@ impl VaultIndex {
     pub fn set_file_fskey(&mut self, file_id: u64, fskey_hex: &str) -> Result<(), &'static str> {
         let f = self.d.files.get_mut(&file_id).ok_or("file not found")?;
         f.fskey = Some(fskey_hex.to_string());
+        self.push_file(file_id);
         Ok(())
     }
 
@@ -676,6 +800,7 @@ impl VaultIndex {
     /// 标记「该文件的暂存容器（tag）是当前索引密钥的产物」。
     pub fn mark_staging(&mut self, file_id: u64, tag: &str) {
         self.d.staging.insert(file_id, tag.to_string());
+        self.meta_dirty = true;
     }
 
     pub fn staging_tag(&self, file_id: u64) -> Option<String> {
@@ -687,6 +812,7 @@ impl VaultIndex {
         for id in file_ids {
             self.d.staging.remove(id);
         }
+        self.meta_dirty = true;
     }
 
     /// 重挂搜索密钥并**重建**倒排索引（MK 全库轮换用）。
@@ -701,6 +827,7 @@ impl VaultIndex {
     ) {
         self.search_key = search_key;
         self.d.search.clear();
+        self.full_rewrite = true; // 倒排整体重建：下一次保存走整表快照
         let entries: Vec<(u64, String, Vec<String>)> = self
             .d
             .files
@@ -722,6 +849,9 @@ impl VaultIndex {
     /// 作废全部分享令牌（MK 轮换时调用）：分享只存令牌的 HMAC（明文不落盘），
     /// 搜索密钥更换后无法迁移，保留只会留下永远校验失败的死条目。
     pub fn clear_shares(&mut self) {
+        for id in self.d.shares.keys().copied().collect::<Vec<_>>() {
+            self.pending.push(PendingOp::Delete(NS_SHARE | id));
+        }
         self.d.shares.clear();
     }
 
@@ -741,6 +871,7 @@ impl VaultIndex {
                 vc,
             },
         );
+        self.meta_dirty = true;
     }
 
     /// 全量清单（同步用）：文件条目 + 墓碑，JSON 数组。
@@ -869,7 +1000,13 @@ impl VaultIndex {
             tags: Vec::new(),
             fskey: None,
         });
-        Ok(Self { d, search_key })
+        Ok(Self {
+            d,
+            search_key,
+            pending: Vec::new(),
+            meta_dirty: false,
+            full_rewrite: false,
+        })
     }
 
     pub fn save(&self, path: &Path, key: &[u8; KEY_LEN]) -> Result<(), &'static str> {
@@ -890,6 +1027,184 @@ impl VaultIndex {
 /// 为导入内容生成令牌集（名称 + 标签 + 文本内容采样由调用方拼合后调用）。
 pub fn content_tokens(text: &str) -> Vec<String> {
     tokenize(text)
+}
+
+// ==== VSIX v3 桥接（docs/v2.0/05-02 §3.2；P6-3）====
+
+/// v3 元数据条目（key = NS_META）。
+#[derive(Serialize, Deserialize)]
+struct MetaV3 {
+    schema: u16,
+    next_id: u64,
+    staging: BTreeMap<u64, String>,
+    tombstones: BTreeMap<u64, Tombstone>,
+    tokenizer_ver: u16,
+}
+
+/// v3 条目值布局：`entry_ver u16 | reserved u16 | payload_len u32 | JSON payload`。
+pub fn encode_v3_value(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + payload.len());
+    out.extend_from_slice(&3u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+/// 解码 v3 条目值；entry_ver 高于 3 → Err（向前拒绝）。
+pub fn decode_v3_value(value: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if value.len() < 8 {
+        return Err("v3 entry truncated");
+    }
+    let ver = u16::from_le_bytes(value[0..2].try_into().map_err(|_| "truncated")?);
+    if ver > 3 {
+        return Err("index entry_ver too new");
+    }
+    let len = u32::from_le_bytes(value[4..8].try_into().map_err(|_| "truncated")?) as usize;
+    if value.len() < 8 + len {
+        return Err("v3 entry payload truncated");
+    }
+    Ok(value[8..8 + len].to_vec())
+}
+
+impl VaultIndex {
+    /// 是否有未提交变更（v3 保存方判断是否需要落段）。
+    pub fn has_pending(&self) -> bool {
+        self.full_rewrite || self.meta_dirty || !self.pending.is_empty()
+    }
+
+    /// 是否要求整表重写（rebase_search_key 置位，消费后清除）。
+    pub fn take_full_rewrite(&mut self) -> bool {
+        std::mem::replace(&mut self.full_rewrite, false)
+    }
+
+    /// 取走变更日志，转换为 vault-store 的 (is_upsert, key, value) 操作序列。
+    pub fn take_pending_ops(&mut self) -> Vec<(bool, u64, Vec<u8>)> {
+        self.push_meta();
+        let ops: Vec<(bool, u64, Vec<u8>)> = self
+            .pending
+            .drain(..)
+            .map(|op| match op {
+                PendingOp::Upsert(k, v) => (true, k, encode_v3_value(&v)),
+                PendingOp::Delete(k) => (false, k, Vec::new()),
+            })
+            .collect();
+        ops
+    }
+
+    /// 当前全量状态 → 整表操作序列（v3 首建 / 整表重写用）。
+    /// 快照覆盖全部状态，任何未提交的增量日志一并作废。
+    pub fn full_state_ops(&mut self) -> Vec<(bool, u64, Vec<u8>)> {
+        self.pending.clear();
+        let mut ops: Vec<(bool, u64, Vec<u8>)> = Vec::new();
+        for (id, f) in &self.d.folders {
+            if let Ok(json) = serde_json::to_vec(f) {
+                ops.push((true, NS_FOLDER | id, encode_v3_value(&json)));
+            }
+        }
+        for (id, f) in &self.d.files {
+            if let Ok(json) = serde_json::to_vec(f) {
+                ops.push((true, *id, encode_v3_value(&json)));
+            }
+        }
+        for (id, sh) in &self.d.shares {
+            if let Ok(json) = serde_json::to_vec(sh) {
+                ops.push((true, NS_SHARE | id, encode_v3_value(&json)));
+            }
+        }
+        self.meta_dirty = true;
+        self.push_meta();
+        while let Some(op) = self.pending.pop() {
+            if let PendingOp::Upsert(k, v) = op {
+                // push_meta 存的是裸 JSON，这里统一套 v3 值封装
+                ops.push((true, k, if k == NS_META { encode_v3_value(&v) } else { v }));
+            }
+        }
+        ops
+    }
+
+    /// 内容采样令牌 HMAC 登记（导入 / 同步摄取 / 整表重建时调用方传入）。
+    pub fn set_tokens_extra(
+        &mut self,
+        file_id: u64,
+        tokens_extra: Vec<String>,
+    ) -> Result<(), &'static str> {
+        let f = self.d.files.get_mut(&file_id).ok_or("file not found")?;
+        f.tokens_extra = tokens_extra;
+        self.push_file(file_id);
+        Ok(())
+    }
+
+    /// 从 v3 键值视图重建内存索引（打开时由 vault-store 的 kv_pairs 驱动）。
+    pub fn from_v3_pairs(
+        pairs: &[(u64, Vec<u8>)],
+        search_key: [u8; KEY_LEN],
+    ) -> Result<Self, &'static str> {
+        let mut d = IndexData {
+            folders: BTreeMap::new(),
+            files: BTreeMap::new(),
+            shares: BTreeMap::new(),
+            search: HashMap::new(),
+            tombstones: BTreeMap::new(),
+            staging: BTreeMap::new(),
+            next_id: 1,
+        };
+        for &(key, ref value) in pairs {
+            let payload = decode_v3_value(value)?;
+            if key == NS_META {
+                let meta: MetaV3 =
+                    serde_json::from_slice(&payload).map_err(|_| "meta parse failed")?;
+                d.next_id = meta.next_id;
+                d.staging = meta.staging;
+                d.tombstones = meta.tombstones;
+            } else if key & NS_SHARE != 0 {
+                let sh: Share =
+                    serde_json::from_slice(&payload).map_err(|_| "share parse failed")?;
+                d.shares.insert(key & !NS_SHARE, sh);
+            } else if key & NS_FOLDER != 0 {
+                let f: Folder =
+                    serde_json::from_slice(&payload).map_err(|_| "folder parse failed")?;
+                d.folders.insert(key & !NS_FOLDER, f);
+            } else {
+                let f: FileEntry =
+                    serde_json::from_slice(&payload).map_err(|_| "file parse failed")?;
+                d.files.insert(key, f);
+            }
+        }
+        let mut ix = Self {
+            d,
+            search_key,
+            pending: Vec::new(),
+            meta_dirty: false,
+            full_rewrite: false,
+        };
+        ix.d.folders.entry(ROOT_FOLDER).or_insert(Folder {
+            name: String::new(),
+            parent: 0,
+            tags: Vec::new(),
+            fskey: None,
+        });
+        // 倒排重建：名称 / 标签令牌实时派生 + 条目持久化的内容采样 HMAC
+        let entries: Vec<(u64, Vec<String>)> =
+            ix.d.files
+                .iter()
+                .map(|(id, f)| {
+                    let mut toks = tokenize(&f.name);
+                    for t in &f.tags {
+                        toks.extend(tokenize(t));
+                    }
+                    let mut hexes: Vec<String> = toks.iter().map(|t| ix.hmac_token(t)).collect();
+                    hexes.extend(f.tokens_extra.iter().cloned());
+                    (*id, hexes)
+                })
+                .collect();
+        for (id, hexes) in entries {
+            for hex in hexes {
+                ix.d.search.entry(hex).or_default().insert(id);
+            }
+        }
+        Ok(ix)
+    }
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ pub mod store;
 pub use error::StoreError;
 pub use journal::{Journal, JournalEntry, JournalEntryKind, RecoveryOutcome};
 pub use lease::{LeaseState, VaultLease};
+pub use segment::{fsync_dir, fsync_file};
 pub use segment::{Record, RecordOp, SegmentKind, VSSG_FORMAT_VER};
 pub use store::{OpenMode, VaultStore};
 
