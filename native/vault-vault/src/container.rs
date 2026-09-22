@@ -19,6 +19,19 @@ pub const MAGIC: &[u8; 4] = b"VSEF";
 pub const FORMAT_VER: u16 = 2;
 pub const CIPHER_SUITE: u16 = 1;
 
+/// P7-8：本端是否接受 `cipher_suite=2`（混合 KEM 交付标记）容器。
+/// 由引擎在能力位 `CAP_PQ_HYBRID` 置位时开启；默认关闭——读到 2 → 13（能力）而非 6
+/// （结构可识别但缺能力，docs/v2.0/11 行 171）。写路径在本里程碑恒写 1（T2 未启动）。
+static PQ_SUITE_ACCEPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_pq_suite_accepted(v: bool) {
+    PQ_SUITE_ACCEPTED.store(v, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn pq_suite_accepted() -> bool {
+    PQ_SUITE_ACCEPTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// 元数据区上限（导入时装配检查；超大块清单由块数上限约束）。
 pub const MAX_META_LEN: usize = 64 * 1024 * 1024;
 
@@ -252,6 +265,8 @@ pub mod container_v3 {
     use serde::{Deserialize, Serialize};
     use vault_crypto::aead::{aead_decrypt_with_aad, aead_encrypt_with_aad, AES_GCM_NONCE_LEN};
     use vault_crypto::KEY_LEN;
+
+    use crate::container::pq_suite_accepted;
 
     /// v3 头部 48B 明文。
     pub const HEADER_LEN: usize = 48;
@@ -538,6 +553,10 @@ pub mod container_v3 {
             if cipher_suite == 0 {
                 return Err("bad format: cipher suite 0 is not a valid suite");
             }
+            if cipher_suite == 2 && !pq_suite_accepted() {
+                // P7-8：能力未置位读 suite 2 → 13（能力），与 ≥3（未知套件）同码不同因
+                return Err("unsupported cipher suite: pq hybrid capability not enabled");
+            }
             if cipher_suite >= 3 {
                 return Err("unsupported cipher suite");
             }
@@ -673,6 +692,7 @@ pub mod container_v3 {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::container::set_pq_suite_accepted;
         use vault_crypto::{hash_sha256, Sha256};
 
         fn fsk() -> [u8; KEY_LEN] {
@@ -793,6 +813,42 @@ pub mod container_v3 {
             assert!(err.contains("format"), "got: {err}");
             // 与 13 严格区分：错误串不得出现 unsupported。
             assert!(!err.contains("unsupported cipher"));
+        }
+
+        /// P7-8 证据（docs/v2.0/11 行 171）：未置位读 suite=2 → 13（能力）而非 6；
+        /// 置位后 suite=2 可读；写路径恒写 suite=1（T2「新写入生效」未启动）。
+        /// 全局开关用后即还原，避免污染并行测试。
+        #[test]
+        fn pq_suite_downgrades_when_peer_lacks_capability() {
+            // 1) 默认（未置位）：suite 2 → unsupported cipher（13 语义）
+            let err = patched_suite_err(2);
+            assert!(err.contains("unsupported cipher"), "got: {err}");
+            // 2) 置位后：suite 2 容器可正常打开读取
+            let key = fsk();
+            let plains = [vec![1u8; 64], vec![2u8; 64]];
+            let refs: Vec<&[u8]> = plains.iter().map(|v| v.as_slice()).collect();
+            let (part, meta) = build_part(&key, 9, &refs);
+            let dir = tempfile::tempdir().expect("tmp");
+            let cpath = dir.path().join("f.vse");
+            assemble_v3(&cpath, &part, &meta, &key, 4096).expect("assemble");
+            let mut raw = std::fs::read(&cpath).expect("read");
+            raw[8..10].copy_from_slice(&2u16.to_le_bytes());
+            let crc = vault_store::segment::crc32(&raw[0..CRC_OFFSET_HDR]);
+            raw[CRC_OFFSET_HDR..CRC_OFFSET_HDR + 4].copy_from_slice(&crc.to_le_bytes());
+            std::fs::write(&cpath, &raw).expect("write");
+            set_pq_suite_accepted(true);
+            let opened = ContainerReaderV3::open(&cpath, &key).map(|_| ());
+            set_pq_suite_accepted(false);
+            assert!(opened.is_ok(), "置位后 suite 2 必须可读: {opened:?}");
+            // 3) 写路径：正常装配的容器头部 suite 恒为 1（T2 未启动，写 2 才需降级审计）
+            let cpath1 = dir.path().join("g.vse");
+            assemble_v3(&cpath1, &part, &meta, &key, 4096).expect("assemble");
+            let raw1 = std::fs::read(&cpath1).expect("read");
+            assert_eq!(
+                u16::from_le_bytes([raw1[8], raw1[9]]),
+                crate::container::CIPHER_SUITE,
+                "写路径在本里程碑必须恒写 suite 1"
+            );
         }
 
         #[test]
