@@ -240,3 +240,87 @@
 - **内容**：P6 全部（P6-1…P6-9）——`vault-store` 分段存储内核（VSSG v1 / 六步提交协议 / 恢复日志 / 单写者租约）、索引 VSIX v3 与审计 VSAU v1 分段化（双路径共存）、FFI 契约 V2（abi_info / 事件流 / 任务 / 错误码 9–13）、供应链治理、崩溃注入与跨进程测试、规模基准进 CI。详见上文 2026-09-21 条目。
 - **验证**：native workspace 全测试绿、clippy 零告警（deny(warnings) 全 crate 源码级）、`ffi_check` 167 断言全 PASS、基准出口判据通过、`flutter analyze/test/build windows --debug` 通过。
 - **已知边界**（如实）：v0.5.0 旧库仍为 legacy 双路径（P7-9 迁移工具统一）；p2p 一条 e2e 用例在并行高负载下偶发时序失败（单线程必绿）；`vault_core_open` 三态接口与依赖无环架构测试归后续任务。
+
+## 2026-09-21 原型按代际重构 + 新增 V2.0 完整高保真原型
+
+- **背景**：设计基线已推进到 V2.0，而 `prototype/` 仍是 V1.0 期产物（基于 `docs/03`/`docs/04` 的归档版），出现「文档已是 V2.0、验收基准还是 V1.0」的代际错位。**决策**：原型目录与 `docs/` 采用同一套代际约定——`prototype/v1.0/` 冻结只读，`prototype/v2.0/` 为现行，根 `index.html` 改为版本索引落地页。
+- **破坏性重构**：原 `prototype/{index.html,styles.css,app.js}` 整体移入 `prototype/v1.0/`（相对引用未变，双击仍可打开）；`prototype/README.md` 重写为版本索引。
+- **V2.0 原型范围**：13 个路由 + 4 个专用路由（`/recover`、`/maintenance/rotate`、`/maintenance/migrate`、`/alarm`），二级/三级界面全部以居中弹窗承载；样式分 4 层（tokens / base / components / views），脚本分 4 层（core / ui / data / 按域视图 + 外壳路由）。设计依据逐条落到 `docs/v2.0/03` §2.2「能力三档」、§3.2「14 错误码」、§4 十一张线框图、§5「Token V2」、§6「intl 与无障碍」，以及 `04` §2–§5 的视图 / 可视化 / 动效 / 通知分级。
+- **新增 7 件组件**同步落地：`QueueRow` / `TransferRing` / `MaintenanceBanner` / `EraseClassBadge` / `RecoveryWizard` / `PeerDiscoverCard` / `ConflictPair`。
+- **关键实现决策（值得后续沿用）**：
+  1. **刻意不使用 ES Module**：`import` 在 `file://` 下被 CORS 拦截，会直接摧毁「双击 `index.html` 即开」这一 V1.0 起就成立的约定。改为经典脚本按依赖顺序加载 + 全局 `VS` 命名空间。
+  2. **能力三档由数据驱动**：`CAP_*` 位图存于状态仓库，未置位时渲染层**返回 `null`（整块不渲染）**而不是置灰；「演示控制台」可逐位切换以便验收。这使「不谎报能力」从纪律变成了可自动检查的代码路径。
+  3. **错误码与中继 R 码集中在 `core.js`**：`VS.ERR`（14 码）与 `VS.RELAY_ERR`（R1–R17）是唯一的文案出口，页面不得自造错误文案——对应 `08` §3.4「中继错误空间必须显式映射」。
+- **如实边界（不虚构）**：`docs/v2.0/12` 未定义商业订单 / 支付 / 结算 / 退款 / 发票，且 `§1.3` 明确列为非范围、`§6.3` 反对试用期——因此授权页使用**可配置价格占位**、无试用倒计时、无支付流；`05-04` 的「通信」仅指 Noise 信道与一次性 burn 通道，故**不做语音/视频通话界面**；「异地检测落锁」与「只存不解节点」无接口或未立项，设置页该项 **⛔ 不渲染**。以上均在 `prototype/v2.0/README.md` §六 逐条登记。
+- **隐患 / 待办**：
+  1. V2.0 原型的「维护 / 恢复 / 只读降级」状态由演示控制台手工切换，**真实实现必须由引擎事件驱动**（`MAINTENANCE_ENTER/EXIT`(17/18)、`SESSION_STATE`(2)、`ROTATION_STATE`(14)、`ENGINE_READY`(1).recoveryReport），前端不得自行推断——`docs/v2.0/03` §3.1 已定此纪律。
+  2. `app/lib/` 中三处文档注释写「1:1 对应 `prototype/styles.css`」，该路径现为 `prototype/v1.0/styles.css`；Flutter 侧按 V2.0 Token 重做视觉层时应一并更新为 `prototype/v2.0/`，本轮未改 app 源码。
+  3. 原型未做自动化断言（无 Lint / 测试），可达性依赖人工走查；`prototype/v2.0/README.md` §七 给出了建议验收路径。
+  4. V2.0 原型引入了 `VS.ui` 原语库与 `interop` 式注册契约（`VS.pages` / `VS.actions`），后续新增页面务必复用原语，不要在视图文件里另起一套组件，否则会重演 V1.0 单文件膨胀的问题。
+- **验证**：全部 JS 通过 `node --check`；静态资源仅 4 个 CSS + 5 个 JS，无外部依赖、无网络请求；`prototype/v1.0/index.html` 移动后相对引用完整。
+
+## 2026-09-21 新增 `prototype/mobile/`：移动端原型（<720 档）
+
+- **背景**：`docs/v2.0/04` §1.1 把「展示形式」定义为同一核心引擎在不同设备与尺寸下的呈现方式。五端里桌面端已有原型，**移动端一直缺位**。补上 `prototype/mobile/`，与 `prototype/v2.0/`（桌面端）并列，同属 V2.0 基线。
+- **关键工程决策：「一套内核、受管外壳」在原型上的投影**。`mobile/index.html` **不复制** `core.js / ui.js / data.js`，而是直接引用 `../v2.0/js/`。收益：两端共享同一份错误码文案出口（`VS.ERR` 14 码、`VS.RELAY_ERR` R1–R17）、同一套 Design Token、同一份 Mock 语料，改一处两端同时生效，杜绝「桌面说 A、手机说 B」的漂移。代价：`mobile/` 不能脱离 `v2.0/` 单独拷贝——这是**有意**的，它本来就不是独立产品。产品原则直接决定了工程结构，值得后续其他端沿用。
+- **移动端外壳规则**（`03` §2.2、§4.3）：底部 Tab（5 项，隐写不占 Tab）· 单栏列表（**无分栏**，视图切换器只显示可用项而不置灰）· 详情为全屏路由 · 二级界面一律**底部面板**（不变式：`mobile/` 下**禁用 `UI.modal`**）· 审计为**卡片流** · 列表项**长按 = 动作面板**、左滑为等价降级 · 触控目标 ≥44×44。
+- **实现了「每 Tab 一条独立导航栈」**（`VS.nav.stacks`）：`03` §4.3 要求「Tab 切换不重建页面状态，滚动位置按 Tab 记忆」，单栈路由做不到，故导航层改成 `tab -> [entry]` 的栈表，切换时记录/恢复 `scrollTop`。
+- **减配如实声明落地**（`04` §1.2、§六）：后台同步「尽力而为」固定文案 · 入站监听仅前台时设备显示「**待唤醒**」而非「在线」· 通知渠道写「应用内 + 系统推送」· 生物识别为主且不可用时**隐藏**（码 4/5）· 截屏保护显示**本端能力**（不照抄桌面「不适用」）· 配对载体重排为**扫码优先**，相机不可用时**不渲染扫码**。
+- **规模**：36 个路由 / 39 个动作；移动端自有 JS 8834 行 + CSS 366 行（复用的内核 3 个文件未计入）。
+- **过程中发现并修复的真实缺陷**（都在中央层，值得记录）：
+  1. **`MUI.mrow` 的左滑在原语层不可达** —— swipe 分支既没注册长按，也没有任何代码把 `.swipe-row` 置为 `data-open="true"`，CSS 的位移规则永远不生效。已在 `mui.js` 补 `MUI.attachSwipe()`（Pointer Events 拖拽 + 520ms 长按定时器，鼠标与触摸同一路径），并补上「单击已展开行 = 收起」。子模块各自就地造的 `attachSwipe()` 副本因此成为冗余。
+  2. **`app.js` 的 `paint()` 把已是 `MUI.screen(...)` 的 `page.body` 又包了一层 `.screen`** —— 双层 `--sp-4` 内边距 + 嵌套滚动容器。契约要求视图返回 `MUI.screen(...)`，外壳却又包一层，属契约与实现不一致。已改为「body 已含 `screen` 类则直接复用」。
+  3. **`MUI.maintBanner` 定义在 `app.js`，而各视图模块在调用它** —— 依赖加载顺序且签名不稳定（`mui.js` 里根本没有）。已下沉到 `mui.js`，固定签名为 `(tone, title, sub, actions)`。
+  4. **`.mseg` / `.mtabs-scroll` 按钮高 34px < 44px 触控目标** —— 违反 `03` §2.2。已在 CSS 层抬到 44px，否则各视图会各自就地打补丁。
+  5. **一处子模块文件落盘时发生 GBK↔UTF-8 双重编码损坏**：整个文件中文变成 `鍘熷瀷` 这类乱码，`✓` 字符还吞掉了后接引号导致语法错误。**教训**：不可用「读回 UTF-8 再编码回 GBK」逆还原——原字节里的不可表示字符已被替换为 `?`，逆变换只会二次损坏（本次已实测踩中，最终只能让原作者重写）。给子 agent 的文件写入路径必须限定为 write 工具，验收须含「中文计数 + 双重编码片段扫描 + `node --check`」三项断言，并在派发 prompt 里前置声明。
+  6. **Mock 数据语义矛盾**：`stegoPaths[1].flags = '0b0110'` 表示「单图模式」置位，却标着 `shardTotal = 3`。已改为 `0b0101`（首片 + 位分散）/ `0b0100`（位分散）并补 `flagsNote`。子模块此前**如实渲染为 danger 徽标而非静默修正**，这个处理是对的。
+- **验证方式**：写了最小 DOM shim 无头执行 `mobile/index.html` 的全部脚本，逐个路由走**真实外壳**（切换 Tab → 推入路由 → `render()`），并用真实 Mock id 填充路由参数——否则 `file`/`folder`/`audit`/`task`/`device` 会因 id 不存在而渲染空态，形成**假阴性**（首轮就踩到了）。随后触发渲染树上的全部交互处理器。结果：**36 路由 / 471 个处理器执行 / 0 抛错 / 0 延迟回调抛错**；两端共 14 个 JS 文件 `node --check` 全通过；无外部依赖与网络请求。脚手架已删除。
+- **已知遗留（如实登记）**：
+  1. 移动端**未与引擎接线**，减配项（后台同步、入站监听、截屏保护）目前是界面声明而非运行时行为；真机验证需在 Flutter 侧落地（`04` §六 矩阵对应 P9-1…P9-4）。
+  2. 两端共用内核，但**视图尚未做跨端一致性测试**：同一个 `data.js` 字段若被一端误用，另一端不受影响。若要防漂移，应把「跨端字段使用契约」也做成断言。
+  3. `about` 页的能力三档清单里，桌面端仍按「CAP_BIO 未登记在 `VS.CAP`」表述，而 `core.js` 已登记 `CAP_BIO`(bit 12)——**桌面端这条结论已过时**，待修。
+  4. `data.js` 仍缺若干字段（`compactionPending`、事件流独立 `seq`、`EVENT_OVERFLOW` 丢失计数、离开应用落锁秒数、轮换「是否持旧 MK / 并发冲突 / 自动续做次数」、迁移备份保留期、通知矩阵的「系统推送 / 邮件」渠道）。各端目前按「未知 → — + 设计保证档」处理，未显示 0、未假装真值。
+
+## 2026-09-21 原型视觉验收：移动端首开全黑 + 3 个只在实际渲染中才暴露的缺陷
+
+- **触发**：用户打开 `prototype/mobile/index.html` 后**一片全黑**。此前所有自动化验证都是**绿的**——这本身就是最值得记录的一条。
+- **根因 1（致命，仅 CSS）**：`mobile.css` 里 `.phone-screen` 被声明了两次——文件开头是 `position: absolute; inset: 0`，靠近末尾又写了一次 `position: relative`（本意只是给 `.fab` 与浮层提供已定位祖先）。后者覆盖前者后，`.phone-screen` 变成普通流内块级元素，其子节点全是绝对定位 → **高度塌陷为 0**，再叠加自身 `overflow: hidden`，内容被整体裁掉，只剩 `.phone` 的近黑底色。已删除该重复声明并就地写明禁止再声明的理由。
+- **根因 2（用户可见但非致命）**：底部 Tab 标签被手机外框的 Home Indicator 压住。用 CDP 量出精确几何：底栏 `780–836`、标签 `814–827`、指示条 `824–829` → **重叠 3px**。已给 `.tabbar` 加 `padding-bottom: max(18px, env(safe-area-inset-bottom, 18px))` 并下调 item 高度，复量为标签 `819–836` / 指示条 `844–849`，不再重叠。
+- **根因 3**：`.toast-host` 是 `body` 的 `position: fixed` 子节点，在桌面浏览器预览时**飘到手机外框之外**。第一次修复把它移进 `.phone-screen`，**仍然错**——`grant()` 与演示控制台会 `VS_SCREEN.innerHTML = ''`，宿主被一并清掉，`UI.toast` 随后又在 `body` 上重建，问题原样复现。正确做法是挂到 `.phone`（不被清空），CSS 改为 `.phone .toast-host { position: absolute; ... }`。
+- **根因 4（窗口矮时手机外框被裁）**：`--window-size=1440,900` 的视口只有 804px 高，而手机固定 844px；`display:grid; place-items:center` 在溢出时会从顶端裁切。已把 `.stage` 改为 `flex + overflow:auto + padding`，`.phone` 加 `margin:auto`——溢出时不再裁切，可滚动查看。
+- **方法论教训（重要）**：我把「DOM 级验证全绿」当成了「原型可用」，但 DOM shim **看不见 CSS**，也不做布局。`.phone-screen` 这类纯样式致命错误可以完全逃过 471 个交互处理器全绿的检查。**结论：静态原型的验收必须包含真实浏览器的渲染截图**，DOM 断言只能覆盖 JS 逻辑那一半。
+- **新的验收手段（已跑通）**：`msedge`/`chrome --headless=new` 出图 + **CDP（`--remote-debugging-port` + WebSocket）驱动**。CDP 的价值在于能对**真实 DOM** 求值：既能点按按钮走完「解锁 → 路由」流程再截图，也能直接量 `getBoundingClientRect()`（上面 3px 重叠就是这么量出来的），比盯着缩小后的截图猜像素可靠得多。脚本用完即删，未入库。
+- **顺带修正的一处 JSON**：`views-vault.js` 在我完成上一轮验证**之后**又被重写（82155 → 82804 字节），因此**重新跑了一遍全量验证**才敢下结论。教训：并行子 agent 仍在写文件时，任何验证结论都可能对应中间态；必须先确认文件稳定（比对 size/mtime）再验。
+- **最终验证**：36 路由 / 471 个交互处理器 / 0 抛错 / 0 延迟回调抛错；全部 JS `node --check` 通过；全部 CSS 括号平衡；四个入口页 30 处相对引用完整；无外部依赖与网络请求。移动端锁屏、保险箱、设备、同步、安全中心、设置、同步策略、文件详情、授权与审计均已**逐页真实渲染截图确认**；桌面端锁屏与版本索引页同样出图确认。
+
+### 2026-09-21 追加：并行的保险箱模块回报后，又收口两个中央层缺口
+
+- **背景**：移动端 `views-vault.js` 的负责 agent 在完成后回报了两处它无权修改的上游缺口，均属实：
+  1. **`views.css` 未在移动端装载**，而 `.file-grid` / `.file-card` / `.hit-snippet` / `.breadcrumb` / `.legend` 这批评委要求复用的呈现原语恰恰定义在桌面端的 `views.css` 里。该 agent 只能保留类名 + **逐个内联等价样式兜底**。这是典型的「契约要求复用、但依赖没给到位」。
+  2. **`MUI.actionSheet` 不写 `title` / `aria-label`**，禁用原因只进角标与点击后的 toast ⇒ 对读屏不可见；该 agent 只能把错误码拼进可见文案（「重命名…（码 9）不可用」）兜底。
+- **处置**：
+  - `mobile/index.html` 补引 `../v2.0/assets/views.css`。判断依据：这份文件里**桌面外壳专属**的选择器（`.app` / `.sidebar` / `.topbar` / `.vault-*` / `.page-*`）在移动端不会被使用，属惰性规则；而其中共享的呈现原语正是移动端需要的。**顺序要紧**：`mobile.css` 仍必须最后加载。已在 HTML 注释里写明这一取舍。
+  - `mui.js` 的 `MUI.actionSheet` 补 `title` 与 `aria-label`，禁用时带上 `reason`。
+- **验证方式升级（值得复用）**：改用 **CDP 在真实浏览器里跑路由扫描** —— 解锁 → 逐路由 `VS.nav.go` → 对屏幕内全部可交互元素派发真实 `click` 与 `contextmenu`（移动端长按通道）→ 汇总异常。结果 **36 路由 / 191 次真实交互 / 0 点击异常 / 0 渲染异常 / 无空壳页**。相比 DOM shim，它跑在同源真实 DOM 上，能一并覆盖 CSS 生效后的实际结构。
+  - 踩到的坑：扫描过程会堆积大量 toast，把手机屏糊满导致截图不可用——**截图前必须清空 `.toast-host` 与浮层**（本轮前两张图就是这么废掉的）。
+  - 另一个教训：`.click()` 只覆盖 `click` 通道，长按动作面板走 `contextmenu`，必须显式派发，否则交互覆盖数会虚低（167 → 191）。
+- **最终状态**：14 个 JS 文件语法全通过；全部 CSS 括号平衡；四个入口页 31 处相对引用完整；无外部依赖与网络请求。移动端搜索页与保险箱页在装载 `views.css` 后**重新出图确认无回归**，且所有 toast 均落在手机外框内。
+
+## 2026-09-21 P7 密钥与格式 V3——9/11 任务落地（P7-8 与冒烟 ≥200 未完成，未出 M7）
+
+- **已交付（P7-1…P7-7、P7-9…P7-11，10 个 commit）**：
+  - P7-1 `VSVB v3` 头部（96B 固定区 + 8 条从属密钥包装区，DWK=HKDF(MK,"dk-wrap")，取值 CSPRNG 一次固定；v2 兼容读四情形；缺 key_id 禁止静默回退 → 6）
+  - P7-2 从属密钥层接线（8 条派生点全切；**MK 轮换=仅重包装 512B**：搜索令牌/分享票据跨轮换有效、审计链不断、P6 的索引重建窗口消失）
+  - P7-3 轮换会话（VSRR 114B、begin/resume/status、维护态 10 擦除豁免、解锁自动续做）
+  - P7-4 轮换传播（RotationNotice 帧 + vsync-rotate 域串 + 两端旧 MK 解封同源证明 + kind=3 入队 + 入站 unlock 自动续做）
+  - P7-5 擦除分级（fsutil 探测 GBK 双编码；**TRIM 未接线前不声称安全擦除**）、P7-6 `VSEF v3` 容器（分片元数据 + cipher_suite 6/13 区分）
+  - P7-7 迁移工具（M1–M4 四类 + migrate.log.jsonl 断点续做 + migrate 三件套 FFI）
+  - P7-9 检索 V2（脱敏片段/排名/64MiB 截断）+ 缩略图缓存（编解码诚实降级）
+  - P7-10 远程锁定（kind=2 + 四校验 + LockFn）、P7-11 武装持久化（绝对 deadlineMs + 启动续走/到期即执行）
+- **验证**：workspace 全测试绿（除已知抖动 pair_sync_*_e2e，HEAD 亦失败已验证非回归）、clippy 零告警；各任务证据测试齐备（keystore::v3_roundtrip / rotation_chain::audit_chain_continues / rotation_session::resume_after_kill / rotation_push / container_v3::* / search_v2::snippet_is_redacted / remote_lock::signature_and_target_checked / armed_survives_restart / migration::* 等）。
+- **未完成（如实，M7 不出）**：
+  1. **P7-8 混合 KEM 灰度**：ML-KEM 受审实现选型未定（R2 处置要求受审依赖），`cipher_suite=2` 与协商回落未实现；
+  2. **Dart 侧接线与冒烟 ≥200**：新增导出（rotate 三件套/push_rotation/push_lock/erase_class_probe/migrate 四件套/search_v2/thumbnail 实装）尚未进 ffi_check（当前仍 167）；
+  3. 缩略图真实编解码（需受审图像依赖，归 P9-4/P9-9）、擦除 TRIM 接线、迁移磁盘余量前置检查。
+- **偏差登记（摘要，详见各模块注释）**：resume/migrate 需密码参数（KEK 只能由密码派生）；begin/migrate 同步执行（异步任务化归 P8-1）；journal 按命名空间分文件；审计段描述有界+节流（修 P6 的 O(n) 回归）；轮换传播以「队列投递成功即已投递」过渡（vc 推进矩阵归 P8）。
+- **过程修复的真实缺陷**：审计段描述随段数线性膨胀 → 字节压实每条触发 → append 退化 O(n)（P6-4 回归，P7-2 期间发现并修复）。
