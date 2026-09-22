@@ -9,6 +9,7 @@
 
 pub mod aead;
 pub mod kdf;
+pub mod pq;
 pub mod random;
 pub mod sig;
 
@@ -17,6 +18,10 @@ pub use aead::{
     AES_GCM_TAG_LEN,
 };
 pub use kdf::{argon2id_derive, hkdf_sha256_derive, hkdf_sha256_extract_expand, Argon2Params};
+pub use pq::{
+    mlkem768_encapsulate, mlkem768_sk_from_seed, MlKemSk, MLKEM768_CT_LEN, MLKEM768_EK_LEN,
+    MLKEM768_SS_LEN,
+};
 pub use random::{random_bytes, random_key, random_salt};
 
 /// AES-256-GCM 密钥长度（docs/05-01：KEK_pwd / KEK_bio / MK 均 32B）。
