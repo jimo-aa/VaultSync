@@ -43,6 +43,8 @@ pub enum OrderReject {
     Malformed,
     /// P7-11：武装状态落盘失败——拒绝武装（不留纯内存倒计时）。
     PersistFailed,
+    /// P7-4：两端旧 MK 不同（ct 解封失败）——拒绝且不写任何状态。
+    MkMismatch,
 }
 
 struct Invite {
@@ -113,6 +115,8 @@ pub struct EngineKeys {
 
 pub struct EngineInner {
     ident: Identity,
+    /// 密钥束副本（P7-4 轮换 notice 解封需 MK；与调用方同值）
+    keys_rt: EngineKeys,
     device_name: String,
     data_dir: PathBuf,
     /// 与会话共享的保险箱槽位（None = 会话已锁定）。
@@ -215,6 +219,7 @@ impl P2pEngine {
         let engine = Self {
             inner: Arc::new(EngineInner {
                 ident,
+                keys_rt: *keys,
                 device_name: device_name.to_string(),
                 data_dir: data_dir.clone(),
                 vault_slot,
@@ -740,6 +745,19 @@ impl P2pEngine {
     /// 投递帧路径：载荷为 `Msg::DestroyCmd` 的 JSON 原文（队列条目 `payload` 即此格式）。
     /// 与线上路径共用 `apply_order`，保证"收到的字节"与"验签/执行所用字段"同源。
     pub fn apply_order_payload(&self, peer_pub: &str, payload: &str) -> Result<bool, OrderReject> {
+        // P7-4：轮换传播（{"RotationNotice":{...}}）优先分派
+        if payload.contains("\"RotationNotice\"") {
+            let v: serde_json::Value =
+                serde_json::from_str(payload).map_err(|_| OrderReject::Malformed)?;
+            let n = v.get("RotationNotice").ok_or(OrderReject::Malformed)?;
+            let rotation_id = n["rotationId"].as_str().ok_or(OrderReject::Malformed)?;
+            let blob_hex = n["ct"].as_str().ok_or(OrderReject::Malformed)?;
+            let issued = n["issuedMs"].as_u64().ok_or(OrderReject::Malformed)?;
+            let expires = n["expiresMs"].as_u64().ok_or(OrderReject::Malformed)?;
+            let sig = n["sig"].as_str().ok_or(OrderReject::Malformed)?;
+            self.apply_rotation_notice(rotation_id, blob_hex, issued, expires, sig, peer_pub)?;
+            return Ok(false);
+        }
         // P7-10：锁定指令（{"LockCmd":{...}}）优先分派
         if payload.contains("\"LockCmd\"") {
             let v: serde_json::Value =
@@ -1801,6 +1819,121 @@ impl P2pEngine {
         Ok(serde_json::json!({"queued": queued.len(), "peers": queued}))
     }
 
+    /// P7-4 接收端：校验（签名域 vsync-rotate / 未过期 / issued 偏差 ≤300s /
+    /// 用**自己的旧 MK** 解封 ct——成功即证明两端旧 MK 相同）→ 保存 inbound
+    /// 待本端解锁后续做（数据面重加密需要密码，由 vault-core 解锁路径接管）。
+    fn apply_rotation_notice(
+        &self,
+        rotation_id_hex: &str,
+        blob_hex: &str,
+        issued_ms: u64,
+        expires_ms: u64,
+        sig_hex: &str,
+        peer_pub: &str,
+    ) -> Result<(), OrderReject> {
+        let from = crate::identity::Identity::device_id_of(peer_pub).unwrap_or_default();
+        let domain = format!("vsync-rotate:{from}:{rotation_id_hex}:{issued_ms}:{expires_ms}");
+        if !crate::identity::Identity::verify(peer_pub, domain.as_bytes(), sig_hex) {
+            self.log("rotation notice rejected: signature invalid");
+            return Err(OrderReject::BadSignature);
+        }
+        let now = now_ms();
+        if now.saturating_sub(issued_ms) > 300_000 || issued_ms.saturating_sub(now) > 300_000 {
+            self.log("rotation notice rejected: clock skew > 300s");
+            return Err(OrderReject::Malformed);
+        }
+        if expires_ms != 0 && now > expires_ms {
+            self.log("rotation notice rejected: expired");
+            return Err(OrderReject::Malformed);
+        }
+        let blob = vault_crypto::hex_decode(blob_hex).ok_or(OrderReject::Malformed)?;
+        // 用自己的旧 MK 解封：失败 = 两端旧 MK 不同 → 拒绝且不写任何状态
+        let wrap_key =
+            vault_crypto::kdf::hkdf_sha256_derive(&self.inner.keys_rt.mk, b"rotation-recover");
+        let mk_new = aead_decrypt(&wrap_key, &blob).ok_or(OrderReject::MkMismatch)?;
+        drop(mk_new);
+        // 保存 inbound（rotation_id + 包装原样），本端下次解锁后自动续做
+        let inbound = serde_json::json!({
+            "schema": 1, "rotationId": rotation_id_hex, "ct": blob_hex,
+            "issuedMs": issued_ms, "expiresMs": expires_ms,
+        });
+        let p = self.inner.data_dir.join("rotation.inbound");
+        let body = serde_json::to_vec(&inbound).map_err(|_| OrderReject::Malformed)?;
+        std::fs::write(&p, body).map_err(|_| OrderReject::PersistFailed)?;
+        self.log(&format!(
+            "rotation notice accepted: id={rotation_id_hex} (applied on next unlock)"
+        ));
+        Ok(())
+    }
+
+    /// P7-4：向对端入队轮换传播（kind=3）。blob = 新 MK' 被旧 MK 包装
+    /// （与 VSRR 同构造，nonce‖ct 60B hex）。
+    pub fn push_rotation(
+        &self,
+        peer_id: Option<&str>,
+        rotation_id_hex: &str,
+        blob_hex: &str,
+    ) -> Result<serde_json::Value, String> {
+        let peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+        let targets: Vec<String> = match peer_id {
+            Some(id) => {
+                if peers.get(id).is_none() {
+                    return Err("peer not paired".into());
+                }
+                vec![id.to_string()]
+            }
+            None => peers.list().into_iter().map(|(id, _)| id).collect(),
+        };
+        drop(peers);
+        let issued = now_ms();
+        let expires = issued + 7 * 24 * 3600 * 1000; // 默认 7 天
+        let from = self.device_id();
+        let mut queued = Vec::new();
+        for target in &targets {
+            let domain = format!("vsync-rotate:{from}:{rotation_id_hex}:{issued}:{expires}");
+            let sig = self.inner.ident.sign(domain.as_bytes());
+            let payload = serde_json::to_string(&serde_json::json!({
+                "RotationNotice": {
+                    "rotationId": rotation_id_hex, "ct": blob_hex,
+                    "issuedMs": issued, "expiresMs": expires,
+                    "sig": sig,
+                }
+            }))
+            .map_err(|e| e.to_string())?;
+            self.inner
+                .orders
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(OrderRec {
+                    kind: 3,
+                    peer_id: target.clone(),
+                    target: target.clone(),
+                    delay_secs: 0,
+                    issued_ms: issued,
+                    sig_hex: sig,
+                    payload,
+                })
+                .map_err(|e| e.to_string())?;
+            queued.push(target.clone());
+        }
+        self.log(&format!(
+            "rotation notices queued: {} peer(s) id={rotation_id_hex}",
+            queued.len()
+        ));
+        Ok(serde_json::json!({"queued": queued.len(), "peers": queued}))
+    }
+
+    /// P7-4：是否仍有未投递的轮换传播（该对端的同步出站应被阻塞）。
+    pub fn has_pending_rotation(&self, peer_id: &str) -> bool {
+        self.inner
+            .orders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .list_for(peer_id)
+            .iter()
+            .any(|o| o.kind == 3)
+    }
+
     /// P7-10 接收端：校验（签名 / target / 时钟偏差 ≤300s）→ 调 LockFn。
     /// 锁定不做二次确认（与销毁同级通道）；校验失败 → 丢弃 + 诊断。
     fn apply_lock_order(
@@ -2830,6 +2963,84 @@ mod tests {
         assert_eq!(
             b.engine.apply_order_payload(&a_pub, &stale),
             Err(OrderReject::Malformed)
+        );
+    }
+
+    /// P7-4 证据：rotation_push::propagates_and_acks / mk_mismatch_rejected
+    /// 传播入队 kind=3 → 接收端用自己的旧 MK 解封 ct（同源证明）→ inbound
+    /// 落盘；两端旧 MK 不同 → 拒绝且不写任何状态。
+    #[test]
+    fn rotation_push_and_apply() {
+        let a = mk_dev("rotA");
+        let b = mk_dev("rotB");
+        let code = b.engine.pair_begin().unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        a.engine.pair_join(&addr_of(&b), &code).unwrap();
+
+        let rotation_id = "ab".repeat(16);
+        let mk_new = vault_crypto::random_key();
+        // 发起端：新 MK' 被旧 MK(a) 包装（VSRR 同构造）
+        let wrap_key =
+            vault_crypto::kdf::hkdf_sha256_derive(&a.engine.inner.keys_rt.mk, b"rotation-recover");
+        let mut nonce = [0u8; 12];
+        nonce.copy_from_slice(&vault_crypto::random_bytes(12));
+        let blob = vault_crypto::aead_encrypt(&wrap_key, &nonce, &mk_new).unwrap();
+        let issued = now_ms();
+        let expires = issued + 7 * 24 * 3600 * 1000;
+        let from = a.engine.device_id();
+        let domain = format!("vsync-rotate:{from}:{rotation_id}:{issued}:{expires}");
+        let sig = a.engine.inner.ident.sign(domain.as_bytes());
+        let payload = serde_json::json!({
+            "RotationNotice": {
+                "rotationId": rotation_id, "ct": vault_crypto::hex_encode(&blob),
+                "issuedMs": issued, "expiresMs": expires, "sig": sig,
+            }
+        })
+        .to_string();
+
+        // 入队 + 投递（接收端用自己的旧 MK(b) 解封——两端旧 MK 不同 → 拒绝）
+        a.engine
+            .push_rotation(None, &rotation_id, &vault_crypto::hex_encode(&blob))
+            .unwrap();
+        assert!(a.engine.has_pending_rotation(&b.engine.device_id()));
+        let a_pub = a.engine.inner.ident.public_hex(); // 发送方公钥（验签用）
+        assert_eq!(
+            b.engine.apply_order_payload(&a_pub, &payload),
+            Err(OrderReject::MkMismatch),
+            "不同源旧 MK 必须拒绝"
+        );
+        assert!(
+            !b.dir
+                .path()
+                .join("rotB.data")
+                .join("rotation.inbound")
+                .exists(),
+            "拒绝路径不得写任何状态"
+        );
+
+        // 同源（用 b 的旧 MK 包装）→ 解封成功 → inbound 落盘
+        let wrap_key_b =
+            vault_crypto::kdf::hkdf_sha256_derive(&b.engine.inner.keys_rt.mk, b"rotation-recover");
+        let blob_b = vault_crypto::aead_encrypt(&wrap_key_b, &nonce, &mk_new).unwrap();
+        let payload_b = serde_json::json!({
+            "RotationNotice": {
+                "rotationId": rotation_id, "ct": vault_crypto::hex_encode(&blob_b),
+                "issuedMs": issued, "expiresMs": expires, "sig": sig,
+            }
+        })
+        .to_string();
+        b.engine
+            .apply_order_payload(&a_pub, &payload_b)
+            .expect("same old mk must accept");
+        assert!(
+            b.dir
+                .path()
+                .join("rotB.data")
+                .join("rotation.inbound")
+                .exists(),
+            "接受的 notice 必须落盘（下次解锁续做）"
         );
     }
 }

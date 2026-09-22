@@ -348,8 +348,23 @@ pub fn rotate_mk_begin(
     // ⑥⑦ 从属密钥仅重包装 + 控制面提交（state=2）
     finish_rotation(session, &mut ks, &mk_new, rotation_id, password, store)?;
 
-    // 传播：无已配对设备 → 空集即完成，state 归 0；有对端 → 停在 2（P7-4 接管）
+    // 传播：无已配对设备 → 空集即完成，state 归 0；有对端 → kind=3 入队（P7-4）
     if rotation_propagation_pending(session) {
+        let propagate = data_dir.join("rotation.propagate");
+        if let Ok(blob) = std::fs::read(&propagate) {
+            let hex = vault_crypto::hex_encode(&blob);
+            if let Ok(engine) = crate::p2p_service::p2p_engine(session) {
+                match engine.push_rotation(None, &vault_crypto::hex_encode(&rotation_id), &hex) {
+                    Ok(v) => session.audit(
+                        "security",
+                        &format!("rotation.propagate queued={}", v["queued"]),
+                    ),
+                    Err(e) => {
+                        session.audit("security", &format!("rotation.propagate queue failed: {e}"))
+                    }
+                }
+            }
+        }
         session.audit("security", "rotation.state=2 pending_ack");
     } else {
         finish_rotation_idle(session, &data_dir, rotation_id);
@@ -392,8 +407,14 @@ fn finish_rotation(
     ks.rotation_state = crate::keystore::ROTATION_COMPLETED_PENDING_ACK;
     ks.rotation_id = rotation_id;
     ks.save().map_err(CoreError::Io)?;
-    let p = crate::rotation::vsrr_path(&session.data_dir());
-    let _ = std::fs::remove_file(p);
+    // P7-4：VSRR 转为传播载体（新 MK' 的包装原样投递给对端）；对端 ACK 齐
+    // （或无对端）后由 finish_rotation_idle 删除
+    let vsrr = crate::rotation::vsrr_path(&session.data_dir());
+    let propagate = session.data_dir().join("rotation.propagate");
+    if vsrr.exists() {
+        std::fs::rename(&vsrr, &propagate)
+            .map_err(|_| CoreError::Io("cannot keep propagate blob"))?;
+    }
     Ok(())
 }
 
@@ -407,6 +428,7 @@ fn finish_rotation_idle(session: &Session, data_dir: &std::path::Path, rotation_
                 session.exit_maintenance();
                 session.audit("security", "rotation.state=0 propagated");
                 let _ = std::fs::remove_file(crate::rotation::vsrr_path(data_dir));
+                let _ = std::fs::remove_file(data_dir.join("rotation.propagate"));
             }
         }
     }
@@ -496,6 +518,56 @@ pub fn rotate_mk_status(session: &Session) -> Result<serde_json::Value, CoreErro
         "maintenance": session.is_maintenance(),
         "propagation": [],
     }))
+}
+
+/// P7-4：消费对端轮换通知——用本端密码完成与 notice 等价的轮换
+/// （notice 的 ct 由两端相同的旧 MK 包装；本端解锁后以 VSRR 同构造落盘，
+/// 复用 resume 路径完成数据面重加密与头部提交）。
+pub fn consume_rotation_notice(session: &Session, password: &str) -> Result<usize, CoreError> {
+    let data_dir = session.data_dir();
+    let inbound = data_dir.join("rotation.inbound");
+    if !inbound.exists() {
+        return Ok(0);
+    }
+    let raw = std::fs::read(&inbound).map_err(|_| CoreError::Io("cannot read rotation inbound"))?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&raw).map_err(|_| CoreError::Format("rotation inbound parse"))?;
+    let rotation_id_hex = v["rotationId"]
+        .as_str()
+        .ok_or(CoreError::Format("inbound id"))?;
+    let ct = v["ct"].as_str().ok_or(CoreError::Format("inbound ct"))?;
+    let id_bytes =
+        vault_crypto::hex_decode(rotation_id_hex).ok_or(CoreError::Format("inbound id hex"))?;
+    if id_bytes.len() != 16 {
+        return Err(CoreError::Format("inbound id len"));
+    }
+    let mut rotation_id = [0u8; 16];
+    rotation_id.copy_from_slice(&id_bytes);
+    let blob = vault_crypto::hex_decode(ct).ok_or(CoreError::Format("inbound ct hex"))?;
+    let mut ks = Keystore::load(&session.vault_path).map_err(CoreError::Format)?;
+    if ks.rotation_state != crate::keystore::ROTATION_IDLE {
+        return Ok(0); // 本端自有轮换进行中：通知保留，稍后处理
+    }
+    // 用 notice 的 ct 解出 MK'（解封密钥 = HKDF(本端旧 MK,"rotation-recover")）；
+    // 解封失败 = 两端旧 MK 不同 → 如实拒绝（不动任何状态）
+    let wrap_key = vault_crypto::kdf::hkdf_sha256_derive(&*session.mk, b"rotation-recover");
+    let mk_new_vec = vault_crypto::aead_decrypt(&wrap_key, &blob)
+        .ok_or(CoreError::Format("rotation notice mk unwrap failed"))?;
+    let mk_new: [u8; 32] = mk_new_vec
+        .as_slice()
+        .try_into()
+        .map_err(|_| CoreError::Format("rotation mk len"))?;
+    // 走标准轮换会话：写 VSRR → state=1 → resume 续做（数据面+头部提交）
+    crate::rotation::write_vsrr(&data_dir, &rotation_id, &mk_new, &session.mk)
+        .map_err(CoreError::Io)?;
+    ks.rotation_state = crate::keystore::ROTATION_IN_PROGRESS;
+    ks.rotation_id = rotation_id;
+    ks.save().map_err(CoreError::Io)?;
+    session.enter_maintenance();
+    session.audit("security", "rotation.inbound accepted");
+    let n = rotate_mk_resume(session, password)?;
+    let _ = std::fs::remove_file(&inbound);
+    Ok(n)
 }
 
 /// 查询保险箱文件是否存在（首次运行判定）。

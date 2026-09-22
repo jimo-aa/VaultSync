@@ -182,7 +182,14 @@ pub unsafe extern "C" fn vault_core_unlock(
                     },
                 );
                 s.attach_lease();
-                // P7-3 自动续做：头部停在轮换中态 → 以本密码续做（失败不阻塞解锁）
+                // P7-3/P7-4 自动续做：先消费对端轮换通知（如有），再续做自有轮换
+                // （均失败不阻塞解锁，如实记诊断）
+                if let Err(e) = service::consume_rotation_notice(&s, pwd) {
+                    if !matches!(e, CoreError::Format("rotation notice mk unwrap failed")) {
+                        // 解封失败保持沉默（对端伪造/不同源属正常拒绝路径，已在对端记审计）
+                    }
+                    eprintln!("vsync rotation inbound consume: {:?}", e);
+                }
                 if s.is_maintenance() {
                     match service::rotate_mk_resume(&s, pwd) {
                         Ok(_) => {}
@@ -1636,6 +1643,69 @@ pub unsafe extern "C" fn vault_core_p2p_push_lock(
     }
 }
 
+// ==== P7-4 轮换传播（docs/v2.0/07 §四）====
+
+/// 向对端入队轮换传播（kind=3，`peer_id=NULL` = 全部已配对设备）。
+/// 载体 = state=2 时保留的 rotation.propagate（新 MK' 被旧 MK 包装）；
+/// 对端下次解锁后自动完成等价轮换。无未投递项 → 7。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄；`peer_id` 可为 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_push_rotation(
+    handle: *mut Session,
+    peer_id: *const c_char,
+    out_task_id: *mut u32,
+) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    if !out_task_id.is_null() {
+        unsafe { out_task_id.write(0) };
+    }
+    let pid = if peer_id.is_null() {
+        None
+    } else {
+        match unsafe { cstr(peer_id) } {
+            Ok(s) => Some(s.to_string()),
+            Err(code) => return code,
+        }
+    };
+    let data_dir = session.data_dir();
+    let propagate = data_dir.join("rotation.propagate");
+    let Ok(blob) = std::fs::read(&propagate) else {
+        return 7; // 无待传播轮换
+    };
+    let ks = match crate::keystore::Keystore::load(&session.vault_path) {
+        Ok(k) => k,
+        Err(_) => return ERR_IO,
+    };
+    if ks.rotation_id == [0u8; 16] {
+        return 7;
+    }
+    let rid = vault_crypto::hex_encode(&ks.rotation_id);
+    match crate::p2p_service::p2p_engine(session) {
+        Ok(engine) => {
+            match engine.push_rotation(pid.as_deref(), &rid, &vault_crypto::hex_encode(&blob)) {
+                Ok(v) => {
+                    audit_op(handle, "security", "rotation.propagate push");
+                    let _ = v;
+                    OK
+                }
+                Err(msg) => {
+                    if msg.contains("not paired") {
+                        ERR_INVALID_ARG
+                    } else {
+                        ERR_IO
+                    }
+                }
+            }
+        }
+        Err(_) => ERR_INTERNAL,
+    }
+}
+
 // ==== P7-3 轮换会话三件套（docs/v2.0/05-01 §3.6）====
 
 /// 轮换会话 · begin。0=完成（无对端）/ 1=密码错（进冷却）/ 9=只读 /
@@ -1936,6 +2006,111 @@ pub unsafe extern "C" fn vault_core_vault_thumbnail(
 ) -> i32 {
     let _ = (handle, file_id);
     ERR_CAPABILITY
+}
+
+// ==== P7-7 V2→V3 格式迁移工具（docs/v2.0/07 §七）====
+
+fn map_mig_err(e: crate::migrate::MigrateError) -> i32 {
+    match e {
+        crate::migrate::MigrateError::WrongPassword => ERR_WRONG_PASSWORD,
+        crate::migrate::MigrateError::LeaseBusy => ERR_LEASE_BUSY,
+        crate::migrate::MigrateError::Maintenance => ERR_MAINTENANCE,
+        crate::migrate::MigrateError::Io(_) => ERR_IO,
+    }
+}
+
+/// V2→V3 迁移 · begin。0=完成 / 1=密码错 / 9=只读 / 10=维护态 / 3=IO。
+/// 同步执行（偏差记 LOG）：全部迁移在调用内完成，`out_task_id` 恒写 0；
+/// 单文件失败不整库失败（日志标 failed），断点续做走 [`vault_core_migrate_resume`]。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄；`password` 合法 UTF-8；`out_task_id` 可为 null。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_migrate_begin(
+    handle: *mut Session,
+    password: *const c_char,
+    out_task_id: *mut u32,
+) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    if !out_task_id.is_null() {
+        unsafe { out_task_id.write(0) };
+    }
+    let pwd = match unsafe { cstr(password) } {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    match crate::migrate::begin(session, pwd) {
+        Ok(summary) => {
+            audit_op(handle, "security", &format!("migration.begin {}", summary));
+            OK
+        }
+        Err(crate::migrate::MigrateError::WrongPassword) => ERR_WRONG_PASSWORD,
+        Err(e) => map_mig_err(e),
+    }
+}
+
+/// 迁移状态 JSON（{schema, files[], phases{}, backupPath}）。失败返回 NULL。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_migrate_status(handle: *mut Session) -> *mut c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    let session = unsafe { &*handle };
+    match crate::migrate::status(session) {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 断点续做：与 begin 同体（跳过日志 done 项）。0=完成 / 1=密码错 / 9 / 10 / 3。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄；`password` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_migrate_resume(
+    handle: *mut Session,
+    password: *const c_char,
+) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    let pwd = match unsafe { cstr(password) } {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    match crate::migrate::resume(session, pwd) {
+        Ok(_) => {
+            audit_op(handle, "security", "migration.resume done");
+            OK
+        }
+        Err(e) => map_mig_err(e),
+    }
+}
+
+/// 取消（偏差记 LOG）：同步执行下仅清理 `.mig.tmp` / `.mig.part` 残留并返回 0。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_migrate_cancel(handle: *mut Session) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    match crate::migrate::cancel(session) {
+        Ok(()) => {
+            audit_op(handle, "security", "migration.cancel cleanup");
+            OK
+        }
+        Err(e) => map_mig_err(e),
+    }
 }
 
 #[cfg(test)]
