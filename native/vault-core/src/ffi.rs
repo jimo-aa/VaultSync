@@ -1593,6 +1593,49 @@ pub unsafe extern "C" fn vault_core_p2p_conflict_resolve(
     run().err().unwrap_or(OK)
 }
 
+// ==== P7-10 远程锁定（docs/v2.0/05-01 §4.7）====
+
+/// 远程锁定：向对端投递 kind=2 锁定指令（`peer_id=NULL` = 全部已配对设备）。
+/// 离线对端照常入队（返回 0 且 JSON pending=true）；无配对记录 → 7。
+///
+/// # Safety
+/// `handle` 必须为有效会话句柄；`peer_id` 可为 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_push_lock(
+    handle: *mut Session,
+    peer_id: *const c_char,
+) -> i32 {
+    if handle.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let session = unsafe { &*handle };
+    let pid = if peer_id.is_null() {
+        None
+    } else {
+        match unsafe { cstr(peer_id) } {
+            Ok(s) => Some(s.to_string()),
+            Err(code) => return code,
+        }
+    };
+    match crate::p2p_service::p2p_engine(session) {
+        Ok(engine) => match engine.push_lock(pid.as_deref()) {
+            Ok(v) => {
+                audit_op(handle, "security", "lock.remote.send");
+                let _ = v;
+                OK
+            }
+            Err(msg) => {
+                if msg.contains("not paired") {
+                    ERR_INVALID_ARG
+                } else {
+                    ERR_IO
+                }
+            }
+        },
+        Err(_) => ERR_INTERNAL,
+    }
+}
+
 // ==== P7-3 轮换会话三件套（docs/v2.0/05-01 §3.6）====
 
 /// 轮换会话 · begin。0=完成（无对端）/ 1=密码错（进冷却）/ 9=只读 /

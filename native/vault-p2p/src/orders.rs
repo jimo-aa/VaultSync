@@ -24,6 +24,10 @@ use vault_crypto::{aead_decrypt, aead_encrypt, random_bytes, AES_GCM_NONCE_LEN, 
 pub struct OrderRec {
     /// 队列归属：该指令要投递给的对端 device_id。
     pub peer_id: String,
+    /// 指令种类（P7-10 起只增字段；serde default 保证旧文件可读）：
+    /// 1 = 销毁（缺省）；2 = 远程锁定。
+    #[serde(default = "default_kind")]
+    pub kind: u8,
     /// 指令目标（签名体覆盖字段），必须等于接收端自己的 device_id。
     pub target: String,
     /// 延迟秒数（0 = 收到即执行）。
@@ -36,10 +40,29 @@ pub struct OrderRec {
     pub payload: String,
 }
 
+fn default_kind() -> u8 {
+    1
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ArmedDestroyRec {
+    pub schema: u16,
+    pub target: String,
+    pub delay_ms: u64,
+    pub armed_ms: u64,
+    /// 绝对截止时刻（ms）——不用剩余秒数，防休眠/时钟漂移（docs/v2.0/05-06 §5.2）。
+    pub deadline_ms: u64,
+    pub order_issued_ms: u64,
+    pub nonce: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct OrderData {
     #[serde(default)]
     orders: Vec<OrderRec>,
+    /// 销毁武装持久化（P7-11；serde default 保证旧文件可读）
+    #[serde(default)]
+    armed: Option<ArmedDestroyRec>,
 }
 
 /// 加密落盘的销毁指令队列（append 顺序 = 签发顺序）。
@@ -50,6 +73,16 @@ pub struct OrderStore {
 }
 
 impl OrderStore {
+    /// 武装状态落盘（P7-11）：armed 写入失败 → 调用方拒绝武装（不留纯内存倒计时）。
+    pub fn set_armed(&mut self, armed: Option<ArmedDestroyRec>) -> Result<(), &'static str> {
+        self.d.armed = armed;
+        self.save()
+    }
+
+    pub fn armed(&self) -> Option<ArmedDestroyRec> {
+        self.d.armed.clone()
+    }
+
     pub fn load_or_new(dir: &Path, mk: &[u8; KEY_LEN]) -> Result<Self, &'static str> {
         std::fs::create_dir_all(dir).map_err(|_| "cannot create p2p dir")?;
         let key = *hkdf_sha256_derive(mk, b"p2p-orders");
@@ -143,6 +176,7 @@ mod tests {
 
     fn rec(peer: &str, ts: u64, delay_secs: u64) -> OrderRec {
         OrderRec {
+            kind: 1,
             peer_id: peer.into(),
             target: peer.into(),
             delay_secs,

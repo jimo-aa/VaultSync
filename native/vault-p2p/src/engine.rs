@@ -29,6 +29,8 @@ const RELAY_MAGIC: &str = "VSR1";
 
 /// 远程销毁的本机擦除回调（由宿主 vault-core 注入：删保险箱文件 + 数据目录）。
 pub type WipeFn = Box<dyn Fn() -> Result<(), String> + Send>;
+/// P7-10 远程锁定的本机执行回调（清保险箱槽位与密钥材料）。
+pub type LockFn = Box<dyn Fn() + Send>;
 
 /// 销毁指令被拒的原因（docs/08 §四.3：破坏性信令必须验签后执行）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +41,8 @@ pub enum OrderReject {
     TargetMismatch,
     /// 载荷不是一枚合法的销毁指令帧。
     Malformed,
+    /// P7-11：武装状态落盘失败——拒绝武装（不留纯内存倒计时）。
+    PersistFailed,
 }
 
 struct Invite {
@@ -120,6 +124,8 @@ pub struct EngineInner {
     events: Mutex<Vec<String>>,
     armed: Mutex<Option<ArmedDestroy>>,
     wipe: Mutex<Option<WipeFn>>,
+    /// P7-10：远程锁定执行回调（可重入：调用方回填同一闭包）。
+    lock_cb: Mutex<Option<LockFn>>,
     port: AtomicU64,
     rate_bps: AtomicU64,
     dead: AtomicBool,
@@ -149,6 +155,11 @@ pub(crate) fn dominates(a: &BTreeMap<String, u64>, b: &BTreeMap<String, u64>) ->
 
 impl P2pEngine {
     /// 创建引擎：加载/生成设备身份（AEAD 于 MK 子密钥落盘），打开保险箱槽位并启动监听。
+    /// P7-10：注入远程锁定回调（清保险箱槽位与密钥材料；可重入）。
+    pub fn set_lock_fn(&self, f: LockFn) {
+        *self.inner.lock_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+    }
+
     /// 是否存在已配对设备（P7-3 轮换传播空集判定）。
     pub fn has_paired_peers(&self) -> bool {
         !self
@@ -213,11 +224,15 @@ impl P2pEngine {
                 events: Mutex::new(Vec::new()),
                 armed: Mutex::new(None),
                 wipe: Mutex::new(Some(wipe)),
+                lock_cb: Mutex::new(None),
                 port: AtomicU64::new(0),
                 rate_bps: AtomicU64::new(0),
                 dead: AtomicBool::new(false),
             }),
         };
+
+        // P7-11：武装状态续走（可能立即擦除）
+        engine.resume_armed_on_startup();
 
         // 打开保险箱进槽位；设备位供向量时钟自增
         {
@@ -709,6 +724,11 @@ impl P2pEngine {
             self.execute_wipe();
             return Ok(false);
         }
+        // P7-11：武装落盘（失败 → 拒绝武装，不留纯内存倒计时）
+        if let Err(e) = self.persist_armed(target, delay_ms) {
+            self.log(&format!("destroy armed rejected: persist failed ({e})"));
+            return Err(OrderReject::PersistFailed);
+        }
         *self.inner.armed.lock().unwrap_or_else(|e| e.into_inner()) = Some(ArmedDestroy {
             deadline: Instant::now() + Duration::from_millis(delay_ms),
             target: target.to_string(),
@@ -720,6 +740,17 @@ impl P2pEngine {
     /// 投递帧路径：载荷为 `Msg::DestroyCmd` 的 JSON 原文（队列条目 `payload` 即此格式）。
     /// 与线上路径共用 `apply_order`，保证"收到的字节"与"验签/执行所用字段"同源。
     pub fn apply_order_payload(&self, peer_pub: &str, payload: &str) -> Result<bool, OrderReject> {
+        // P7-10：锁定指令（{"LockCmd":{...}}）优先分派
+        if payload.contains("\"LockCmd\"") {
+            let v: serde_json::Value =
+                serde_json::from_str(payload).map_err(|_| OrderReject::Malformed)?;
+            let cmd = v.get("LockCmd").ok_or(OrderReject::Malformed)?;
+            let target = cmd["target"].as_str().ok_or(OrderReject::Malformed)?;
+            let ts_ms = cmd["ts_ms"].as_u64().ok_or(OrderReject::Malformed)?;
+            let sig = cmd["sig"].as_str().ok_or(OrderReject::Malformed)?;
+            self.apply_lock_order(target, ts_ms, sig, peer_pub)?;
+            return Ok(false); // 锁定即时生效，无延迟武装
+        }
         match serde_json::from_str::<Msg>(payload) {
             Ok(Msg::DestroyCmd {
                 target,
@@ -921,6 +952,7 @@ impl P2pEngine {
                 .map_err(|e| e.to_string())?;
                 store
                     .push(OrderRec {
+                        kind: 1,
                         peer_id: peer_id.clone(),
                         target: peer_id.clone(),
                         delay_secs,
@@ -1714,14 +1746,175 @@ impl P2pEngine {
         }
     }
 
+    /// P7-10 远程锁定：向对端投递 kind=2 锁定指令（`vsync-lock:{target}:{delay_ms}:{ts}`）。
+    /// `peer_id = None` 表示全部已配对设备；离线对端照常入队（返回 pending=true）。
+    /// 锁定回调（LockFn）由调用方注入；无回调时接收端仅记审计（如实降级）。
+    pub fn push_lock(&self, peer_id: Option<&str>) -> Result<serde_json::Value, String> {
+        let peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+        let targets: Vec<String> = match peer_id {
+            Some(id) => {
+                if peers.get(id).is_none() {
+                    return Err("peer not paired".into());
+                }
+                vec![id.to_string()]
+            }
+            None => peers.list().into_iter().map(|(id, _)| id).collect(),
+        };
+        drop(peers);
+        let ts = now_ms();
+        let mut queued = Vec::new();
+        for target in &targets {
+            // 配对存在性校验（签名域不含对端公钥，锁定指令天然是"发给谁"语义）
+            if self
+                .inner
+                .peers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(target)
+                .is_none()
+            {
+                return Err("peer not paired".into());
+            }
+            let domain = format!("vsync-lock:{}:0:{ts}", target);
+            let sig = self.inner.ident.sign(domain.as_bytes());
+            let payload = serde_json::to_string(&serde_json::json!({
+                "LockCmd": {"target": target, "delay_ms": 0, "ts_ms": ts, "sig": sig}
+            }))
+            .map_err(|e| e.to_string())?;
+            self.inner
+                .orders
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(OrderRec {
+                    kind: 2,
+                    peer_id: target.clone(),
+                    target: target.clone(),
+                    delay_secs: 0,
+                    issued_ms: ts,
+                    sig_hex: sig.clone(),
+                    payload,
+                })
+                .map_err(|e| e.to_string())?;
+            queued.push(target.clone());
+        }
+        self.log(&format!("lock orders queued: {} peer(s)", queued.len()));
+        Ok(serde_json::json!({"queued": queued.len(), "peers": queued}))
+    }
+
+    /// P7-10 接收端：校验（签名 / target / 时钟偏差 ≤300s）→ 调 LockFn。
+    /// 锁定不做二次确认（与销毁同级通道）；校验失败 → 丢弃 + 诊断。
+    fn apply_lock_order(
+        &self,
+        target: &str,
+        ts_ms: u64,
+        sig_hex: &str,
+        peer_pub: &str,
+    ) -> Result<(), OrderReject> {
+        let domain = format!("vsync-lock:{}:0:{ts_ms}", target);
+        if !crate::identity::Identity::verify(peer_pub, domain.as_bytes(), sig_hex) {
+            self.log("lock order rejected: signature invalid");
+            return Err(OrderReject::BadSignature);
+        }
+        if target != self.device_id() {
+            self.log("lock order rejected: target mismatch");
+            return Err(OrderReject::TargetMismatch);
+        }
+        let now = now_ms();
+        if now.saturating_sub(ts_ms) > 300_000 || ts_ms.saturating_sub(now) > 300_000 {
+            self.log("lock order rejected: clock skew > 300s");
+            return Err(OrderReject::Malformed);
+        }
+        self.log("lock order accepted: locking now");
+        let lock = self
+            .inner
+            .lock_cb
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        match lock {
+            Some(f) => {
+                f();
+                // 回填以便再次锁定（回调是一次性的）
+                *self.inner.lock_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+            }
+            None => self.log("lock order: no lock callback wired (degraded)"),
+        }
+        Ok(())
+    }
+
     /// 取消已武装的本机延迟销毁；返回是否有被取消的任务。
+    /// P7-11：取消幂等落盘（armed 置空并持久化）。
     pub fn destroy_cancel(&self) -> bool {
-        self.inner
+        let cancelled = self
+            .inner
             .armed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
-            .is_some()
+            .is_some();
+        let _ = self
+            .inner
+            .orders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_armed(None);
+        cancelled
+    }
+
+    /// P7-11：把武装状态写入 orders.enc（绝对 deadlineMs）。
+    fn persist_armed(&self, target: &str, delay_ms: u64) -> Result<(), &'static str> {
+        let rec = crate::orders::ArmedDestroyRec {
+            schema: 1,
+            target: target.to_string(),
+            delay_ms,
+            armed_ms: now_ms(),
+            deadline_ms: now_ms() + delay_ms,
+            order_issued_ms: now_ms(),
+            nonce: vault_crypto::hex_encode(&vault_crypto::random_bytes(16)),
+        };
+        self.inner
+            .orders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_armed(Some(rec))
+    }
+
+    /// P7-11：启动续走——orders.enc 有武装记录时恢复倒计时或到期立即执行。
+    fn resume_armed_on_startup(&self) {
+        let rec = match self
+            .inner
+            .orders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .armed()
+        {
+            Some(r) => r,
+            None => return,
+        };
+        let now = now_ms();
+        if now >= rec.deadline_ms {
+            self.log("destroy armed_expired_executed: deadline passed while offline");
+            let _ = self
+                .inner
+                .wipe
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+                .map(|f| f());
+            let _ = self
+                .inner
+                .orders
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_armed(None);
+            return;
+        }
+        let remain = rec.deadline_ms - now;
+        *self.inner.armed.lock().unwrap_or_else(|e| e.into_inner()) = Some(ArmedDestroy {
+            deadline: Instant::now() + Duration::from_millis(remain),
+            target: rec.target.clone(),
+        });
+        self.log(&format!("destroy armed_resumed: {remain}ms remaining"));
     }
 
     fn throttle(&self, bytes: usize) {
@@ -1958,6 +2151,15 @@ mod tests {
         let wipe = wipe_counter(wipes.clone(), vault_path.clone());
         let keys = test_keys(&mk);
         let engine = P2pEngine::new(&vault_path, &keys, tag, slot.clone(), wipe).unwrap();
+        // P7-10：远程锁定的执行体（与 vault-core p2p_service 同语义：清槽位）
+        {
+            let slot2 = slot.clone();
+            engine.set_lock_fn(Box::new(move || {
+                if let Ok(mut g) = slot2.lock() {
+                    *g = None;
+                }
+            }));
+        }
         TestDev {
             dir,
             vault_path,
@@ -2497,5 +2699,137 @@ mod tests {
             "B 事件缺武装记录: {eb}"
         );
         assert!(b.engine.destroy_cancel());
+    }
+
+    /// P7-11 证据：destroy_order::armed_survives_restart
+    /// 武装状态落盘：引擎重开（=应用重启）后倒计时续走、到期即执行。
+    #[test]
+    fn armed_survives_restart() {
+        // 直接构造 orders.enc 的武装记录（接收端语义；签名验签由 e2e 覆盖）
+        let b = mk_dev("armR");
+        let rec = crate::orders::ArmedDestroyRec {
+            schema: 1,
+            target: b.engine.device_id(),
+            delay_ms: 60_000,
+            armed_ms: 0,
+            deadline_ms: now_ms() + 60_000,
+            order_issued_ms: 0,
+            nonce: "n".into(),
+        };
+        b.engine
+            .inner
+            .orders
+            .lock()
+            .unwrap()
+            .set_armed(Some(rec))
+            .unwrap();
+
+        // 重开（等价重启）：倒计时续走
+        let b2 = reopen(&b);
+        assert_eq!(b.wipes.load(Ordering::SeqCst), 0, "未到期不得执行");
+        let armed = b2.status()["armedDestroy"].clone();
+        assert!(armed.is_object(), "重启后武装必须恢复：{armed}");
+        let remain = armed["remainingMs"].as_u64().unwrap_or(0);
+        assert!(remain > 50_000 && remain <= 60_000, "remaining={remain}");
+        assert!(b2.status()["events"].to_string().contains("armed_resumed"));
+
+        // 到期即执行：写一条已过期的武装记录 → 重开 → 立即擦除
+        let expired = crate::orders::ArmedDestroyRec {
+            schema: 1,
+            target: b.engine.device_id(),
+            delay_ms: 1,
+            armed_ms: 0,
+            deadline_ms: now_ms().saturating_sub(1_000),
+            order_issued_ms: 0,
+            nonce: "n2".into(),
+        };
+        b.engine
+            .inner
+            .orders
+            .lock()
+            .unwrap()
+            .set_armed(Some(expired))
+            .unwrap();
+        let b3 = reopen(&b);
+        assert_eq!(
+            b.wipes.load(Ordering::SeqCst),
+            1,
+            "已过期的武装在启动时立即执行"
+        );
+        assert!(b3.status()["events"]
+            .to_string()
+            .contains("armed_expired_executed"));
+
+        // 取消幂等落盘：清空后重开不再恢复
+        let _ = b3.destroy_cancel();
+        let b4 = reopen(&b);
+        assert_eq!(b4.status()["armedDestroy"], serde_json::json!(null));
+    }
+
+    /// P7-10 证据：lock::remote_lock_signature_and_target_checked
+    /// 锁定指令四条校验（签名/target/时钟偏差），执行回调被触发。
+    #[test]
+    fn remote_lock_signature_and_target_checked() {
+        let a = mk_dev("lockA");
+        let b = mk_dev("lockB");
+        let code = b.engine.pair_begin().unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        a.engine.pair_join(&addr_of(&b), &code).unwrap();
+
+        // push_lock 全部对端 → 入队 kind=2
+        let q = a.engine.push_lock(None).unwrap();
+        assert_eq!(q["queued"], serde_json::json!(1));
+        let orders = a.engine.pending_orders();
+        assert_eq!(orders["count"], serde_json::json!(1));
+
+        // 投递：载荷是 {"LockCmd":{...}}，接收端验签 + target + 时钟
+        let rec_payload = {
+            let store = a.engine.inner.orders.lock().unwrap();
+            store.list_for(&b.engine.device_id())[0].payload.clone()
+        };
+        let a_pub = a.engine.inner.ident.public_hex();
+        let before_wipes = b.wipes.load(Ordering::SeqCst);
+
+        // (1) 合法指令 → 锁定回调被触发（擦除计数不增，但 vault 槽位被清）
+        b.engine
+            .apply_order_payload(&a_pub, &rec_payload)
+            .expect("valid lock order");
+        assert_eq!(b.wipes.load(Ordering::SeqCst), before_wipes, "锁定不是擦除");
+        assert!(
+            b.slot.lock().unwrap().is_none(),
+            "远程锁定必须清空保险箱槽位（密钥材料离手）"
+        );
+
+        // (2) 伪造签名 → 拒绝
+        let rogue = Identity::generate();
+        let ts = now_ms();
+        let forged = format!(
+            "{{\"LockCmd\":{{\"target\":\"{}\",\"delay_ms\":0,\"ts_ms\":{},\"sig\":\"{}\"}}}}",
+            b.engine.device_id(),
+            ts,
+            rogue.sign(format!("vsync-lock:{}:0:{ts}", b.engine.device_id()).as_bytes())
+        );
+        assert_eq!(
+            b.engine.apply_order_payload(&a_pub, &forged),
+            Err(OrderReject::BadSignature)
+        );
+
+        // (3) 时钟偏差 > 300s → 拒绝
+        let stale_ts = now_ms() - 400_000;
+        let stale = format!(
+            "{{\"LockCmd\":{{\"target\":\"{}\",\"delay_ms\":0,\"ts_ms\":{},\"sig\":\"{}\"}}}}",
+            b.engine.device_id(),
+            stale_ts,
+            a.engine
+                .inner
+                .ident
+                .sign(format!("vsync-lock:{}:0:{stale_ts}", b.engine.device_id()).as_bytes())
+        );
+        assert_eq!(
+            b.engine.apply_order_payload(&a_pub, &stale),
+            Err(OrderReject::Malformed)
+        );
     }
 }

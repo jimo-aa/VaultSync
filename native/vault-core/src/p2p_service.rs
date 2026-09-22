@@ -37,7 +37,18 @@ pub(crate) fn p2p_engine(session: &Session) -> Result<Arc<P2pEngine>, CoreError>
         Arc::clone(&session.vault),
         wipe,
     ) {
-        Ok(e) => Arc::new(e),
+        Ok(e) => {
+            // P7-10：远程锁定执行体——清保险箱槽位（密钥材料随 Vault 值零化），
+            // 审计与 P2P 引擎随会话销毁；会话级全量锁归外壳生命周期管理（P9-4）。
+            let slot = Arc::clone(&session.vault);
+            e.set_lock_fn(Box::new(move || {
+                if let Ok(mut g) = slot.lock() {
+                    *g = None;
+                }
+                eprintln!("vsync remote lock executed");
+            }));
+            Arc::new(e)
+        }
         Err(e) => {
             eprintln!(
                 "vsync p2p engine init failed: {e} (vault={:?})",

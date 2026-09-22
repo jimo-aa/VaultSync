@@ -9,6 +9,7 @@
 #![deny(warnings)]
 
 pub mod container;
+pub mod erase;
 pub mod index;
 pub mod vault;
 
