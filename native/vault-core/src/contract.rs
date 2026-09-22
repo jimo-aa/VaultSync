@@ -38,9 +38,17 @@ pub const CAP_LICENSE: u64 = 1 << 19;
 /// 当前引擎能力位（运行期不变项；BIO / SECURE_STORE 在此一并置位，
 /// 由调用方以 `vault_core_bio_bound` 探测运行期可用性）。
 pub fn capability_bits() -> u64 {
-    CAP_EVENTS | CAP_TASKS | CAP_BIO | CAP_SECURE_STORE
-    // 未列出的能力（缩略图 / 迁移 / 轮换会话 / …）尚无实现，不得置位——
-    // 置位即承诺，违反原则 7（证据先行）。
+    CAP_EVENTS
+        | CAP_TASKS
+        | CAP_BIO
+        | CAP_SECURE_STORE
+        // P7 交付（M7 收口置位，docs/v2.0/09）：全部有运行时接口与证据测试支撑；
+        // CAP_THUMBNAIL（bit 18）不置位——编解码归 P9，导出如实返回 13。
+        | crate::contract::CAP_ERASE_CLASS
+        | crate::contract::CAP_ROTATION_SESSION
+        | crate::contract::CAP_MIGRATION
+        | crate::contract::CAP_PQ_HYBRID
+        | crate::contract::CAP_SEARCH_FRAGMENT
 }
 
 // ==== 事件类型（docs/v2.0/02 §6.4，1–24；24–255 保留）====

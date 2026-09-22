@@ -19,7 +19,7 @@ use vault_crypto::kdf::hkdf_sha256_derive;
 use vault_crypto::{random_bytes, random_key, KEY_LEN};
 
 use crate::container::{assemble, chunk_cfg_for, ContainerReader, FileMeta};
-use crate::index::{tokenize, VaultIndex};
+use crate::index::{tokenize, SearchV2Opts, VaultIndex};
 use vault_store::{Namespace, OpenMode, VaultStore};
 
 pub struct Vault {
@@ -463,6 +463,13 @@ impl Vault {
 
     pub fn search(&self, query: &str) -> String {
         self.index.search(query)
+    }
+
+    /// 检索 V2（docs/v2.0/05-02 §4.5，P7-9）：排名打分 + class 标注 + 脱敏片段。
+    /// content 类命中的 spans 为空——片段重算需明文，上层解密后经
+    /// `index::content_snippets` 补齐（诚实边界，引擎侧不解密全文索引）。
+    pub fn search_v2(&self, query: &str, opts: &SearchV2Opts) -> serde_json::Value {
+        self.index.search_v2(query, opts)
     }
 
     pub fn set_tags(&mut self, file_id: u64, tags: Vec<String>) -> Result<(), &'static str> {

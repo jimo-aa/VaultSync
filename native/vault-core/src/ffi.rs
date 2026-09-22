@@ -72,6 +72,9 @@ unsafe fn path_of(p: *const c_char) -> Result<std::path::PathBuf, i32> {
 /// 引擎自检：0 = OK，非 0 = 引擎不可用。
 #[no_mangle]
 pub extern "C" fn vault_core_hello() -> i32 {
+    // P7-8：CAP_PQ_HYBRID 随本引擎永久置位 → 本端接受 suite 2 容器（读门控，
+    // docs/v2.0/11 行 171）。写路径在 T2 前恒写 suite 1（偏差见 LOG 2026-09-22）。
+    vault_vault::container::set_pq_suite_accepted(true);
     if crate::self_check() {
         0
     } else {
@@ -501,6 +504,71 @@ pub unsafe extern "C" fn vault_core_vault_search(
         let json = vault_op(handle, |v, _| Ok(v.search(q)))?;
         let c = CString::new(json).map_err(|_| ERR_INTERNAL)?;
         Ok(c.into_raw())
+    };
+    run().unwrap_or(std::ptr::null_mut())
+}
+
+/// 检索 V2（P7-9，docs/v2.0/01 §六.13）：`vault_core_vault_search_v2(handle, query,
+/// opts_json, out_json)`。opts_json 可为 null（默认 limit=32 / rankVer=1）；载荷
+/// `{"schema":1,"total":N,"rankVer":1,"hits":[…]}`。content 类命中 spans 为空
+/// （片段重算需明文，归外壳按需补齐——诚实边界）。只读会话可用（检索在只读矩阵）。
+///
+/// # Safety
+/// `handle` 有效；`query` / `opts_json` 合法 UTF-8（可 null）；`out_json` 非空，
+/// 成功时写入引擎分配的 CString（用 `vault_core_free_string` 归还）。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_search_v2(
+    handle: *mut Session,
+    query: *const c_char,
+    opts_json: *const c_char,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    if handle.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let run = || -> Result<(), i32> {
+        let q = unsafe { cstr(query) }?;
+        let opts: vault_vault::index::SearchV2Opts = if opts_json.is_null() {
+            Default::default()
+        } else {
+            let raw = unsafe { cstr(opts_json) }?;
+            if raw.trim().is_empty() {
+                Default::default()
+            } else {
+                serde_json::from_str(raw).map_err(|_| ERR_INVALID_ARG)?
+            }
+        };
+        let json = vault_op(handle, |v, _| {
+            serde_json::to_string(&v.search_v2(q, &opts))
+                .map_err(|_| CoreError::Internal("search v2 serialize"))
+        })?;
+        let c = CString::new(json).map_err(|_| ERR_INTERNAL)?;
+        unsafe { out_json.write(c.into_raw()) };
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 擦除强度分级探测（P7-5，docs/v2.0/02 §6.2①）：`vault_core_erase_class_probe(path)`
+/// → JSON `{mediaKind, eraseClass, methodBits, degradations[], secureEraseClaim}`。
+/// 探测失败绝不失败（unknown + crypto_only + 降级说明，原则 7 的如实降级）。
+/// `secureEraseClaim` = 「安全擦除」字样的唯一判据（当前恒 false，TRIM 未接线）。
+///
+/// # Safety
+/// `path` 必须为合法 UTF-8 NUL 结尾 C 字符串指针。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_erase_class_probe(path: *const c_char) -> *mut c_char {
+    let run = || -> Result<*mut c_char, i32> {
+        let p = unsafe { path_of(path) }?;
+        let report = vault_vault::erase::probe(&p);
+        let claim = vault_vault::erase::SECURE_ERASE_CLAIM_ALLOWED(&report);
+        Ok(json_out(serde_json::json!({
+            "mediaKind": report.media_kind,
+            "eraseClass": report.erase_class,
+            "methodBits": report.method_bits,
+            "degradations": report.degradations,
+            "secureEraseClaim": claim,
+        })))
     };
     run().unwrap_or(std::ptr::null_mut())
 }

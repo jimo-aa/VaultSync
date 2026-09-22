@@ -1178,7 +1178,9 @@ fn offset_hint(text: &str, char_off: usize) -> String {
 }
 
 /// 检索 V2 选项（docs/v2.0/05-02 §4.5：排名公式与权重版本化）。
-#[derive(Clone, Debug)]
+/// `#[serde(default)]`：FFI opts_json 缺字段 / 空 JSON 时取默认（limit=32 / rankVer=1）。
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(default)]
 pub struct SearchV2Opts {
     /// top-N，默认 32。
     pub limit: usize,
