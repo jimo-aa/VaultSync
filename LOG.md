@@ -324,3 +324,24 @@
   3. 缩略图真实编解码（需受审图像依赖，归 P9-4/P9-9）、擦除 TRIM 接线、迁移磁盘余量前置检查。
 - **偏差登记（摘要，详见各模块注释）**：resume/migrate 需密码参数（KEK 只能由密码派生）；begin/migrate 同步执行（异步任务化归 P8-1）；journal 按命名空间分文件；审计段描述有界+节流（修 P6 的 O(n) 回归）；轮换传播以「队列投递成功即已投递」过渡（vc 推进矩阵归 P8）。
 - **过程修复的真实缺陷**：审计段描述随段数线性膨胀 → 字节压实每条触发 → append 退化 O(n)（P6-4 回归，P7-2 期间发现并修复）。
+
+## 2026-09-22 P7-8 混合 KEM 灰度 + M7 收口——P7 11/11 全落地，冒烟 167 → 234 断言（v0.8.0）
+
+- **P7-8 落地（T1 会话灰度）**：
+  1. **选型决策（解 R2 阻塞）**：RustCrypto `ml-kem` 0.3（FIPS 203 final，纯 Rust，默认特性全关 + zeroize）。它**尚无独立审计**——这正是 P7-8 此前受阻的原因；处置按 `docs/v2.0/11` §3.1 R2 既定方针收紧使用面：① 仅作信道握手增强（`cipher_suite=2`），协商成功才启用、永不作默认；② ML-KEM 初始化失败一律 fail-open 回落 suite 1 且强制可见（`SecureChannel::pq_note` + 引擎事件日志 + `p2p_status.pqSuite`）；③ 与 X25519 组成双成份混合——任一分量安全即安全。原语封装收敛在 `vault-crypto/src/pq.rs` 单点，后续出现受审实现（如 aws-lc-rs 过 FIPS）可就地替换。rand_core 0.10（ml-kem 依赖）与既有 rand 0.8 并存，互不影响。
+  2. **协议形态**：不改 snow 的 Noise 模式（规避 psk 槽位「建后补值」的时序陷阱）——协商用**握手帧长扩展**：发起端 msg1 尾附 1B 套件号，响应端以「msg2 是否携带封装公钥（1184B）」应答，msg3 尾附密文（1088B）；帧长定长常量由 `noise_msg_lengths_are_stable` 测试钉死（XX = 32/96/64，XXpsk3 = 48/96/64）。**不含 PQ 的帧序列与 v0.7.0 逐字节一致**（旧端零扰动）。协商成功后应用消息在 Noise 之内再套一层 ML-KEM 派生密钥 AEAD：方向分离密钥 `SHA256("vsync-pq-key:{hh}:{i2r|r2i}:{ss}")` + 4B 零‖u64 单调 nonce——数据机密性 = max(经典, 后量子)，握手认证语义不变。
+  3. **身份与能力记忆**：ML-KEM 解封装密钥由 32B 身份种子确定性展开（`vsync-mlkem-d/z:` 双域 → 64B Seed，`DecapsulationKey::from_seed`），不落盘、每次握手重派生；Hello 增 `pq` 声明（认证信道内、不入签名体，同 `port` 信任口径；serde default 兼容旧端）→ `peers.pqCap`（serde default false）实现能力记忆与升级自愈（对端升级后首次 Hello 即翻转记录）。
+  4. **协商矩阵**：新↔新 = suite 2（配对、直连同步、销毁/锁定指令全走混合信道）；旧发起端↔新响应端 = suite 1（帧长嗅探，行为与旧版完全一致）；新发起端↔旧响应端只发生在配对（乐观探测 + 失败自动换裸帧重试一次，事件日志记「peer not pq-aware」）；直连同步按对端记录 pq_cap 提议（旧端记录无该字段 → 不提议，零失败尝试）；中继同步 T1 恒 suite 1（房间映射不到对端记录，偏差见下）。
+  5. **容器侧**（`05-02` §3.3 / `11` 行 171）：读 `cipher_suite=2` 由进程级门控（`container::set_pq_suite_accepted`，`vault_core_hello` 随 CAP_PQ_HYBRID 置位开启）——未置位读 2 → 13（能力）而非 6；写路径本里程碑恒写 1（T2「新写入生效」未启动，见偏差）。
+- **M7 收口**：
+  1. 补齐两个此前只有引擎侧实现的导出：`vault_core_vault_search_v2`（opts_json serde default，只读会话可用）、`vault_core_erase_class_probe`（含 `secureEraseClaim` 唯一判据字段）；`capability_bits()` 置位 CAP_ERASE_CLASS / CAP_ROTATION_SESSION / CAP_MIGRATION / CAP_PQ_HYBRID / CAP_SEARCH_FRAGMENT；**bit 18 CAP_THUMBNAIL 仍不置位**——缩略图编解码归 P9（需受审图像依赖），导出如实返回 13。
+  2. 冒烟 `ffi_check.dart` 167 → **234 断言全 PASS**：轮换会话三件套（错密码 → 1 / 同步执行 task=0 / status JSON / resume 幂等 / 轮换后重解锁）、检索 V2（schema / 命中与片段 / tag class / limit=0 / 未命中 / 非法 opts → 7 / null 句柄 → 7）、擦除分级（mediaKind/eraseClass 域、`secureEraseClaim == false`、null → 空指针）、迁移三件套（错密码 / v3 库幂等空跑 / cancel）、push_lock 入队 + pending_orders（快照不含 kind/载荷，按对端合并）+ push_rotation 确定性负向（无待传播 → 7）、能力位 bit 8–12 置位与 bit 18 保持 0、**双设备真机 PQ 配对 + suite 2 同步 + pqCap/pqSuite 可见性**。
+  3. Dart 侧 `VaultCoreBridge` 全量接线新导出（`VaultCoreBridgeFfi` + `VaultCoreBridgeStub` 双实现，每导出独立 typedef），`flutter analyze` 零问题。
+  4. 全量验证：`cargo test --workspace` 全绿、`cargo clippy --workspace --all-targets` 零告警、`cargo fmt --check` 干净、`flutter build windows --debug` + 冒烟通过。
+- **偏差与诚实边界（v0.8.0 内如实声明）**：
+  1. **T2/T3 未启动**：容器写路径恒写 `cipher_suite=1`（读门控已就位）。判据「未置位时写 1 且写审计」按构造成立——写侧永不产生降级，故当前没有可审计的降级事件；T2 启动写 2 时必须同步补降级审计条目（`docs/v2.0/11` 行 114/171 已登记该边界）。
+  2. 中继同步不参与 PQ 协商（恒 suite 1）：VSR1 房间串映射不到对端记录；P8-5 中继 V2 的接入鉴权落地后随 proto_ver 协商一并解决。
+  3. `ml-kem` 无独立审计：选型理由与使用约束见上；威胁模型 R2 保持开放观察项，出现受审实现即在 `vault-crypto/src/pq.rs` 单点替换。
+  4. 冒烟旧断言「P5 旧审计链文件已改名保留」随 P7-2 语义退役：链键解耦（从属密钥 6）后 MK 轮换不再归档改链，改为断言「轮换后 `audit_verify` ok——链跨 MK 轮换连续」（这正是 P7-2 的直接收益，原断言检查的归档文件在 P7-2 之后不复存在）。
+  5. **修复既有 e2e 抖动根因**：`pair_sync_incremental_conflict_destroy_e2e` 的删除断言与对端应用是并发的（发起端 sync 返回 ≠ 对端已应用删除），此前「全量跑偶发失败」即此竞态；P7-8 握手耗时让它从偶发变必现，故把断言改为 5s 有界等待，并新增 `pq_pairing_suite2_and_delete_sync_e2e` 固化 PQ 端到端证据（配对 → pqCap 登记 → suite 2 同步 → 删除落地 + 应用事件可见）。
+  6. 缩略图真实编解码（P9）、擦除 TRIM 接线（P7-5 诚实降级维持）、迁移磁盘余量前置检查：维持上一条目登记，未变。
