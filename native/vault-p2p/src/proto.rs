@@ -47,6 +47,9 @@ pub enum Msg {
     /// 信道本身已认证加密（Noise XX，`remote_is` 已核对静态密钥），伪造者无法进入信道；
     /// 且该值只影响"往哪拨"，不影响任何执行判定（销毁指令另有签名与 target 核对）。
     /// `#[serde(default)]`：旧端不发该字段 → 0（未知），接收端回退用观测到的源端口。
+    /// `pq`（P7-8 新增，不在签名体内，同 `port` 信任口径）= 本端混合 KEM 能力
+    /// （ML-KEM-768 初始化成功）。对端记入 peers（pqCap）作后续直连同步的协商依据；
+    /// 旧端无此字段 → false，对端即不再向其提议 suite 2。
     Hello {
         device_id: String,
         name: String,
@@ -55,6 +58,8 @@ pub enum Msg {
         sig: String,
         #[serde(default)]
         port: u16,
+        #[serde(default)]
+        pq: bool,
     },
     /// 配对：发起端（已配对设备）请求登记；响应端凭 PSK 信任。
     PairReq,

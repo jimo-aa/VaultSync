@@ -19,6 +19,10 @@ pub struct PeerRec {
     /// 该值只是"尽力"可达地址（局域网直连）；经中继接入时的源地址不写入（见引擎注释）。
     #[serde(default)]
     pub addr: Option<String>,
+    /// P7-8：对端混合 KEM 能力（由其 Hello `pq` 声明，经信道内认证后记录）。
+    /// `#[serde(default)]`：P7-8 之前的记录视为 false——对旧端永不提议 suite 2。
+    #[serde(default)]
+    pub pq_cap: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -125,6 +129,7 @@ mod tests {
                 paired_ms: 1,
                 counter: 0,
                 addr: None,
+                pq_cap: false,
             },
         )
         .unwrap();
@@ -146,6 +151,7 @@ mod tests {
             paired_ms: 1,
             counter: 0,
             addr: None,
+            pq_cap: false,
         };
         let mut st = PeerStore::load_or_new(dir.path(), &mk).unwrap();
         st.upsert("vd-a", rec("A", 'a')).unwrap();
@@ -179,12 +185,17 @@ mod tests {
                 .unwrap();
         assert!(rec.addr.is_none());
         assert_eq!(rec.paired_ms, 7);
+        // P7-8：无 pqCap 字段 → false（对旧端永不提议 suite 2）
+        assert!(!rec.pq_cap);
         // 反向：带 addr 的也有序化/反序列化一致
         let mut rec2 = rec.clone();
         rec2.addr = Some("10.0.0.5:41000".into());
+        rec2.pq_cap = true;
         let s = serde_json::to_string(&rec2).unwrap();
         assert!(s.contains("\"addr\":\"10.0.0.5:41000\""));
+        assert!(s.contains("\"pq_cap\":true"));
         assert_eq!(serde_json::from_str::<PeerRec>(&s).unwrap().addr, rec2.addr);
+        assert!(serde_json::from_str::<PeerRec>(&s).unwrap().pq_cap);
     }
 
     #[test]
@@ -204,6 +215,7 @@ mod tests {
                 paired_ms: 1,
                 counter: 0,
                 addr: None,
+                pq_cap: false,
             },
         )
         .unwrap();

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, Seek, Write as IoWrite};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -132,6 +132,8 @@ pub struct EngineInner {
     lock_cb: Mutex<Option<LockFn>>,
     port: AtomicU64,
     rate_bps: AtomicU64,
+    /// P7-8：最近一次成功握手的 cipher_suite（0 = 尚未握手 / 1 / 2），status 暴露。
+    last_suite: AtomicU8,
     dead: AtomicBool,
 }
 
@@ -232,6 +234,7 @@ impl P2pEngine {
                 lock_cb: Mutex::new(None),
                 port: AtomicU64::new(0),
                 rate_bps: AtomicU64::new(0),
+                last_suite: AtomicU8::new(0),
                 dead: AtomicBool::new(false),
             }),
         };
@@ -291,6 +294,49 @@ impl P2pEngine {
         }
     }
 
+    /// P7-8：握手成功后统一记账——套件号入 status、降级原因入事件日志（强制可见）。
+    fn note_channel(&self, ch: &SecureChannel, context: &str) {
+        self.inner
+            .last_suite
+            .store(ch.cipher_suite(), Ordering::SeqCst);
+        match (ch.cipher_suite(), ch.pq_note()) {
+            (2, _) => self.log(&format!("{context}: cipher_suite=2 (hybrid pq)")),
+            (1, Some(note)) if note != "pq not offered" => {
+                self.log(&format!("{context}: cipher_suite=1 ({note})"))
+            }
+            _ => self.log(&format!("{context}: cipher_suite=1")),
+        }
+    }
+
+    /// 拨号 + 握手（配对路径用：同一地址可重拨重试）。返回流与信道供后续业务收发。
+    fn dial_handshake(
+        addr: &str,
+        ident: &Identity,
+        psk: Option<&[u8; 32]>,
+        offer_pq: bool,
+    ) -> Result<(TcpStream, SecureChannel), String> {
+        let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .map_err(|e| e.to_string())?;
+        let ch = SecureChannel::handshake(&mut stream, Role::Initiator, ident, psk, offer_pq)
+            .map_err(|e| e.to_string())?;
+        Ok((stream, ch))
+    }
+
+    /// P7-8：直连地址是否允许提议 suite 2——仅当该地址命中某已配对记录
+    /// 且其 Hello 曾声明 pq（对端升级后首次连接即自动 learns，见 `hello`）。
+    /// 中继房间与地址无关，一律不提议（T1 灰度范围，偏差见 LOG）。
+    fn pq_offer_for_addr(&self, addr: &str) -> bool {
+        self.inner
+            .peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .list()
+            .iter()
+            .any(|(_, r)| r.addr.as_deref() == Some(addr) && r.pq_cap)
+    }
+
     /// 生成一次性邀请码（10 分钟有效）。code 与本机指纹返回给 UI，双方核对指纹防 MITM。
     pub fn pair_begin(&self) -> Result<serde_json::Value, &'static str> {
         let code = hex_encode(&random_bytes(16));
@@ -308,16 +354,28 @@ impl P2pEngine {
 
     /// 主动连接新设备完成配对：PSK 握手证明持有邀请码，握手哈希双向签名绑定身份。
     /// 配对成功同时登记对端监听地址（本次拨出的 `addr` 即可回拨地址）。
+    ///
+    /// P7-8：配对是唯一「对端能力未知」的乐观探测点——先试 suite 2；对端若是旧版
+    /// （不认识扩展帧）其握手侧报错断连，此时换裸帧重试一次（降级在事件日志可见）。
+    /// 对端能力随 Hello 记入 peers.pq_cap，之后的直连同步直接按记录协商，不再有失败尝试。
     pub fn pair_join(&self, addr: &str, code: &str) -> Result<serde_json::Value, String> {
         let psk = psk_from_code(code);
-        let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(30)))
-            .map_err(|e| e.to_string())?;
-        let mut ch =
-            SecureChannel::handshake(&mut stream, Role::Initiator, &self.inner.ident, Some(&psk))
-                .map_err(|e| e.to_string())?;
-        let (peer_id, peer_name, peer_pub, _peer_port) = self.hello(&mut ch, &mut stream)?;
+        let (mut stream, mut ch) =
+            match Self::dial_handshake(addr, &self.inner.ident, Some(&psk), true) {
+                Ok((s, ch)) => {
+                    self.note_channel(&ch, "pairing");
+                    (s, ch)
+                }
+                Err(e) => {
+                    let (s, ch) = Self::dial_handshake(addr, &self.inner.ident, Some(&psk), false)
+                        .map_err(|e2| format!("{e}; pq fallback also failed: {e2}"))?;
+                    self.log("pairing: peer not pq-aware; downgraded to suite 1");
+                    self.note_channel(&ch, "pairing");
+                    (s, ch)
+                }
+            };
+        let (peer_id, peer_name, peer_pub, _peer_port, peer_pq) =
+            self.hello(&mut ch, &mut stream)?;
         send_json(&mut ch, &mut stream, &Msg::PairReq).map_err(|e| e.to_string())?;
         let resp: Msg = recv_json(&mut ch, &mut stream).map_err(|e| e.to_string())?;
         match resp {
@@ -337,6 +395,7 @@ impl P2pEngine {
                     paired_ms: now_ms(),
                     counter: 0,
                     addr: Some(addr.to_string()),
+                    pq_cap: peer_pq,
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -356,15 +415,19 @@ impl P2pEngine {
     }
 
     /// Hello 交换 + 身份核验：签名覆盖 hh‖x25519；信道静态密钥 = 声明的 X25519 公钥；
-    /// device_id 派生自声明的 Ed25519 公钥。返回值末位为对端声明的监听端口（0 = 旧端未声明）。
+    /// device_id 派生自声明的 Ed25519 公钥。返回值末两位为对端声明的监听端口
+    /// （0 = 旧端未声明）与混合 KEM 能力（false = 旧端或初始化失败）。
+    /// 对端 pq 声明经认证信道到达后即回写 peers.pq_cap（对端升级后的自愈点）。
     fn hello<S: std::io::Read + std::io::Write>(
         &self,
         ch: &mut SecureChannel,
         stream: &mut S,
-    ) -> Result<(String, String, String, u16), &'static str> {
+    ) -> Result<(String, String, String, u16, bool), &'static str> {
         let hh = *ch.handshake_hash();
         let x25519_hex = hex_encode(&self.inner.ident.x25519_pub());
         let sig = self.inner.ident.sign(&hello_sign_body(&hh, &x25519_hex));
+        // 本端 pq 能力现算（每次握手 ~0.1ms 级派生，不缓存，fail-open 天然新鲜）
+        let pq_local = vault_crypto::pq::mlkem768_sk_from_seed(&self.inner.ident.seed()).is_some();
         send_json(
             ch,
             stream,
@@ -375,10 +438,11 @@ impl P2pEngine {
                 x25519_hex,
                 sig,
                 port: self.port(),
+                pq: pq_local,
             },
         )?;
         let resp: Msg = recv_json(ch, stream)?;
-        let (device_id, name, pub_hex, x25519_hex, sig, port) = match resp {
+        let (device_id, name, pub_hex, x25519_hex, sig, port, pq_peer) = match resp {
             Msg::Hello {
                 device_id,
                 name,
@@ -386,7 +450,8 @@ impl P2pEngine {
                 x25519_hex,
                 sig,
                 port,
-            } => (device_id, name, pub_hex, x25519_hex, sig, port),
+                pq,
+            } => (device_id, name, pub_hex, x25519_hex, sig, port, pq),
             Msg::Error { msg } => return Err(leak_str(&msg)),
             _ => return Err("expected hello"),
         };
@@ -399,7 +464,18 @@ impl P2pEngine {
         if Identity::device_id_of(&pub_hex).as_deref() != Some(device_id.as_str()) {
             return Err("device id mismatch");
         }
-        Ok((device_id, name, pub_hex, port))
+        // 能力自愈：对端升级（false→true）或能力丢失（true→false）都如实回写。
+        {
+            let mut peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, rec)) = peers.by_pub(&pub_hex) {
+                if rec.pq_cap != pq_peer {
+                    let mut updated = rec;
+                    updated.pq_cap = pq_peer;
+                    let _ = peers.upsert(&device_id, updated);
+                }
+            }
+        }
+        Ok((device_id, name, pub_hex, port, pq_peer))
     }
 
     fn listener_loop(&self, listener: TcpListener) {
@@ -458,6 +534,7 @@ impl P2pEngine {
             Role::Responder,
             &self.inner.ident,
             pending_psk.as_ref(),
+            true,
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -465,17 +542,19 @@ impl P2pEngine {
                 return;
             }
         };
+        self.note_channel(&ch, "incoming");
         if is_pairing {
             // 配对成功即消费邀请码（一次性）
             *self.inner.invite.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
-        let (peer_id, peer_name, peer_pub, peer_port) = match self.hello(&mut ch, &mut stream) {
-            Ok(h) => h,
-            Err(e) => {
-                self.log(&format!("hello failed: {e}"));
-                return;
-            }
-        };
+        let (peer_id, peer_name, peer_pub, peer_port, peer_pq) =
+            match self.hello(&mut ch, &mut stream) {
+                Ok(h) => h,
+                Err(e) => {
+                    self.log(&format!("hello failed: {e}"));
+                    return;
+                }
+            };
         if is_pairing {
             let mut peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
             // 本次观测不到可回拨地址时，保留旧记录里的地址（重新配对不该丢掉已知地址）
@@ -489,6 +568,7 @@ impl P2pEngine {
                     paired_ms: now_ms(),
                     counter: 0,
                     addr,
+                    pq_cap: peer_pq,
                 },
             );
             self.log(&format!("paired with {peer_id} ({peer_name})"));
@@ -1021,18 +1101,23 @@ impl P2pEngine {
         n
     }
 
-    /// 发起一次增量同步（直连地址）。
+    /// 发起一次增量同步（直连地址）。P7-8：按地址命中的对端记录提议 suite 2。
     pub fn sync_with(&self, addr: &str) -> Result<serde_json::Value, String> {
-        self.run_sync(move || TcpStream::connect(addr).map_err(|e| e.to_string()))
+        let offer = self.pq_offer_for_addr(addr);
+        self.run_sync(
+            move || TcpStream::connect(addr).map_err(|e| e.to_string()),
+            offer,
+        )
     }
 
     /// 经中继同步：先注册房间令牌，中继对接同房间两端后照常 E2E 握手（docs/08）。
+    /// P7-8 偏差（T1 灰度）：房间映射不到对端记录，恒以 suite 1 握手（见 LOG）。
     pub fn sync_via_relay(
         &self,
         relay_addr: &str,
         room: &str,
     ) -> Result<serde_json::Value, String> {
-        self.run_sync(move || Self::dial_relay(relay_addr, room))
+        self.run_sync(move || Self::dial_relay(relay_addr, room), false)
     }
 
     /// 响应端经中继接入：注册房间后进入既有连接处理流程（握手/核验/同步/销毁）。
@@ -1061,7 +1146,7 @@ impl P2pEngine {
         Ok(s)
     }
 
-    fn run_sync<F>(&self, connect: F) -> Result<serde_json::Value, String>
+    fn run_sync<F>(&self, connect: F, offer_pq: bool) -> Result<serde_json::Value, String>
     where
         F: FnOnce() -> Result<TcpStream, String>,
     {
@@ -1072,10 +1157,16 @@ impl P2pEngine {
         stream
             .set_read_timeout(Some(Duration::from_secs(120)))
             .map_err(|e| e.to_string())?;
-        let mut ch =
-            SecureChannel::handshake(&mut stream, Role::Initiator, &self.inner.ident, None)
-                .map_err(|e| e.to_string())?;
-        let (peer_id, _peer_name, peer_pub, _peer_port) = self
+        let mut ch = SecureChannel::handshake(
+            &mut stream,
+            Role::Initiator,
+            &self.inner.ident,
+            None,
+            offer_pq,
+        )
+        .map_err(|e| e.to_string())?;
+        self.note_channel(&ch, "sync");
+        let (peer_id, _peer_name, peer_pub, _peer_port, _peer_pq) = self
             .hello(&mut ch, &mut stream)
             .map_err(|e| e.to_string())?;
         let registered = self
@@ -1717,10 +1808,16 @@ impl P2pEngine {
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .map_err(|e| e.to_string())?;
-        let mut ch =
-            SecureChannel::handshake(&mut stream, Role::Initiator, &self.inner.ident, None)
-                .map_err(|e| e.to_string())?;
-        let (_pid, _pn, ppub, _port) = self
+        let mut ch = SecureChannel::handshake(
+            &mut stream,
+            Role::Initiator,
+            &self.inner.ident,
+            None,
+            self.pq_offer_for_addr(addr),
+        )
+        .map_err(|e| e.to_string())?;
+        self.note_channel(&ch, "destroy");
+        let (_pid, _pn, ppub, _port, _peer_pq) = self
             .hello(&mut ch, &mut stream)
             .map_err(|e| e.to_string())?;
         let registered = self
@@ -2074,11 +2171,14 @@ impl P2pEngine {
             "fingerprint": self.fingerprint(),
             "port": self.port(),
             "name": self.inner.device_name,
+            // P7-8：最近一次握手协商结果（0 尚未握手 / 1 经典 / 2 混合 KEM），强制可见
+            "pqSuite": self.inner.last_suite.load(Ordering::SeqCst),
             "peers": peers.list().iter().map(|(id, p)| serde_json::json!({
                 "deviceId": id, "name": p.name,
                 "fingerprint": crate::identity::Identity::fingerprint_of(&p.pub_hex),
                 // 可空：从未观测到/未手填过地址时为 null（UI 据此提示手填，见 remember_peer_addr）
                 "addr": p.addr,
+                "pqCap": p.pq_cap,
             })).collect::<Vec<_>>(),
             "armedDestroy": armed.as_ref().map(|a| serde_json::json!({
                 "target": a.target,
@@ -2331,6 +2431,7 @@ mod tests {
                     paired_ms: 1,
                     counter: 0,
                     addr: None,
+                    pq_cap: false,
                 },
             )
             .unwrap();
@@ -2370,6 +2471,65 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         cond()
+    }
+
+    /// P7-8 端到端证据：配对与同步全程协商 suite 2（hybrid PQ），能力经 Hello 自愈登记，
+    /// 删除同步最终在对端落地（对端应用与发起端返回是并发的，断言须有界等待——
+    /// 这也是历史上「全量跑偶发失败」抖动的根因：发起端返回不等于对端已应用）。
+    #[test]
+    fn pq_pairing_suite2_and_delete_sync_e2e() {
+        let a = mk_dev("pqA");
+        let b = mk_dev("pqB");
+        let invite = b.engine.pair_begin().unwrap();
+        let code = invite["code"].as_str().unwrap().to_string();
+        assert!(
+            a.engine.pair_join(&addr_of(&b), &code).is_ok(),
+            "双新端配对必须成功"
+        );
+        // 配对记录：对端能力已登记（Hello pq → pqCap），最近握手套件 = 2
+        let st = b.engine.status();
+        assert_eq!(st["pqSuite"], serde_json::json!(2), "pqSuite 必须可见");
+        assert_eq!(
+            st["peers"][0]["pqCap"],
+            serde_json::json!(true),
+            "对端 PQ 能力必须已登记"
+        );
+
+        // A 推送 → B 拉取（全程 suite 2 信道）
+        let d1 = b"pq delete flow payload".repeat(2000);
+        let f1 = import(&a, "pqfile.txt", &d1);
+        let s1 = a.engine.sync_with(&addr_of(&b)).unwrap();
+        assert_eq!(s1["pushed"].as_array().unwrap().len(), 1);
+
+        // A 删除 → 同步 → B 最终必须应用（保护窗口内留加密副本，文件本体消失）
+        {
+            let mut slot = a.slot.lock().unwrap();
+            slot.as_mut().unwrap().delete_file(f1, false).unwrap();
+        }
+        let s2 = a.engine.sync_with(&addr_of(&b)).unwrap();
+        assert_eq!(s2["deleted"].as_array().unwrap().len(), 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut gone = false;
+        while std::time::Instant::now() < deadline {
+            let holds = {
+                let slot = b.slot.lock().unwrap();
+                !slot.as_ref().unwrap().has_file(f1)
+            };
+            if holds {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(gone, "5s 内 B 必须应用对端删除");
+        let evs = b.engine.status()["events"].clone();
+        assert!(
+            evs.as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e.as_str().unwrap_or("").contains("responder delete")),
+            "B 侧必须留下删除应用事件: {evs}"
+        );
     }
 
     #[test]
@@ -2428,12 +2588,21 @@ mod tests {
         }
         let s4 = a.engine.sync_with(&addr_of(&b)).unwrap();
         assert_eq!(s4["deleted"].as_array().unwrap().len(), 1);
-        println!("B events: {:?}", b.engine.status()["events"]);
-        println!("A events: {:?}", a.engine.status()["events"]);
-        assert!(!{
-            let slot = b.slot.lock().unwrap();
-            slot.as_ref().unwrap().has_file(f3)
-        });
+        // 对端应用与发起端返回并发：断言必须有界等待（发起端返回 ≠ 对端已应用）
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut gone = false;
+        while std::time::Instant::now() < deadline {
+            let holds = {
+                let slot = b.slot.lock().unwrap();
+                !slot.as_ref().unwrap().has_file(f3)
+            };
+            if holds {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(gone, "5s 内 B 必须应用对端删除");
 
         // 冲突端到端说明：引擎当前无"原地编辑"操作（仅导入/删除/重命名），同 id 双端
         // 并发分叉在真实操作序列中暂不可达；分叉判定（dominates）与冲突副本/覆盖接收
