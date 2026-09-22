@@ -15,6 +15,7 @@
 mod contract;
 mod ffi;
 mod keystore;
+mod migrate;
 mod p2p_service;
 mod platform_store;
 pub mod rotation;
