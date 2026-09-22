@@ -1030,6 +1030,304 @@ pub fn content_tokens(text: &str) -> Vec<String> {
     tokenize(text)
 }
 
+// ==== P7-9 检索 V2（docs/v2.0/05-02 §4.5）====
+
+/// 文本提取上限：单文件 64 MiB，超出即 `truncated=true`（诚实标记，不静默截断）。
+pub const EXTRACT_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+/// 命中窗口前后各 32 字符。
+pub const SNIPPET_CONTEXT_CHARS: usize = 32;
+/// 每条命中最多 3 段。
+pub const MAX_SNIPPETS: usize = 3;
+/// 检索 V2 载荷 schema 版本。
+pub const SEARCH_V2_SCHEMA: u32 = 1;
+/// 默认返回 top-N（docs/05-02 §4.5：位置只对 top-N ≤ 32 重算）。
+pub const SEARCH_V2_LIMIT: usize = 32;
+
+/// 高熵判定（脱敏阈值）：长度 ≥ 32 且 不同字符数/长度 > 0.6。
+/// 设计口径「字符集熵高于阈值」的实现近似，见 docs/v2.0/05-02 §4.5。
+pub fn is_high_entropy(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 32 {
+        return false;
+    }
+    let mut distinct: Vec<char> = chars.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    distinct.len() as f64 / chars.len() as f64 > 0.6
+}
+
+/// 提取截断标记：`truncate_marker(len) -> (extracted_len, truncated)`。
+/// len ≤ 64 MiB 原样返回；超出返回 (64 MiB, true)。
+pub fn truncate_marker(total_len: u64) -> (u64, bool) {
+    if total_len <= EXTRACT_LIMIT_BYTES {
+        (total_len, false)
+    } else {
+        (EXTRACT_LIMIT_BYTES, true)
+    }
+}
+
+/// 脱敏片段（docs/v2.0/05-02 §4.5）：`display` 中命中词以 «» 标注；
+/// 高熵命中整段替换为 "•••" 且 `scan=true`（「此处有命中但不展示」）；
+/// `offset_hint` = "第 {行} 段 · 字符 {偏移}"（字符按 Unicode 标量计）。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Span {
+    pub display: String,
+    pub offset_hint: String,
+    pub scan: bool,
+}
+
+/// 内容片段重算：`content_snippets(file_plain, query_tokens) -> Vec<Span>` 纯函数。
+///
+/// 诚实边界：倒排索引只存令牌 HMAC、不存位置（docs/v2.0/05-02 §4.5），内容片段
+/// 需要**明文**。本函数供上层（FFI/编排层）解密容器取出明文后调用；引擎层的
+/// `search_v2` 本身不触碰容器（本任务不做容器解密，content 类命中的 spans 由
+/// 上层用本函数补齐）。
+/// 合并后的片段：窗口起止（字符索引）+ 窗口内命中列表。
+type MergedSpan = (usize, usize, Vec<(usize, usize, String)>);
+
+pub fn content_snippets(file_plain: &str, query_tokens: &[String]) -> Vec<Span> {
+    if file_plain.is_empty() || query_tokens.is_empty() {
+        return Vec::new();
+    }
+    let lower = file_plain.to_lowercase();
+    // 命中区间（字符索引）：(start, end, matched_text)
+    let mut hits: Vec<(usize, usize, String)> = Vec::new();
+    for tok in query_tokens {
+        let t = tok.trim().to_lowercase();
+        if t.chars().count() < 2 {
+            continue; // 与 tokenize 的 ≥2 字符口径一致
+        }
+        let mut from = 0usize;
+        while let Some(rel) = lower[from..].find(&t) {
+            let b0 = from + rel;
+            let b1 = b0 + t.len();
+            let start = lower[..b0].chars().count();
+            let end = lower[..b1].chars().count();
+            hits.push((
+                start,
+                end,
+                file_plain.chars().skip(start).take(end - start).collect(),
+            ));
+            from = b1;
+        }
+    }
+    if hits.is_empty() {
+        return Vec::new();
+    }
+    hits.sort_by_key(|h| h.0);
+    // 合并窗口重叠的命中为同一段（窗口 ±32 字符）
+    let total_chars = file_plain.chars().count();
+    let mut merged: Vec<MergedSpan> = Vec::new();
+    for (s, e, m) in hits {
+        let (ws, we) = (
+            s.saturating_sub(SNIPPET_CONTEXT_CHARS),
+            (e + SNIPPET_CONTEXT_CHARS).min(total_chars),
+        );
+        match merged.last_mut() {
+            Some(last) if ws <= last.1 => {
+                last.1 = we.max(last.1);
+                last.2.push((s, e, m));
+            }
+            _ => merged.push((ws, we, vec![(s, e, m)])),
+        }
+        if merged.len() >= MAX_SNIPPETS {
+            break;
+        }
+    }
+    merged
+        .into_iter()
+        .take(MAX_SNIPPETS)
+        .map(|(ws, we, inner)| {
+            let any_high_entropy = inner.iter().any(|(_, _, m)| is_high_entropy(m));
+            if any_high_entropy {
+                // 高熵命中：整段脱敏，不展示原文
+                return Span {
+                    display: "•••".to_string(),
+                    offset_hint: offset_hint(file_plain, inner[0].0),
+                    scan: true,
+                };
+            }
+            // 窗口内标注全部命中词 «»
+            let chars: Vec<char> = file_plain.chars().collect();
+            let mut display = String::new();
+            let mut cur = ws;
+            for (s, e, _) in &inner {
+                if *s < cur {
+                    continue; // 已被上一段覆盖
+                }
+                display.extend(chars[cur..*s].iter());
+                display.push('«');
+                display.extend(chars[*s..*e].iter());
+                display.push('»');
+                cur = *e;
+            }
+            display.extend(chars[cur..we].iter());
+            Span {
+                display,
+                offset_hint: offset_hint(file_plain, inner[0].0),
+                scan: false,
+            }
+        })
+        .collect()
+}
+
+/// 段号（换行计）+ 字符偏移提示，与 docs/v2.0/05-02 §4.5 示例同形。
+fn offset_hint(text: &str, char_off: usize) -> String {
+    let line = text.chars().take(char_off).filter(|c| *c == '\n').count() + 1;
+    format!("第 {line} 段 · 字符 {char_off}")
+}
+
+/// 检索 V2 选项（docs/v2.0/05-02 §4.5：排名公式与权重版本化）。
+#[derive(Clone, Debug)]
+pub struct SearchV2Opts {
+    /// top-N，默认 32。
+    pub limit: usize,
+    /// 排名版本号（rankVer）。
+    pub rank_ver: u32,
+}
+
+impl Default for SearchV2Opts {
+    fn default() -> Self {
+        Self {
+            limit: SEARCH_V2_LIMIT,
+            rank_ver: 1,
+        }
+    }
+}
+
+/// 时间衰减：近 30 天 1.0，之后线性降至 0.9（约 270 天到底后钳制）。
+fn time_decay(now_ms: u64, modified_ms: u64) -> f64 {
+    let day_ms = 86_400_000u64;
+    if now_ms <= modified_ms {
+        return 1.0;
+    }
+    let age_days = (now_ms - modified_ms) / day_ms;
+    if age_days <= 30 {
+        return 1.0;
+    }
+    (1.0 - 0.1 * ((age_days - 30) as f64 / 270.0)).max(0.9)
+}
+
+impl VaultIndex {
+    /// 检索 V2（docs/v2.0/05-02 §4.5）：排名打分 + class 标注 + 脱敏片段。
+    ///
+    /// 载荷 `{"schema":1,"total":N,"rankVer":1,"hits":[{hitId,fileId,name,class,
+    /// "score","modifiedMs","spans":[{display,offsetHint,scan}]}]}`。
+    ///
+    /// 诚实边界：
+    /// - **class 权重**：name=1.0 / tag=0.8 / content=1.0×idf；`idf = ln(1 + N/df)`。
+    ///   `score = (0.6×w_name/tag + 0.4×w_content) × time_decay`。
+    /// - **content 类命中的 spans 为空数组**：倒排只存令牌 HMAC，片段重算需要明文，
+    ///   上层解密后调 `content_snippets` 补齐（见该函数注释）。name/tag 类命中在本层
+    ///   直接产出脱敏片段（元数据本就在索引内）。
+    pub fn search_v2(&self, query: &str, opts: &SearchV2Opts) -> serde_json::Value {
+        let now = now_ms();
+        let query_tokens = tokenize(query);
+        let n_files = self.d.files.len().max(1) as f64;
+        let ln_base = (1.0 + n_files).ln().max(1.0);
+
+        // query_token → 命中文件集合（倒排 + 条目持久化内容采样）与 df
+        let mut per_file: HashMap<u64, (f64, f64, u8, Vec<String>)> = HashMap::new(); // id → (w_nt, w_c, class_prio, toks)
+        for t in &query_tokens {
+            let hex = self.hmac_token(t);
+            // 命中候选：倒排表 ∪ 条目 tokens_extra（内容采样只存 HMAC，随条目持久化；
+            // 内存中新登记的 extras 未经倒排重建，也必须可检——两路取并）。
+            let mut ids: BTreeSet<u64> = self
+                .d
+                .search
+                .get(&hex)
+                .map(|s| s.iter().copied().collect())
+                .unwrap_or_default();
+            for (&id, f) in &self.d.files {
+                if f.tokens_extra.iter().any(|h| h == &hex) {
+                    ids.insert(id);
+                }
+            }
+            let df = ids.len().max(1) as f64;
+            let idf = (1.0 + n_files / df).ln() / ln_base;
+            for &id in ids.iter() {
+                let Some(f) = self.d.files.get(&id) else {
+                    continue;
+                };
+                let name_toks = tokenize(&f.name);
+                let tag_toks: Vec<String> = f.tags.iter().flat_map(|tg| tokenize(tg)).collect();
+                let is_name = name_toks.iter().any(|x| x == t);
+                let is_tag = tag_toks.iter().any(|x| x == t);
+                let entry = per_file.entry(id).or_insert((0.0, 0.0, 0, Vec::new()));
+                if is_name || is_tag {
+                    entry.0 += if is_name { 1.0 } else { 0.8 };
+                    if is_name {
+                        entry.2 = 2;
+                    } else if entry.2 < 2 {
+                        entry.2 = 1;
+                    }
+                } else {
+                    entry.1 += idf;
+                }
+                entry.3.push(t.clone());
+            }
+        }
+
+        let mut hits: Vec<(u64, f64, u8, Vec<String>)> = per_file
+            .into_iter()
+            .map(|(id, (mut w_nt, w_c, class, toks))| {
+                w_nt = w_nt.min(1.0);
+                let w_c = (w_c / ln_base).min(1.0);
+                let decay = {
+                    let m = self.d.files.get(&id).map(|f| f.modified_ms).unwrap_or(0);
+                    time_decay(now, m)
+                };
+                let score = (0.6 * w_nt + 0.4 * w_c) * decay;
+                (id, score, class, toks)
+            })
+            .filter(|(_, s, _, _)| *s > 0.0)
+            .collect();
+        hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let total = hits.len();
+        let hits_json: Vec<serde_json::Value> = hits
+            .into_iter()
+            .take(opts.limit)
+            .enumerate()
+            .map(|(hit_id, (id, score, class, toks))| {
+                let f = &self.d.files[&id];
+                // name/tag 命中在索引层即可产出片段；content 命中留给上层补
+                let spans: Vec<serde_json::Value> = match class {
+                    2 => content_snippets(&f.name, &toks)
+                        .iter()
+                        .map(span_json)
+                        .collect(),
+                    1 => f
+                        .tags
+                        .iter()
+                        .filter_map(|tg| content_snippets(tg, &toks).into_iter().next())
+                        .map(|s| span_json(&s))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                serde_json::json!({
+                    "hitId": hit_id,
+                    "fileId": id,
+                    "name": f.name,
+                    "class": match class { 2 => "name", 1 => "tag", _ => "content" },
+                    "score": (score * 1000.0).round() / 1000.0,
+                    "modifiedMs": f.modified_ms,
+                    "spans": spans,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "schema": SEARCH_V2_SCHEMA,
+            "total": total,
+            "rankVer": opts.rank_ver,
+            "hits": hits_json,
+        })
+    }
+}
+
+fn span_json(s: &Span) -> serde_json::Value {
+    serde_json::json!({"display": s.display, "offsetHint": s.offset_hint, "scan": s.scan})
+}
+
 // ==== VSIX v3 桥接（docs/v2.0/05-02 §3.2；P6-3）====
 
 /// v3 元数据条目（key = NS_META）。
@@ -1456,5 +1754,119 @@ mod tests {
         assert!(ix.consume_share(sh, "tok").is_ok());
         ix.clear_shares();
         assert_eq!(ix.consume_share(sh, "tok").unwrap_err(), "share not found");
+    }
+}
+
+/// P7-9 检索 V2 证据测试（docs/v2.0/05-02 §4.5 §五 证据）。
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod search_v2 {
+    use super::*;
+
+    fn key() -> [u8; KEY_LEN] {
+        vault_crypto::random_key()
+    }
+
+    #[test]
+    fn snippet_is_redacted() {
+        // 长度 ≥ 32 且不同字符数/长度 > 0.6 的高熵命中 → 整段 ••• + scan:true
+        let secret = "aZ3kQ9wE5rT7yU1iO4pL6jH8gF2dS0xCv".to_string(); // 33 个互异字符
+        assert_eq!(secret.chars().count(), 33);
+        assert!(is_high_entropy(&secret));
+        let plain = format!("前文 {secret} 后文说明");
+        let spans = content_snippets(&plain, std::slice::from_ref(&secret));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].display, "•••");
+        assert!(spans[0].scan);
+        assert!(!spans[0].display.contains('a'));
+    }
+
+    #[test]
+    fn snippet_marks_hit_with_guillemets() {
+        let spans = content_snippets("季度营收明细与季度成本说明", &["季度".to_string()]);
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].display.contains("«季度»"), "{}", spans[0].display);
+        assert!(!spans[0].scan);
+        assert!(spans[0].offset_hint.contains("字符"));
+    }
+
+    #[test]
+    fn max_three_spans() {
+        let plain = "甲乙甲乙甲乙甲乙甲乙甲乙甲乙甲乙甲乙甲乙甲乙";
+        let spans = content_snippets(plain, &["甲".to_string()]);
+        assert!(spans.len() <= 3, "got {}", spans.len());
+    }
+
+    #[test]
+    fn truncation_marker() {
+        assert_eq!(truncate_marker(0), (0, false));
+        assert_eq!(
+            truncate_marker(EXTRACT_LIMIT_BYTES),
+            (EXTRACT_LIMIT_BYTES, false)
+        );
+        let (len, trunc) = truncate_marker(EXTRACT_LIMIT_BYTES + 1);
+        assert_eq!(len, EXTRACT_LIMIT_BYTES);
+        assert!(trunc);
+    }
+
+    #[test]
+    fn search_v2_ranking_and_payload() {
+        let mut ix = VaultIndex::new(key());
+        // 两个文件都含「季度」：content 类，idf 使独占命中者排名更高
+        let a = ix
+            .add_file(0, "q1.txt", 1, &tokenize("q1.txt 季度报告"))
+            .expect("a");
+        let b = ix
+            .add_file(0, "q2.txt", 1, &tokenize("q2.txt 季度 财务 季度"))
+            .expect("b");
+        ix.set_tokens_extra(a, vec![ix.hmac_token("季度")]).ok();
+        ix.set_tokens_extra(b, vec![ix.hmac_token("季度")]).ok();
+        let v = ix.search_v2("季度", &SearchV2Opts::default());
+        assert_eq!(v["schema"], 1);
+        assert_eq!(v["total"], 2);
+        let hits = v["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 2);
+        // 每条命中载荷字段齐全
+        for h in hits {
+            assert!(h["fileId"].is_u64());
+            assert!(h["score"].is_f64());
+            assert!(h["modifiedMs"].is_u64());
+            assert!(matches!(
+                h["class"].as_str(),
+                Some("name") | Some("tag") | Some("content")
+            ));
+        }
+        // 名称命中（独占）→ class=name，带 «» 片段
+        let v2 = ix.search_v2("q2", &SearchV2Opts::default());
+        let hits2 = v2["hits"].as_array().expect("hits");
+        assert_eq!(hits2.len(), 1);
+        assert_eq!(hits2[0]["class"], "name");
+        assert!(hits2[0]["spans"].as_array().is_some_and(|s| !s.is_empty()));
+        // 仅内容采样命中（「财务」只存在于导入令牌集）→ class=content，spans 留空
+        let v3 = ix.search_v2("财务", &SearchV2Opts::default());
+        let hits3 = v3["hits"].as_array().expect("hits");
+        assert_eq!(hits3.len(), 1);
+        assert_eq!(hits3[0]["fileId"], b);
+        assert_eq!(hits3[0]["class"], "content");
+        assert_eq!(hits3[0]["spans"].as_array().map(Vec::len), Some(0));
+        let _ = (a,);
+    }
+
+    #[test]
+    fn content_hit_spans_left_to_upper_layer() {
+        // content 类命中：spans 为空（需上层解密后经 content_snippets 补齐——诚实边界）
+        let mut ix = VaultIndex::new(key());
+        let id = ix
+            .add_file(0, "note.txt", 1, &tokenize("note.txt"))
+            .expect("f");
+        // 内容采样令牌与导入同一分词口径（CJK bigram）
+        let toks = tokenize("北极熊出没手册");
+        ix.set_tokens_extra(id, toks.iter().map(|t| ix.hmac_token(t)).collect())
+            .ok();
+        let v = ix.search_v2("北极熊", &SearchV2Opts::default());
+        let hits = v["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["class"], "content");
+        assert_eq!(hits[0]["spans"].as_array().map(Vec::len), Some(0));
     }
 }
