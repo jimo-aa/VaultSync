@@ -247,8 +247,45 @@ abstract class VaultCoreBridge {
   /// 负值为错误码。
   int sessionReadonly(Object sessionHandle);
 
-  /// 缩略图能力探针：当前恒返回 13（CAP_THUMBNAIL 未置位，P7-9 交付）。
+  /// 缩略图能力探针：当前恒返回 13（CAP_THUMBNAIL 未置位，编解码归 P9）。
   int vaultThumbnailProbe(Object sessionHandle, int fileId);
+
+  // ==== P7 轮换会话 / 传播 / 擦除分级 / 迁移 / 检索 V2（docs/v2.0/09）====
+
+  /// MK 轮换会话 · begin（同步执行，偏差记 LOG）：out 末位为 task id（恒 0）。
+  int rotateMkBegin(Object sessionHandle, String password, List<int> taskIdOut);
+
+  /// MK 轮换会话 · resume（密码派生 KEK 解封 VSRR）：幂等。
+  int rotateMkResume(Object sessionHandle, String password);
+
+  /// MK 轮换会话 · 状态 JSON（rotationState / rotationId / autoResumeExhausted…）。
+  String? rotateMkStatus(Object sessionHandle);
+
+  /// 远程锁定指令（P7-10）：peerId 传 null 表示全部已配对设备。
+  int p2pPushLock(Object sessionHandle, String? peerId);
+
+  /// 轮换传播指令（P7-4，kind=3）：out 末位为 task id（恒 0）。
+  int p2pPushRotation(Object sessionHandle, String? peerId, List<int> taskIdOut);
+
+  /// 擦除强度分级探测（P7-5）：JSON
+  /// {mediaKind, eraseClass, methodBits, degradations[], secureEraseClaim}。
+  String? eraseClassProbe(String path);
+
+  /// V2→V3 迁移 · begin（同步执行，偏差记 LOG）：out 末位为 task id（恒 0）。
+  int migrateBegin(Object sessionHandle, String password, List<int> taskIdOut);
+
+  /// V2→V3 迁移 · 状态 JSON：{"state","phase","done","total","failed"}。
+  String? migrateStatus(Object sessionHandle);
+
+  /// V2→V3 迁移 · resume（断点续做，密码派生 KEK）。
+  int migrateResume(Object sessionHandle, String password);
+
+  /// V2→V3 迁移 · cancel（幂等清理暂存）。
+  int migrateCancel(Object sessionHandle);
+
+  /// 检索 V2（P7-9）：optsJson 可为 null（默认 limit=32 / rankVer=1）。
+  /// 返回 JSON {"schema":1,"total","rankVer","hits":[…]}；负值为状态码。
+  String? vaultSearchV2(Object sessionHandle, String query, String? optsJson);
 
   /// 按平台返回动态库文件名。
   static String get libraryName {
@@ -380,6 +417,22 @@ typedef _TaskSpawnC = Int32 Function(Pointer<Uint32>);
 typedef _SessionReadonlyC = Int32 Function(Pointer<Void>, Pointer<Int32>);
 typedef _ThumbnailC = Int32 Function(
     Pointer<Void>, Uint64, Pointer<Pointer<Uint8>>, Pointer<Uint64>);
+// P7（每函数独立 typedef：参数个数不同严禁复用）
+typedef _RotateMkBeginC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef _RotateMkResumeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _RotateMkStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _P2pPushLockC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _P2pPushRotationC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef _EraseClassProbeC = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _MigrateBeginC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef _MigrateStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _MigrateResumeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _MigrateCancelC = Int32 Function(Pointer<Void>);
+typedef _SearchV2C = Int32 Function(Pointer<Void>, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Pointer<Utf8>>);
 
 
 class VaultCoreBridgeFfi implements VaultCoreBridge {
@@ -576,6 +629,32 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
     _thumbnail = _lib.lookupFunction<_ThumbnailC,
         int Function(Pointer<Void>, int, Pointer<Pointer<Uint8>>,
             Pointer<Uint64>)>('vault_core_vault_thumbnail');
+    _rotateMkBegin = _lib.lookupFunction<_RotateMkBeginC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Uint32>)>('vault_core_rotate_mk_begin');
+    _rotateMkResume = _lib.lookupFunction<_RotateMkResumeC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_rotate_mk_resume');
+    _rotateMkStatus = _lib.lookupFunction<_RotateMkStatusC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_rotate_mk_status');
+    _p2pPushLock = _lib.lookupFunction<_P2pPushLockC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_p2p_push_lock');
+    _p2pPushRotation = _lib.lookupFunction<_P2pPushRotationC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Uint32>)>('vault_core_p2p_push_rotation');
+    _eraseClassProbe = _lib.lookupFunction<_EraseClassProbeC,
+        Pointer<Utf8> Function(Pointer<Utf8>)>('vault_core_erase_class_probe');
+    _migrateBegin = _lib.lookupFunction<_MigrateBeginC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Uint32>)>('vault_core_migrate_begin');
+    _migrateStatus = _lib.lookupFunction<_MigrateStatusC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_migrate_status');
+    _migrateResume = _lib.lookupFunction<_MigrateResumeC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_migrate_resume');
+    _migrateCancel = _lib.lookupFunction<_MigrateCancelC,
+        int Function(Pointer<Void>)>('vault_core_migrate_cancel');
+    _searchV2 = _lib.lookupFunction<_SearchV2C,
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
+            Pointer<Pointer<Utf8>>)>('vault_core_vault_search_v2');
     _version = version;
     _freeString = freeString;
   }
@@ -662,6 +741,21 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Void>, Pointer<Int32>) _sessionReadonly;
   late final int Function(
       Pointer<Void>, int, Pointer<Pointer<Uint8>>, Pointer<Uint64>) _thumbnail;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>)
+      _rotateMkBegin;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _rotateMkResume;
+  late final Pointer<Utf8> Function(Pointer<Void>) _rotateMkStatus;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _p2pPushLock;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>)
+      _p2pPushRotation;
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _eraseClassProbe;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>)
+      _migrateBegin;
+  late final Pointer<Utf8> Function(Pointer<Void>) _migrateStatus;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _migrateResume;
+  late final int Function(Pointer<Void>) _migrateCancel;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
+      Pointer<Pointer<Utf8>>) _searchV2;
 
   /// 引擎事件回调：订阅进程内注册一次、随进程存活（引擎侧为全局事件总线）。
   NativeCallable<_EventCallbackC>? _eventCallable;
@@ -1298,6 +1392,123 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       calloc.free(len);
     }
   }
+
+  @override
+  int rotateMkBegin(
+      Object sessionHandle, String password, List<int> taskIdOut) {
+    final p = _toNative(password);
+    final taskId = calloc<Uint32>();
+    try {
+      final status = _rotateMkBegin(_handle(sessionHandle), p, taskId);
+      if (taskIdOut.isNotEmpty) taskIdOut[0] = taskId.value;
+      return status;
+    } finally {
+      calloc.free(taskId);
+      calloc.free(p);
+    }
+  }
+
+  @override
+  int rotateMkResume(Object sessionHandle, String password) {
+    final p = _toNative(password);
+    try {
+      return _rotateMkResume(_handle(sessionHandle), p);
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  @override
+  String? rotateMkStatus(Object sessionHandle) =>
+      _takeJson(_rotateMkStatus(_handle(sessionHandle)));
+
+  @override
+  int p2pPushLock(Object sessionHandle, String? peerId) {
+    final pid = peerId == null
+        ? Pointer<Utf8>.fromAddress(0)
+        : _toNative(peerId);
+    try {
+      return _p2pPushLock(_handle(sessionHandle), pid);
+    } finally {
+      if (peerId != null) calloc.free(pid);
+    }
+  }
+
+  @override
+  int p2pPushRotation(
+      Object sessionHandle, String? peerId, List<int> taskIdOut) {
+    final pid = peerId == null
+        ? Pointer<Utf8>.fromAddress(0)
+        : _toNative(peerId);
+    final taskId = calloc<Uint32>();
+    try {
+      final status = _p2pPushRotation(_handle(sessionHandle), pid, taskId);
+      if (taskIdOut.isNotEmpty) taskIdOut[0] = taskId.value;
+      return status;
+    } finally {
+      calloc.free(taskId);
+      if (peerId != null) calloc.free(pid);
+    }
+  }
+
+  @override
+  String? eraseClassProbe(String path) {
+    final p = _toNative(path);
+    try {
+      return _takeJson(_eraseClassProbe(p));
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  @override
+  int migrateBegin(Object sessionHandle, String password, List<int> taskIdOut) {
+    final p = _toNative(password);
+    final taskId = calloc<Uint32>();
+    try {
+      final status = _migrateBegin(_handle(sessionHandle), p, taskId);
+      if (taskIdOut.isNotEmpty) taskIdOut[0] = taskId.value;
+      return status;
+    } finally {
+      calloc.free(taskId);
+      calloc.free(p);
+    }
+  }
+
+  @override
+  String? migrateStatus(Object sessionHandle) =>
+      _takeJson(_migrateStatus(_handle(sessionHandle)));
+
+  @override
+  int migrateResume(Object sessionHandle, String password) {
+    final p = _toNative(password);
+    try {
+      return _migrateResume(_handle(sessionHandle), p);
+    } finally {
+      calloc.free(p);
+    }
+  }
+
+  @override
+  int migrateCancel(Object sessionHandle) =>
+      _migrateCancel(_handle(sessionHandle));
+
+  @override
+  String? vaultSearchV2(Object sessionHandle, String query, String? optsJson) {
+    final q = _toNative(query);
+    final opts =
+        optsJson == null ? Pointer<Utf8>.fromAddress(0) : _toNative(optsJson);
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      final status = _searchV2(_handle(sessionHandle), q, opts, out);
+      if (status != VaultStatus.ok) return null;
+      return _takeJson(out.value);
+    } finally {
+      calloc.free(out);
+      calloc.free(q);
+      if (optsJson != null) calloc.free(opts);
+    }
+  }
 }
 
 /// 桩实现：原生库不可用时（纯 Dart 测试 / CI 无 DLL）。
@@ -1567,4 +1778,50 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
   @override
   int vaultThumbnailProbe(Object sessionHandle, int fileId) =>
       VaultStatus.capability;
+
+  @override
+  int rotateMkBegin(
+          Object sessionHandle, String password, List<int> taskIdOut) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int rotateMkResume(Object sessionHandle, String password) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? rotateMkStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pPushLock(Object sessionHandle, String? peerId) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pPushRotation(
+          Object sessionHandle, String? peerId, List<int> taskIdOut) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? eraseClassProbe(String path) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int migrateBegin(Object sessionHandle, String password, List<int> taskIdOut) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? migrateStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int migrateResume(Object sessionHandle, String password) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int migrateCancel(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? vaultSearchV2(Object sessionHandle, String query, String? optsJson) =>
+      throw UnsupportedError('stub: native not linked');
 }

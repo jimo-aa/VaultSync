@@ -230,6 +230,52 @@ late TaskSpawnDart _taskSpawn;
 late SessionReadonlyDart _sessionReadonly;
 late ThumbnailDart _vaultThumbnail;
 
+// ===== P7 轮换会话 / 传播 / 擦除分级 / 迁移 / 检索 V2（每函数独立 typedef）=====
+typedef RotateMkBeginC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef RotateMkBeginDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef RotateMkResumeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef RotateMkResumeDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef RotateMkStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef RotateMkStatusDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pPushLockC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef P2pPushLockDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef P2pPushRotationC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef P2pPushRotationDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef EraseClassProbeC = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef EraseClassProbeDart = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef MigrateBeginC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef MigrateBeginDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef MigrateStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef MigrateStatusDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef MigrateResumeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef MigrateResumeDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef MigrateCancelC = Int32 Function(Pointer<Void>);
+typedef MigrateCancelDart = int Function(Pointer<Void>);
+typedef CancelOrdersC = Int32 Function(Pointer<Void>);
+typedef CancelOrdersDart = int Function(Pointer<Void>);
+typedef SearchV2C = Int32 Function(Pointer<Void>, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef SearchV2Dart = int Function(Pointer<Void>, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+late RotateMkBeginDart _rotateMkBegin;
+late RotateMkResumeDart _rotateMkResume;
+late RotateMkStatusDart _rotateMkStatus;
+late P2pPushLockDart _p2pPushLock;
+late P2pPushRotationDart _p2pPushRotation;
+late EraseClassProbeDart _eraseClassProbe;
+late MigrateBeginDart _migrateBegin;
+late MigrateStatusDart _migrateStatus;
+late MigrateResumeDart _migrateResume;
+late MigrateCancelDart _migrateCancel;
+late CancelOrdersDart _cancelOrders;
+late SearchV2Dart _vaultSearchV2;
+
 /// 最小 PNG 生成器（8 位 RGB，无过滤）：隐写往返断言用，避免引入图像依赖。
 Uint8List makePng(int w, int h) {
   final raw = <int>[];
@@ -505,6 +551,30 @@ void main(List<String> args) {
       'vault_core_session_readonly');
   _vaultThumbnail = lib
       .lookupFunction<ThumbnailC, ThumbnailDart>('vault_core_vault_thumbnail');
+  _rotateMkBegin = lib.lookupFunction<RotateMkBeginC, RotateMkBeginDart>(
+      'vault_core_rotate_mk_begin');
+  _rotateMkResume = lib.lookupFunction<RotateMkResumeC, RotateMkResumeDart>(
+      'vault_core_rotate_mk_resume');
+  _rotateMkStatus = lib.lookupFunction<RotateMkStatusC, RotateMkStatusDart>(
+      'vault_core_rotate_mk_status');
+  _p2pPushLock = lib.lookupFunction<P2pPushLockC, P2pPushLockDart>(
+      'vault_core_p2p_push_lock');
+  _p2pPushRotation = lib.lookupFunction<P2pPushRotationC, P2pPushRotationDart>(
+      'vault_core_p2p_push_rotation');
+  _eraseClassProbe = lib.lookupFunction<EraseClassProbeC, EraseClassProbeDart>(
+      'vault_core_erase_class_probe');
+  _migrateBegin = lib.lookupFunction<MigrateBeginC, MigrateBeginDart>(
+      'vault_core_migrate_begin');
+  _migrateStatus = lib.lookupFunction<MigrateStatusC, MigrateStatusDart>(
+      'vault_core_migrate_status');
+  _migrateResume = lib.lookupFunction<MigrateResumeC, MigrateResumeDart>(
+      'vault_core_migrate_resume');
+  _migrateCancel = lib.lookupFunction<MigrateCancelC, MigrateCancelDart>(
+      'vault_core_migrate_cancel');
+  _vaultSearchV2 =
+      lib.lookupFunction<SearchV2C, SearchV2Dart>('vault_core_vault_search_v2');
+  _cancelOrders = lib.lookupFunction<CancelOrdersC, CancelOrdersDart>(
+      'vault_core_p2p_cancel_orders');
 
   check(_hello() == 0, 'hello 自检');
   final v = _version();
@@ -521,6 +591,14 @@ void main(List<String> args) {
   check(
       abi.ref.capabilityBits & (1 << 15) != 0, 'P6 能力位 bit15 CAP_SECURE_STORE 置位');
   check(abi.ref.capabilityBits & (1 << 18) == 0, 'P6 能力位 bit18 THUMBNAIL 未置位');
+  // P7 交付能力置位（M7 收口：证据先行，全部有运行时接口与冒烟断言支撑）
+  check(abi.ref.capabilityBits & (1 << 8) != 0, 'P7 能力位 bit8 CAP_ERASE_CLASS 置位');
+  check(
+      abi.ref.capabilityBits & (1 << 9) != 0, 'P7 能力位 bit9 CAP_ROTATION_SESSION 置位');
+  check(abi.ref.capabilityBits & (1 << 10) != 0, 'P7 能力位 bit10 CAP_MIGRATION 置位');
+  check(abi.ref.capabilityBits & (1 << 11) != 0, 'P7 能力位 bit11 CAP_PQ_HYBRID 置位');
+  check(
+      abi.ref.capabilityBits & (1 << 12) != 0, 'P7 能力位 bit12 CAP_SEARCH_FRAGMENT 置位');
   check(abi.ref.maxWriteVerIndex == 3, 'P6 max_write_ver_index == 3');
   check(abi.ref.maxWriteVerAudit == 1, 'P6 max_write_ver_audit == 1');
   check(abi.ref.maxWriteVerVault == 2, 'P6 max_write_ver_vault == 2');
@@ -1035,14 +1113,16 @@ void main(List<String> args) {
   calloc.free(rd2);
   final auditAfter = auditCountOf(hAfter);
   check(auditBefore > 0 && auditAfter >= 1,
-      'P5 MK 轮换后新会话可写新审计链（旧链 $auditBefore 条已改名保留、随轮换不可解）');
-  final rotated = Directory('${p5dir.path}${Platform.pathSeparator}p5.data')
-      .listSync()
-      // P6-4 起审计有单文件（audit.enc）与分段目录（audit/）两种载体，
-      // 归档件相应为文件或同名前缀目录，语义相同：旧链保留可取证
-      .where((f) => f.path.contains('audit.enc.rotated-'))
-      .isNotEmpty;
-  check(rotated, 'P5 旧审计链文件已改名保留（未删除，可由持有旧 MK 的备份取证）');
+      'P5/P7-2 MK 轮换后审计链连续（旧链 $auditBefore 条 + 新条目 ≥1）');
+  // P7-2 起链键解耦（从属密钥 6）：MK 轮换不再归档/改名旧链——同一链跨轮换连续，
+  // 取代 P5 时代的 audit.enc.rotated-<ts> 归档语义（旧断言随语义退役）。
+  final verAfter = _auditVerify(hAfter);
+  check(verAfter.address != 0, 'P7-2 轮换后审计链可校验');
+  if (verAfter.address != 0) {
+    final vj = jsonDecode(verAfter.toDartString()) as Map<String, dynamic>;
+    _free(verAfter);
+    check(vj['ok'] == true, 'P7-2 轮换后审计链校验 ok（链跨 MK 轮换连续）');
+  }
   _lock(hAfter);
 
   // ===== P5-5 销毁指令队列（无对端：应报 0 且不误记地址）=====
@@ -1188,6 +1268,203 @@ void main(List<String> args) {
   calloc.free(vlp);
   p6dir.deleteSync(recursive: true);
 
+  // ===== P7 轮换会话 / 检索 V2 / 擦除分级 / 迁移（docs/v2.0/09，M7 冒烟）=====
+  final p7dir = Directory.systemTemp.createTempSync('vaultsync_p7_');
+  final p7vault = '${p7dir.path}${Platform.pathSeparator}p7.vsvb';
+  final p7vp = n(p7vault);
+  check(_create(p7vp, pw, 0) == 0, 'P7 创建会话测试保险箱');
+  final sP7 = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), p7vault, 'pw-1234');
+  check(sP7.status == 0 && sP7.handle != 0, 'P7 解锁会话测试保险箱');
+  final hP7 = Pointer<Void>.fromAddress(sP7.handle);
+  final p7Task = calloc<Uint32>();
+  final p7id1 = calloc<Uint64>();
+  final p7id2 = calloc<Uint64>();
+
+  // -- P7-3 轮换会话三件套：begin（错密码→1 / 对→0）+ status + resume 幂等 + 重解锁 --
+  check(_rotateMkBegin(hP7, n('wrong-pw'), p7Task) == 1, 'P7 rotate_mk_begin 错密码 → 1');
+  check(_rotateMkBegin(hP7, pw, p7Task) == 0, 'P7 rotate_mk_begin 正确密码 → 0');
+  check(p7Task.value == 0, 'P7 rotate_mk_begin 同步执行 task=0（偏差记 LOG）');
+  final rotSt = _rotateMkStatus(hP7);
+  check(rotSt.address != 0, 'P7 rotate_mk_status 返回 JSON');
+  final rot =
+      rotSt.address != 0 ? jsonDecode(str(rotSt)) as Map<String, dynamic> : <String, dynamic>{};
+  if (rotSt.address != 0) _free(rotSt);
+  check(rot['schema'] == 1, 'P7 rotation status schema == 1');
+  check(
+      rot['rotationState'] == 'idle' || rot['rotationState'] == 'pending_ack',
+      'P7 轮换完成后状态 idle/pending_ack（实际 ${rot['rotationState']}）');
+  check((rot['rotationId'] as String).length == 32, 'P7 rotationId 为 16B hex');
+  check(_rotateMkResume(hP7, pw) == 0, 'P7 rotate_mk_resume 空闲态幂等 → 0');
+  check(_rotateMkResume(Pointer<Void>.fromAddress(0), pw) == 7,
+      'P7 rotate_mk_resume(null) → 7');
+  _lock(hP7);
+  final sP7b = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), p7vault, 'pw-1234');
+  check(sP7b.status == 0 && sP7b.handle != 0, 'P7 轮换后同密码重解锁成功');
+  final hP7b = Pointer<Void>.fromAddress(sP7b.handle);
+
+  // -- P7-9 检索 V2：schema / 命中 / 片段 / limit / 未命中 / 非法参 --
+  final p7f1 = '${p7dir.path}${Platform.pathSeparator}q1.txt';
+  File(p7f1).writeAsStringSync('季度营收明细 季度成本说明 quarterly report token');
+  final p7f2 = '${p7dir.path}${Platform.pathSeparator}q2.txt';
+  File(p7f2).writeAsStringSync('unrelated plain notes');
+  check(_vaultImport(hP7b, n(p7f1), 0, p7id1) == 0, 'P7 导入检索样本一');
+  check(_vaultImport(hP7b, n(p7f2), 0, p7id2) == 0, 'P7 导入检索样本二');
+  check(_vaultSetTags(hP7b, p7id1.value, n('季度')) == 0, 'P7 给样本一打标签');
+  final sv2Out = calloc<Pointer<Utf8>>();
+  check(_vaultSearchV2(hP7b, n('季度'), Pointer<Utf8>.fromAddress(0), sv2Out) == 0 &&
+          sv2Out.value.address != 0,
+      'P7 search_v2 查询 OK');
+  var sv2 = jsonDecode(str(sv2Out.value)) as Map<String, dynamic>;
+  _free(sv2Out.value);
+  sv2Out.value = Pointer<Utf8>.fromAddress(0);
+  check(sv2['schema'] == 1, 'P7 search_v2 schema == 1');
+  check((sv2['total'] as num).toInt() >= 1, 'P7 search_v2 命中 ≥1');
+  final hits = (sv2['hits'] as List).cast<Map<String, dynamic>>();
+  check(hits.isNotEmpty && hits.first['fileId'] == p7id1.value, 'P7 首位命中为样本一');
+  check(hits.isNotEmpty && hits.first['class'] == 'tag',
+      'P7 标签命中 class == tag（名称 q1.txt 不含查询词）');
+  check(hits.isNotEmpty && (hits.first['spans'] as List).isNotEmpty, 'P7 name/tag 命中携带片段');
+  check(_vaultSearchV2(hP7b, n('季度'), n('{"limit":0}'), sv2Out) == 0,
+      'P7 search_v2 opts(limit=0) OK');
+  sv2 = jsonDecode(str(sv2Out.value)) as Map<String, dynamic>;
+  _free(sv2Out.value);
+  sv2Out.value = Pointer<Utf8>.fromAddress(0);
+  check((sv2['hits'] as List).isEmpty, 'P7 limit=0 → 无命中（opts 生效）');
+  check(_vaultSearchV2(hP7b, n('zzz-不存在'), Pointer<Utf8>.fromAddress(0), sv2Out) == 0,
+      'P7 search_v2 未命中查询 OK');
+  sv2 = jsonDecode(str(sv2Out.value)) as Map<String, dynamic>;
+  _free(sv2Out.value);
+  sv2Out.value = Pointer<Utf8>.fromAddress(0);
+  check((sv2['total'] as num).toInt() == 0, 'P7 未命中 → total=0');
+  check(_vaultSearchV2(hP7b, n('季度'), n('{bad json'), sv2Out) == 7, 'P7 opts 非法 JSON → 7');
+  check(
+      _vaultSearchV2(Pointer<Void>.fromAddress(0), n('x'), Pointer<Utf8>.fromAddress(0), sv2Out) ==
+          7,
+      'P7 search_v2(null handle) → 7');
+  check(sv2Out.value.address == 0, 'P7 search_v2 出错不写 out');
+  calloc.free(sv2Out);
+
+  // -- P7-5 擦除强度分级：探测绝不失败 + 诚实降级（原则 7）--
+  final probePtr = _eraseClassProbe(n(p7dir.path));
+  check(probePtr.address != 0, 'P7 erase_class_probe 返回报告');
+  final probeRep = jsonDecode(str(probePtr)) as Map<String, dynamic>;
+  _free(probePtr);
+  check(
+      (probeRep['mediaKind'] as num).toInt() >= 1 &&
+          (probeRep['mediaKind'] as num).toInt() <= 4,
+      'P7 mediaKind ∈ 1..4（实际 ${probeRep['mediaKind']}）');
+  check(
+      (probeRep['eraseClass'] as num).toInt() >= 1 &&
+          (probeRep['eraseClass'] as num).toInt() <= 3,
+      'P7 eraseClass ∈ 1..3');
+  check(probeRep['degradations'] is List, 'P7 degradations 为列表');
+  check(probeRep['secureEraseClaim'] == false, 'P7 TRIM 未接线 → 恒不声称安全擦除');
+  final probeNull = _eraseClassProbe(Pointer<Utf8>.fromAddress(0));
+  check(probeNull.address == 0, 'P7 erase_class_probe(null) → 空指针');
+  if (probeNull.address != 0) _free(probeNull);
+
+  // -- P7-7 迁移三件套（v3 库空跑：begin/resume/cancel 幂等 + 错密码路径）--
+  check(_migrateBegin(hP7b, n('wrong-pw'), p7Task) == 1, 'P7 migrate_begin 错密码 → 1');
+  check(_migrateBegin(hP7b, pw, p7Task) == 0, 'P7 migrate_begin（v3 库空跑）→ 0');
+  final migSt = _migrateStatus(hP7b);
+  check(migSt.address != 0, 'P7 migrate_status 返回 JSON');
+  if (migSt.address != 0) _free(migSt);
+  check(_migrateResume(hP7b, pw) == 0, 'P7 migrate_resume 幂等 → 0');
+  check(_migrateCancel(hP7b) == 0, 'P7 migrate_cancel 幂等 → 0');
+  check(_migrateBegin(Pointer<Void>.fromAddress(0), pw, p7Task) == 7,
+      'P7 migrate_begin(null) → 7');
+  _lock(hP7b);
+  calloc.free(p7Task);
+  calloc.free(p7id1);
+  calloc.free(p7id2);
+  calloc.free(p7vp);
+  p7dir.deleteSync(recursive: true);
+
+  // ===== P7-8 混合 KEM：双新端配对 → pqCap 登记 → suite 2 同步 → 指令队列 =====
+  final pqDir = Directory.systemTemp.createTempSync('vaultsync_p7pq_');
+  final pqVaultA = '${pqDir.path}${Platform.pathSeparator}pq-a.vsvb';
+  final pqVaultB = '${pqDir.path}${Platform.pathSeparator}pq-b.vsvb';
+  final pqAp = n(pqVaultA);
+  final pqBp = n(pqVaultB);
+  check(_create(pqAp, pw, 0) == 0, 'P7 创建 PQ 设备 A');
+  check(_create(pqBp, pw, 0) == 0, 'P7 创建 PQ 设备 B');
+  final sQA = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), pqVaultA, 'pw-1234');
+  final sQB = runUnlock((a, b, h, w) => _unlock(a, b, 0, h, w), pqVaultB, 'pw-1234');
+  check(sQA.status == 0 && sQA.handle != 0, 'P7 解锁 PQ 设备 A');
+  check(sQB.status == 0 && sQB.handle != 0, 'P7 解锁 PQ 设备 B');
+  final hQA = Pointer<Void>.fromAddress(sQA.handle);
+  final hQB = Pointer<Void>.fromAddress(sQB.handle);
+  final pqId = calloc<Uint64>();
+
+  var invPq = _p2pPairBegin(hQB);
+  check(invPq.address != 0, 'P7 PQ B 生成邀请码');
+  final pqPort =
+      RegExp(r'"port":(\d+)').firstMatch(invPq.toDartString())!.group(1)!;
+  final pqCode = RegExp(r'"code":"([0-9a-f]+)"')
+      .firstMatch(invPq.toDartString())!
+      .group(1)!;
+  _free(invPq);
+  final pqAddr = n('127.0.0.1:$pqPort');
+  final pqJoined = _p2pPairJoin(hQA, pqAddr, n(pqCode));
+  check(
+      pqJoined.address != 0 && pqJoined.toDartString().contains('"peerId":"vd-'),
+      'P7 PQ 配对成功（suite 2 乐观探测即成功）');
+  if (pqJoined.address != 0) _free(pqJoined);
+
+  // 协商结果强制可见：最近握手套件 + 对端能力登记
+  final pqStA = _p2pStatus(hQA);
+  check(pqStA.address != 0, 'P7 A p2p_status OK');
+  final pqStAJ = jsonDecode(str(pqStA)) as Map<String, dynamic>;
+  _free(pqStA);
+  final pqStB = _p2pStatus(hQB);
+  check(pqStB.address != 0, 'P7 B p2p_status OK');
+  final pqStBJ = jsonDecode(str(pqStB)) as Map<String, dynamic>;
+  _free(pqStB);
+  check(pqStAJ['pqSuite'] == 2, 'P7 A 最近握手 cipher_suite == 2（hybrid PQ）');
+  check(pqStBJ['pqSuite'] == 2, 'P7 B 最近握手 cipher_suite == 2（hybrid PQ）');
+  check(
+      (pqStAJ['peers'] as List).isNotEmpty &&
+          (pqStAJ['peers'] as List).first['pqCap'] == true,
+      'P7 A 的对端记录 pqCap == true（Hello 能力登记）');
+  final pqDevBId = pqStBJ['deviceId'] as String;
+
+  // suite 2 信道同步：A 导入 → 推给 B → B 导出验证
+  final pqSrc = '${pqDir.path}${Platform.pathSeparator}pq-sync.txt';
+  File(pqSrc).writeAsBytesSync(utf8.encode('PQ hybrid channel payload! ' * 3000));
+  check(_vaultImport(hQA, n(pqSrc), 0, pqId) == 0, 'P7 PQ A 导入同步文件');
+  final pqSync = _p2pSync(hQA, pqAddr);
+  check(pqSync.address != 0 && pqSync.toDartString().contains('"pushed"'),
+      'P7 suite 2 信道同步成功');
+  if (pqSync.address != 0) _free(pqSync);
+  final pqOut = '${pqDir.path}${Platform.pathSeparator}pq-out.txt';
+  check(_vaultExport(hQB, pqId.value, n(pqOut)) == 0, 'P7 B 导出 suite 2 信道收到的文件');
+
+  // 指令队列：push_lock（kind=2）入队 / push_rotation（无待传播 → 7）/ 取消
+  final pqTask = calloc<Uint32>();
+  check(_p2pPushLock(hQA, Pointer<Utf8>.fromAddress(0)) == 0, 'P7 push_lock(全部对端) → 0');
+  check(_p2pPushLock(hQA, n(pqDevBId)) == 0, 'P7 push_lock(指定对端) → 0');
+  check(_p2pPushRotation(hQA, Pointer<Utf8>.fromAddress(0), pqTask) == 7,
+      'P7 push_rotation 无待传播轮换 → 7（确定性负向）');
+  final pend = _pendingOrders(hQA);
+  check(pend.address != 0, 'P7 pending_orders 快照 OK');
+  final pendJson = pend.address != 0 ? pend.toDartString() : '';
+  if (pend.address != 0) _free(pend);
+  // pending_orders 有意不暴露 kind / 载荷（engine.rs：不得含签名/载荷），只断言条数；
+  // 同对端重复 push 按队列语义合并为一条 → 两次 push_lock 后 count == 1
+  final pendCount = pendJson.isNotEmpty ? (jsonDecode(pendJson)['count'] as num).toInt() : -1;
+  check(pendCount == 1, 'P7 待投递队列含锁定指令（同对端合并），实际 $pendCount');
+  check(_cancelOrders(hQA) == 1, 'P7 取消队列清除锁定指令');
+  check(_p2pPushLock(Pointer<Void>.fromAddress(0), Pointer<Utf8>.fromAddress(0)) == 7,
+      'P7 push_lock(null handle) → 7');
+  calloc.free(pqTask);
+
+  _lock(hQA);
+  _lock(hQB);
+  calloc.free(pqAp);
+  calloc.free(pqBp);
+  calloc.free(pqAddr);
+  calloc.free(pqId);
+  pqDir.deleteSync(recursive: true);
 
   _lock(hA);
   _lock(hB);
