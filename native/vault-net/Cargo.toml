@@ -1,0 +1,15 @@
+# vault-net：传输细节层（第九 crate，docs/v2.0/02 §三）。
+# 职责：传输队列 / 路径状态机 / 断点续传 .part / 填充档位帧层。
+# 禁止同步语义：不得知道清单、块哈希、向量时钟、文件 id（架构测试拦截）。
+[package]
+name = "vault-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"

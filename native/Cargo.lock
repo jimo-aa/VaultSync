@@ -1060,6 +1060,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vault-net"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "vault-crypto",
+]
+
+[[package]]
 name = "vault-p2p"
 version = "0.1.0"
 dependencies = [
