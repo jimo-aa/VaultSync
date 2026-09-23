@@ -274,24 +274,39 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-// ==== 任务注册表（docs/v2.0/02 §6.5）====
+// ==== 任务注册表（docs/v2.0/02 §6.5；P8-1/P8-2 优先级 + 暂停续做 + 块粒度进度）====
 
 #[derive(Clone, Debug)]
 pub struct TaskSnapshot {
     pub id: u32,
     pub kind: String,
-    /// queued / running / done / failed / cancelled（paused/interrupted 是 P8）
+    /// queued / running / paused / done / failed / cancelled
     pub state: String,
+    pub priority: String,
     pub done_bytes: u64,
     pub total_bytes: u64,
+    pub done_chunks: u64,
+    pub total_chunks: u64,
+    pub rate_bps: u64,
+    pub eta_ms: u64,
 }
 
 struct TaskEntry {
     kind: String,
+    prio: String,
     state: String,
     done: u64,
     total: u64,
+    done_chunks: u64,
+    total_chunks: u64,
+    /// 速率样本：上次进度（毫秒时刻, done 字节）。
+    last_sample: Option<(std::time::Instant, u64)>,
+    rate_bps: u64,
+    eta_ms: u64,
     cancel: std::sync::Arc<AtomicBool>,
+    pause: std::sync::Arc<AtomicBool>,
+    /// true = 允许推进；暂停时置 false，作业体在 checkpoint 阻塞。
+    gate: std::sync::Arc<(Mutex<bool>, Condvar)>,
 }
 
 static TASKS: OnceLock<Mutex<Vec<(u32, TaskEntry)>>> = OnceLock::new();
@@ -305,48 +320,128 @@ fn tasks_lock() -> std::sync::MutexGuard<'static, Vec<(u32, TaskEntry)>> {
     tasks().lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 注册并启动一个后台任务。`body` 在独立线程执行，应周期检查 cancel 标志。
+/// 作业体控制句柄（P8-2）：取消令牌 + 暂停门 + 块粒度进度汇报。
+pub struct TaskCtl {
+    id: u32,
+    cancel: std::sync::Arc<AtomicBool>,
+    pause: std::sync::Arc<AtomicBool>,
+    gate: std::sync::Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl TaskCtl {
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    /// 检查点（块边界 / 步骤边界调用）：取消 → Err；暂停中阻塞等待恢复。
+    pub fn checkpoint(&self) -> Result<(), &'static str> {
+        if self.cancelled() {
+            return Err("cancelled");
+        }
+        let (lock, cv) = &*self.gate;
+        let mut go = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while !*go && !self.cancelled() {
+            let (ng, _) = cv
+                .wait_timeout(go, std::time::Duration::from_millis(200))
+                .unwrap_or_else(|e| e.into_inner());
+            go = ng;
+        }
+        if self.cancelled() {
+            Err("cancelled")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// 注册并启动一个后台任务（P8-1：优先级语义 + 暂停可续做）。
+/// 作业体应周期调用 `ctl.checkpoint()` 并经 `progress` 汇报块粒度进度。
 /// 返回 task_id。
-pub fn spawn_task<F>(kind: &str, body: F) -> u32
+pub fn spawn_task<F>(kind: &str, prio: &str, body: F) -> u32
 where
-    F: FnOnce(&AtomicBool, &dyn Fn(u64, u64)) -> Result<(), String> + Send + 'static,
+    F: Fn(&TaskCtl, &dyn Fn(u64, u64, u64, u64)) -> Result<(), String> + Send + 'static,
 {
     let id = NEXT_TASK.fetch_add(1, Ordering::Relaxed);
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    let pause = std::sync::Arc::new(AtomicBool::new(false));
+    let gate = std::sync::Arc::new((Mutex::new(true), Condvar::new()));
     tasks_lock().push((
         id,
         TaskEntry {
             kind: kind.to_string(),
+            prio: prio.to_string(),
             state: "running".into(),
             done: 0,
             total: 0,
+            done_chunks: 0,
+            total_chunks: 0,
+            last_sample: None,
+            rate_bps: 0,
+            eta_ms: 0,
             cancel: cancel.clone(),
+            pause: pause.clone(),
+            gate: gate.clone(),
         },
     ));
-    publish(EV_TASK_QUEUED, id, serde_json::json!({"kind": kind}));
+    publish(
+        EV_TASK_QUEUED,
+        id,
+        serde_json::json!({"kind": kind, "priority": prio}),
+    );
 
     let progress = {
-        move |done: u64, total: u64| {
-            if let Some((_, t)) = tasks_lock().iter_mut().find(|(tid, _)| *tid == id) {
+        move |done: u64, total: u64, done_chunks: u64, total_chunks: u64| {
+            let (rate, eta) = {
+                let mut guard = tasks_lock();
+                let Some((_, t)) = guard.iter_mut().find(|(tid, _)| *tid == id) else {
+                    return;
+                };
                 t.done = done;
                 t.total = total;
-            }
+                t.done_chunks = done_chunks;
+                t.total_chunks = total_chunks;
+                // 速率：与上次样本的差分（首样本只记录）；ETA = 剩余字节 / 速率
+                let now = std::time::Instant::now();
+                if let Some((t0, d0)) = t.last_sample {
+                    let dt = now.saturating_duration_since(t0).as_millis() as u64;
+                    if dt >= 100 && done > d0 {
+                        t.rate_bps = (done - d0) * 1000 / dt.max(1);
+                    }
+                }
+                t.last_sample = Some((now, done));
+                if t.rate_bps > 0 && total > done {
+                    t.eta_ms = (total - done) * 1000 / t.rate_bps;
+                } else {
+                    t.eta_ms = 0;
+                }
+                (t.rate_bps, t.eta_ms)
+            };
             publish(
                 EV_TASK_PROGRESS,
                 id,
-                serde_json::json!({"doneBytes": done, "totalBytes": total}),
+                serde_json::json!({
+                    "doneBytes": done, "totalBytes": total,
+                    "doneChunks": done_chunks, "totalChunks": total_chunks,
+                    "rateBps": rate, "etaMs": eta,
+                }),
             );
         }
     };
-    let cancel_for_body = cancel.clone();
+    let ctl = TaskCtl {
+        id,
+        cancel,
+        pause,
+        gate,
+    };
     let kind_owned = kind.to_string();
     std::thread::spawn(move || {
-        let result = body(&cancel_for_body, &progress);
+        let result = body(&ctl, &progress);
         let mut guard = tasks_lock();
         if let Some((_, t)) = guard.iter_mut().find(|(tid, _)| *tid == id) {
             if t.state == "running" {
                 t.state = match &result {
                     Ok(()) => "done".into(),
+                    Err(e) if e == "cancelled" => "cancelled".into(),
                     Err(_) => "failed".into(),
                 };
             }
@@ -378,24 +473,70 @@ pub fn task_list() -> Vec<TaskSnapshot> {
             id: *id,
             kind: t.kind.clone(),
             state: t.state.clone(),
+            priority: t.prio.clone(),
             done_bytes: t.done,
             total_bytes: t.total,
+            done_chunks: t.done_chunks,
+            total_chunks: t.total_chunks,
+            rate_bps: t.rate_bps,
+            eta_ms: t.eta_ms,
         })
         .collect()
 }
 
 pub fn task_status(task_id: u32) -> Option<TaskSnapshot> {
-    tasks_lock()
-        .iter()
-        .find(|(id, _)| *id == task_id)
-        .map(|(id, t)| TaskSnapshot {
-            id: *id,
-            kind: t.kind.clone(),
-            state: t.state.clone(),
-            done_bytes: t.done,
-            total_bytes: t.total,
-        })
+    task_list().into_iter().find(|t| t.id == task_id)
 }
+
+/// 暂停（P8-2）：运行中任务在下一检查点转入 paused；任务槽与已收块保留。
+/// 返回 0 / 7（未知）/ 12（状态不允许）。
+pub fn task_pause(task_id: u32) -> i32 {
+    let mut guard = tasks_lock();
+    let Some((_, t)) = guard.iter_mut().find(|(id, _)| *id == task_id) else {
+        return crate::ffi::ERR_INVALID_ARG;
+    };
+    if t.state != "running" {
+        return ERR_NOT_APPLICABLE;
+    }
+    t.state = "paused".into();
+    t.pause.store(true, Ordering::SeqCst);
+    let (lock, _) = &*t.gate;
+    *lock.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    drop(guard);
+    publish(
+        EV_TASK_PROGRESS,
+        task_id,
+        serde_json::json!({"paused": true}),
+    );
+    OK_LOCAL
+}
+
+/// 恢复（P8-2）：paused → 原任务内续做（唤醒暂停门，槽位与进度不动）。
+pub fn task_resume(task_id: u32) -> i32 {
+    let mut guard = tasks_lock();
+    let Some((_, t)) = guard.iter_mut().find(|(id, _)| *id == task_id) else {
+        return crate::ffi::ERR_INVALID_ARG;
+    };
+    if t.state != "paused" {
+        return ERR_NOT_APPLICABLE;
+    }
+    t.state = "running".into();
+    t.pause.store(false, Ordering::SeqCst);
+    let (lock, cv) = &*t.gate;
+    *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    cv.notify_all();
+    drop(guard);
+    publish(
+        EV_TASK_PROGRESS,
+        task_id,
+        serde_json::json!({"resumed": true}),
+    );
+    OK_LOCAL
+}
+
+/// 暂停/恢复不适用（排队中 / 终态）——与 7（未知任务）严格区分。
+pub const ERR_NOT_APPLICABLE: i32 = 12;
+const OK_LOCAL: i32 = 0;
 
 /// 协作式取消：置标志并等线程收敛（资源 5 s 内释放的语义由 body 保证）。
 /// 返回 0 = 已请求；7 = 未知任务；12 = 任务已取消（幂等）。
@@ -407,9 +548,13 @@ pub fn task_cancel(task_id: u32) -> i32 {
     if t.state == "cancelled" {
         return crate::ffi::ERR_CANCELLED;
     }
-    if t.state == "running" || t.state == "queued" {
+    if t.state == "running" || t.state == "paused" || t.state == "queued" {
         t.state = "cancelled".into();
         t.cancel.store(true, Ordering::Relaxed);
+        // 唤醒可能停在暂停门的作业体
+        let (lock, cv) = &*t.gate;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        cv.notify_all();
         drop(guard);
         publish(EV_TASK_CANCELLED, task_id, serde_json::json!({}));
         crate::ffi::OK

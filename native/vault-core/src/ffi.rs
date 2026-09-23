@@ -1955,7 +1955,8 @@ pub unsafe extern "C" fn vault_core_poll_events(out: *mut *mut c_char) -> i32 {
     OK
 }
 
-/// 任务列表 JSON {"count","tasks":[{id,kind,state,doneBytes,totalBytes}]}。
+/// 任务列表 JSON {"count","tasks":[{id,kind,state,priority,progress{…}}]}
+/// （P8-2 起 progress 含 doneBytes/totalBytes/doneChunks/totalChunks/rateBps/etaMs）。
 ///
 /// # Safety
 /// `out` 非空。
@@ -1969,14 +1970,22 @@ pub unsafe extern "C" fn vault_core_task_list(out: *mut *mut c_char) -> i32 {
     }
     let tasks: Vec<_> = crate::contract::task_list()
         .into_iter()
-        .map(|t| {
-            serde_json::json!({"id": t.id, "kind": t.kind, "state": t.state,
-                               "doneBytes": t.done_bytes, "totalBytes": t.total_bytes})
-        })
+        .map(task_json)
         .collect();
     let v = json_out(serde_json::json!({"count": tasks.len(), "tasks": tasks}));
     unsafe { out.write(v) };
     OK
+}
+
+fn task_json(t: crate::contract::TaskSnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "id": t.id, "kind": t.kind, "state": t.state, "priority": t.priority,
+        "progress": {
+            "doneBytes": t.done_bytes, "totalBytes": t.total_bytes,
+            "doneChunks": t.done_chunks, "totalChunks": t.total_chunks,
+            "rateBps": t.rate_bps, "etaMs": t.eta_ms,
+        },
+    })
 }
 
 /// 单任务状态 JSON，未知 id 返回 7。
@@ -1994,10 +2003,7 @@ pub unsafe extern "C" fn vault_core_task_status(task_id: u32, out: *mut *mut c_c
     match crate::contract::task_status(task_id) {
         None => ERR_INVALID_ARG,
         Some(t) => {
-            let v = json_out(
-                serde_json::json!({"id": t.id, "kind": t.kind, "state": t.state,
-                                 "doneBytes": t.done_bytes, "totalBytes": t.total_bytes}),
-            );
+            let v = json_out(task_json(t));
             unsafe { out.write(v) };
             OK
         }
@@ -2017,7 +2023,8 @@ pub unsafe extern "C" fn vault_core_task_cancel(task_id: u32) -> i32 {
 }
 
 /// 启动一个诊断自检任务（crypto/审计自检循环；进度经 TASK_PROGRESS 推送，
-/// 可被 task_cancel 协作式取消）。任务框架的引擎内生产者，供冒烟与诊断使用。
+/// 可被 task_cancel 协作式取消 / task_pause 暂停续做）。任务框架的引擎内
+/// 生产者，供冒烟与诊断使用。
 ///
 /// # Safety
 /// `out` 非空。
@@ -2029,13 +2036,11 @@ pub unsafe extern "C" fn vault_core_task_spawn_selfcheck(out: *mut u32) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARG;
     }
-    let id = crate::contract::spawn_task("selfcheck", move |cancel, progress| {
+    let id = crate::contract::spawn_task("selfcheck", "background", move |ctl, progress| {
         for i in 0..20u64 {
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err("cancelled".into());
-            }
+            ctl.checkpoint()?;
             std::thread::sleep(std::time::Duration::from_millis(20));
-            progress(i * 5, 100);
+            progress(i * 5, 100, i, 20);
         }
         if vault_crypto::self_check() && vault_audit::self_check() {
             Ok(())
@@ -2045,6 +2050,33 @@ pub unsafe extern "C" fn vault_core_task_spawn_selfcheck(out: *mut u32) -> i32 {
     });
     unsafe { out.write(id) };
     OK
+}
+
+/// 任务暂停（P8-2，docs/v2.0/02 §6.5）：运行中任务在下一检查点转 paused，
+/// 任务槽与已收块保留（区别于 cancel 的释放语义）。
+/// 返回 0 / 7（未知任务）/ 12（状态不允许：排队中或终态）。
+///
+/// # Safety
+/// `task_id` 由 task_spawn / 入队接口签发。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_task_pause(task_id: u32) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    crate::contract::task_pause(task_id)
+}
+
+/// 任务恢复（P8-2）：paused → 原任务内续做（不重新入队、不清进度）。
+/// 返回 0 / 7 / 12。
+///
+/// # Safety
+/// `task_id` 由 task_spawn / 入队接口签发。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_task_resume(task_id: u32) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    crate::contract::task_resume(task_id)
 }
 
 /// 会话只读状态（P6-2 只读降级）：1=只读（他进程持租约），0=可写。
