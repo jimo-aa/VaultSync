@@ -12,7 +12,11 @@
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
+pub mod discovery;
+// 引擎层广播/浏览需要同一守护进程类型（vault-p2p 不直接依赖 mdns-sd）
+pub use mdns_sd;
 pub mod frame;
 pub mod part;
 pub mod path;
+pub mod punch;
 pub mod queue;

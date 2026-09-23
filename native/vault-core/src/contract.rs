@@ -49,6 +49,7 @@ pub fn capability_bits() -> u64 {
         | crate::contract::CAP_MIGRATION
         | crate::contract::CAP_PQ_HYBRID
         | crate::contract::CAP_SEARCH_FRAGMENT
+        | crate::contract::CAP_DISCOVERY
 }
 
 // ==== 事件类型（docs/v2.0/02 §6.4，1–24；24–255 保留）====

@@ -106,6 +106,30 @@ impl Identity {
         k
     }
 
+    /// 配对短码（P8-4，docs/05-03 §3.3）：6 位十进制
+    /// `HKDF(SHA256(pk_a‖pk_b‖role), "pair-code")[0..4] % 1_000_000`。
+    ///
+    /// 公钥对按字典序规范化（双端算得同值）；`role` 固定为配对会话语义
+    /// （`vsync-pair`，双方对称）——比对一致即证明双方看到的公钥完全一致
+    /// （中间人无法让两侧算出同一个码）。有效期 120 s 由调用方管理。
+    pub fn match_code(pk_a_hex: &str, pk_b_hex: &str) -> Option<String> {
+        let mut a = hex_decode(pk_a_hex)?;
+        let mut b = hex_decode(pk_b_hex)?;
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let mut pre = a;
+        pre.extend_from_slice(&b);
+        let digest = hash_sha256(&pre);
+        let digest_raw = hex_decode(&digest)?;
+        let key = vault_crypto::kdf::hkdf_sha256_derive(
+            &<[u8; 32]>::try_from(digest_raw).ok()?,
+            b"vsync-pair",
+        );
+        let v = u32::from_be_bytes([key[0], key[1], key[2], key[3]]) as u64 % 1_000_000;
+        Some(format!("{v:06}"))
+    }
+
     /// 本机 X25519 静态公钥（Hello 中携带并对握手哈希签名，绑定到 Ed25519 身份）。
     pub fn x25519_pub(&self) -> [u8; 32] {
         let secret = x25519_dalek::StaticSecret::from(self.x25519_priv());
@@ -147,5 +171,23 @@ mod tests {
         assert_eq!(a.x25519_pub(), b.x25519_pub());
         let c = Identity::generate();
         assert_ne!(a.x25519_pub(), c.x25519_pub());
+    }
+
+    /// P8-4 证据：短码双端独立计算一致（公钥顺序无关）、格式 6 位十进制、
+    /// 不同公钥对不同短码（MITM 无法让两侧算出同码）。
+    #[test]
+    fn match_code_is_symmetric_and_deterministic() {
+        let a = Identity::from_seed(&[1u8; 32]);
+        let b = Identity::from_seed(&[2u8; 32]);
+        let c = Identity::from_seed(&[3u8; 32]);
+        let ab = Identity::match_code(&a.public_hex(), &b.public_hex()).unwrap();
+        let ba = Identity::match_code(&b.public_hex(), &a.public_hex()).unwrap();
+        assert_eq!(ab, ba, "公钥顺序无关（规范化后双端同码）");
+        assert_eq!(ab.len(), 6, "6 位十进制");
+        assert!(ab.chars().all(|ch| ch.is_ascii_digit()));
+        let ac = Identity::match_code(&a.public_hex(), &c.public_hex()).unwrap();
+        assert_ne!(ab, ac, "不同公钥对不同短码");
+        // 非法公钥 hex → None
+        assert!(Identity::match_code("zz", &b.public_hex()).is_none());
     }
 }

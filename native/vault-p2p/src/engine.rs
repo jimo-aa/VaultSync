@@ -24,6 +24,8 @@ use crate::proto::{delete_sign_body, destroy_sign_body, hello_sign_body, Manifes
 /// 误删保护窗口（docs/05-03 §6.2：窗口期内删除保留加密副本）。
 const PROTECT_WINDOW_MS: u64 = 24 * 3600 * 1000;
 const INVITE_TTL_MS: u64 = 10 * 60 * 1000;
+/// P8-4：配对短码有效期（05-03 §3.3：120 s，过期需重新发起）。
+pub const MATCH_CODE_TTL_MS: u64 = 120 * 1000;
 const MAX_EVENTS: usize = 100;
 const RELAY_MAGIC: &str = "VSR1";
 
@@ -171,6 +173,12 @@ pub struct EngineInner {
     frame_hist: Mutex<[u64; 4]>,
     /// P8-2：当前同步作业的控制面（None = 非队列作业，检查点直通）。
     sync_ctl: Mutex<Option<SyncCtl>>,
+    /// P8-4：发现开关（默认开；关闭后不发也不收 mDNS）。
+    discovery_enabled: AtomicBool,
+    /// P8-4：mDNS 守护进程（广播本机 `vs-<fp4>`；懒启动，失败静默降级）。
+    mdns: Mutex<Option<vault_net::mdns_sd::ServiceDaemon>>,
+    /// P8-4：最近一次配对的短码与有效期（双端独立计算，人工比对用）。
+    match_code: Mutex<Option<(String, u64)>>,
     dead: AtomicBool,
 }
 
@@ -276,6 +284,9 @@ impl P2pEngine {
                 pad_legacy: AtomicBool::new(false),
                 frame_hist: Mutex::new([0u64; 4]),
                 sync_ctl: Mutex::new(None),
+                discovery_enabled: AtomicBool::new(true),
+                mdns: Mutex::new(None),
+                match_code: Mutex::new(None),
                 dead: AtomicBool::new(false),
             }),
         };
@@ -371,6 +382,156 @@ impl P2pEngine {
             .sync_ctl
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = ctl;
+    }
+
+    /// P8-4：发现开关。关闭后不发也不收 mDNS（只保留邀请码 / 手动载体）；
+    /// 关闭是用户选择，不报错。
+    pub fn set_discovery_enabled(&self, on: bool) {
+        self.inner.discovery_enabled.store(on, Ordering::SeqCst);
+        if !on {
+            // 停止广播（守护进程直接丢弃；浏览按需创建，不受影响）
+            *self.inner.mdns.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            self.log("discovery: disabled by user");
+        }
+    }
+
+    /// P8-4：开始广播本机 `vs-<fp4>`（懒启动；失败静默——发现不可用如实
+    /// 降级，邀请码 / 手动载体仍在）。
+    fn ensure_mdns(&self) -> Option<vault_net::mdns_sd::ServiceDaemon> {
+        if !self.inner.discovery_enabled.load(Ordering::SeqCst) {
+            return None;
+        }
+        let mut guard = self.inner.mdns.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            let daemon = vault_net::mdns_sd::ServiceDaemon::new().ok()?;
+            let fp = self.inner.ident.public_hex();
+            // 只在广播成功时缓存守护进程；失败则下次重试（发现不可用如实降级）
+            if vault_net::discovery::advertise(&daemon, &fp, "0001", self.port()).is_some() {
+                *guard = Some(daemon);
+            }
+        }
+        guard.clone()
+    }
+
+    /// P8-4：局域网发现快照（docs/05-03 §3.4）。浏览 1.5 s 聚合候选；
+    /// 未配对设备 `deviceId` / `name` 为 null；reachable 经 300 ms TCP 轻量
+    /// 探测（不打洞、不建长连接）。**发现不构成身份证明**：配对仍须带外要素。
+    pub fn discover(&self) -> serde_json::Value {
+        let enabled = self.inner.discovery_enabled.load(Ordering::SeqCst);
+        let mut candidates: Vec<serde_json::Value> = Vec::new();
+        if enabled {
+            if let Some(daemon) = self.ensure_mdns() {
+                let receiver = daemon.browse(vault_net::discovery::SERVICE_TYPE);
+                if let Ok(rx) = receiver {
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_millis(1500);
+                    let mut seen: Vec<vault_net::discovery::Discovered> = Vec::new();
+                    while std::time::Instant::now() < deadline {
+                        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                            Ok(vault_net::mdns_sd::ServiceEvent::ServiceResolved(info)) => {
+                                let props = info.get_properties();
+                                let fp = props
+                                    .get_property_val_str("fp")
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let port = info.get_port();
+                                let now = now_ms();
+                                vault_net::discovery::aggregate(
+                                    &mut seen,
+                                    vault_net::discovery::Discovered {
+                                        instance: info.get_fullname().to_string(),
+                                        fp,
+                                        addrs: info
+                                            .get_addresses()
+                                            .iter()
+                                            .map(|ip| format!("{}:{}", ip, port))
+                                            .collect(),
+                                        port,
+                                        last_seen_ms: now,
+                                    },
+                                    now,
+                                    vault_net::discovery::RETAIN_MS,
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    for d in &seen {
+                        let fp8 = d.fp.clone();
+                        let paired = {
+                            let peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+                            peers
+                                .list()
+                                .iter()
+                                .any(|(_, r)| r.pub_hex.starts_with(&fp8))
+                        };
+                        let (device_id, name) = if paired {
+                            let peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
+                            match peers
+                                .list()
+                                .iter()
+                                .find(|(_, r)| r.pub_hex.starts_with(&fp8))
+                            {
+                                Some((pid, r)) => (Some(pid.clone()), Some(r.name.clone())),
+                                None => (None, None),
+                            }
+                        } else {
+                            (None, None) // 未配对：身份信息只在配对后可获得
+                        };
+                        // 轻量探测：TCP 300 ms（不打洞、不建长连接）
+                        let mut reachable = false;
+                        let mut rtt: Option<u64> = None;
+                        for a in &d.addrs {
+                            if let Ok(addr) = a.parse::<std::net::SocketAddr>() {
+                                let t0 = std::time::Instant::now();
+                                if std::net::TcpStream::connect_timeout(
+                                    &addr,
+                                    std::time::Duration::from_millis(300),
+                                )
+                                .is_ok()
+                                {
+                                    reachable = true;
+                                    rtt = Some((t0.elapsed().as_millis() as u64).max(1));
+                                    break;
+                                }
+                            }
+                        }
+                        candidates.push(serde_json::json!({
+                            "deviceId": device_id,
+                            "name": name,
+                            "fingerprint": d.fp,
+                            "addrs": d.addrs.iter().map(|a| serde_json::json!({
+                                "addr": a, "transport": "tcp",
+                                "reachable": reachable, "rttMs": rtt,
+                            })).collect::<Vec<_>>(),
+                            "paired": paired,
+                        }));
+                    }
+                }
+            }
+        }
+        let (code, expires) = self
+            .inner
+            .match_code
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .map(|(c, e)| (Some(c), Some(e)))
+            .unwrap_or((None, None));
+        serde_json::json!({
+            "schema": 1,
+            "tsMs": now_ms(),
+            "enabled": enabled,
+            "self": {
+                "deviceId": self.device_id(),
+                "fingerprint": self.fingerprint(),
+                "port": self.port(),
+            },
+            "matchCode": code,
+            "matchCodeExpiresMs": expires,
+            "candidates": candidates,
+        })
     }
 
     /// 同步检查点：取消 → Err("cancelled")；暂停中阻塞等待恢复。
@@ -507,7 +668,7 @@ impl P2pEngine {
                 &peer_id,
                 PeerRec {
                     name: peer_name.clone(),
-                    pub_hex: peer_pub,
+                    pub_hex: peer_pub.clone(),
                     paired_ms: now_ms(),
                     counter: 0,
                     addr: Some(addr.to_string()),
@@ -515,8 +676,23 @@ impl P2pEngine {
                 },
             )
             .map_err(|e| e.to_string())?;
+        // P8-4：短码（双端独立计算、人工比对——MITM 防线的可计算判据）
+        let short =
+            crate::identity::Identity::match_code(&self.inner.ident.public_hex(), &peer_pub);
+        let expires = now_ms() + MATCH_CODE_TTL_MS;
+        if let Some(c) = &short {
+            *self
+                .inner
+                .match_code
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some((c.clone(), expires));
+            self.log(&format!("pairing: match code {c} (compare with peer UI)"));
+        }
         self.absorb_padding(&ch);
-        Ok(serde_json::json!({"peerId": peer_id, "name": peer_name}))
+        Ok(serde_json::json!({
+            "peerId": peer_id, "name": peer_name,
+            "shortCode": short, "matchCodeExpiresMs": expires,
+        }))
     }
 
     /// 解除与某已配对设备的配对（从对端登记表移除）；返回是否曾存在该设备（幂等）。
@@ -746,6 +922,18 @@ impl P2pEngine {
                     pq_cap: peer_pq,
                 },
             );
+            // P8-4：短码（响应端独立计算，双端比对一致 = 公钥一致）
+            let short =
+                crate::identity::Identity::match_code(&self.inner.ident.public_hex(), &peer_pub);
+            if let Some(c) = &short {
+                *self
+                    .inner
+                    .match_code
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) =
+                    Some((c.clone(), now_ms() + MATCH_CODE_TTL_MS));
+                self.log(&format!("pairing: match code {c} (compare with peer UI)"));
+            }
             self.log(&format!("paired with {peer_id} ({peer_name})"));
         } else {
             let registered = self

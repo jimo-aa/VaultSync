@@ -302,6 +302,10 @@ abstract class VaultCoreBridge {
   /// "path":{directCandidates,punchedCandidates,relayCandidates}}。
   String? p2pPathStatus(Object sessionHandle);
 
+  /// 局域网设备发现快照（P8-4）：JSON {schema,tsMs,enabled,self,matchCode,
+  /// matchCodeExpiresMs,candidates[]}；mDNS 不可用 → enabled=false 不报错。
+  String? p2pDiscover(Object sessionHandle);
+
   /// 按平台返回动态库文件名。
   static String get libraryName {
     if (Platform.isWindows) return 'vault_core.dll';
@@ -451,6 +455,7 @@ typedef _SearchV2C = Int32 Function(Pointer<Void>, Pointer<Utf8>,
 typedef _P2pSyncTaskC = Int32 Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
 typedef _P2pPathStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _P2pDiscoverC = Int32 Function(Pointer<Void>, Pointer<Pointer<Utf8>>);
 
 
 class VaultCoreBridgeFfi implements VaultCoreBridge {
@@ -682,6 +687,9 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
             Pointer<Uint32>)>('vault_core_p2p_sync_task');
     _p2pPathStatus = _lib.lookupFunction<_P2pPathStatusC,
         Pointer<Utf8> Function(Pointer<Void>)>('vault_core_p2p_path_status');
+    _p2pDiscover = _lib.lookupFunction<_P2pDiscoverC,
+        int Function(Pointer<Void>,
+            Pointer<Pointer<Utf8>>)>('vault_core_p2p_discover');
     _version = version;
     _freeString = freeString;
   }
@@ -788,6 +796,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>)
       _p2pSyncTask;
   late final Pointer<Utf8> Function(Pointer<Void>) _p2pPathStatus;
+  late final int Function(
+      Pointer<Void>, Pointer<Pointer<Utf8>>) _p2pDiscover;
 
   /// 引擎事件回调：订阅进程内注册一次、随进程存活（引擎侧为全局事件总线）。
   NativeCallable<_EventCallbackC>? _eventCallable;
@@ -1105,6 +1115,18 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   @override
   String? p2pPathStatus(Object sessionHandle) =>
       _takeJson(_p2pPathStatus(_handle(sessionHandle)));
+
+  @override
+  String? p2pDiscover(Object sessionHandle) {
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      final status = _p2pDiscover(_handle(sessionHandle), out);
+      if (status != VaultStatus.ok) return null;
+      return _takeJson(out.value);
+    } finally {
+      calloc.free(out);
+    }
+  }
 
   @override
   String? p2pSyncRelay(Object sessionHandle, String relay, String room) {
@@ -1893,5 +1915,9 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
 
   @override
   String? p2pPathStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pDiscover(Object sessionHandle) =>
       throw UnsupportedError('stub: native not linked');
 }

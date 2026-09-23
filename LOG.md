@@ -401,3 +401,12 @@
   4. **P8-3 启动扫描**：引擎启动打开保险箱后执行 `scan_dir`（配额 = max(5GiB, 库×20%)，版本判据 = 索引清单 file_sha），结果入事件日志。
 - **验证**：workspace 全测试绿（vault-p2p 34）、clippy 零告警、fmt 干净、`flutter analyze` 零问题、冒烟 244 → **254 断言全 PASS**（入队同步 → 轮询 done → resultJson 摘要；双新端 tier=4 / legacyPeer=false / 直方图有帧 / 候选计数恒 0）。双设备全部同步流量已在填充帧上运行。
 - **如实登记**：PATH_DEGRADED(13) 契约事件发布与 overheadRatio 数值随 P8-4 一并；`TRANSFER_QUEUE`(11) 事件随 Dart 队列页；P8-4 发现/打洞、P8-5 中继 V2、P8-7/8/9/10 未开始（面板逐条 `[ ]`）。
+
+## 2026-09-23 P8 批次三——P8-4 设备发现与打洞（mDNS + 短码 + 打洞模块；冒烟 262 断言）
+
+- **已交付**：
+  1. **mDNS 发现**（vault-net `discovery.rs` + 引擎 + FFI + Dart）：`_vaultsync._tcp.local.`、实例名 `vs-<fp4>`（**不含主机名**）、TXT 只 `v/fp/caps/port` 四项（隐私纪律：不广播 device_id/用户名/库名；证据 `net::discover_txt_has_no_device_id`）；接口分类（Lan/LinkLocal/Public，loopback 排除）+ 虚拟接口黑名单默认排除（vEthernet/Hyper-V/Docker/WSL/VMware/TAP…）+ 候选上限 8；30 s 失联移除；`vault_core_p2p_discover` 快照（schema 1；未配对设备 deviceId/name 为 null；reachable = 300 ms TCP 轻量探测；mDNS 不可用 → `enabled=false` 不报错不谎报「无设备」）；`CAP_DISCOVERY`(5) 置位；Dart 桥接。依赖 `mdns-sd`（纯 Rust 无 async runtime；非密码学依赖，不受 R2 受审约束——发现不构成身份证明）。
+  2. **配对短码**：6 位十进制 `HKDF(SHA256(pk_a‖pk_b),"pair-code")[0..4] % 1e6`，公钥对字典序规范化（双端独立计算必得同码——MITM 无法让两侧算出同码）；pair_join 返回 `shortCode` + `matchCodeExpiresMs`（120 s），acceptor 同算入事件日志；证据 `identity::match_code_is_symmetric_and_deterministic`。
+  3. **打洞模块**（vault-net `punch.rs`）：映射观测协议 `VSOBS1`（观测端点 = 中继侧，VSR2 接线归 P8-5）；对称 NAT 快速判定（同 socket 不同目标映射端口不同 → 立即回落，**不做无望长尝试**，证据 `punch::symmetric_nat_falls_back_fast` 毫秒级完成）；binding 探测打洞（成功/超时两路测试）；`DegradeReason` 枚举对齐 05-03 §4.2 六种 + padding/proto 共八值。
+- **验证**：workspace 全测试绿（vault-net 24+2、vault-p2p 34、vault-core 30）、clippy 零告警、fmt 干净、冒烟 254 → **262 断言全 PASS**（发现快照 schema/enabled/self/候选数组、能力位 bit5、配对短码 6 位 + 有效期）。
+- **如实登记（面板 P8-4 标 `[~]`）**：候选列表经中继信令交换依赖 P8-5 VSR2 控制帧；真网 NAT 矩阵实测（≥60% 判据 + escape hatch ADR）未跑；`PATH_DEGRADED`(13) 契约事件桥接与 per-peer 路径状态段未接。**escape hatch 提示**：若实测打洞成功率 < 60%，按 01 §5.4 引入受审查 STUN 仅作候选发现（须新增 ADR + LOG 实测数据）。

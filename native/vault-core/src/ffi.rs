@@ -1606,6 +1606,37 @@ pub unsafe extern "C" fn vault_core_p2p_status(handle: *mut Session) -> *mut c_c
     }
 }
 
+/// 局域网设备发现快照（P8-4，docs/05-03 §3.4；CAP_DISCOVERY）。
+/// 返回 JSON：`{schema, tsMs, enabled, self{deviceId,fingerprint,port},
+/// matchCode, matchCodeExpiresMs, candidates:[{deviceId,name,fingerprint,
+/// addrs[{addr,transport,reachable,rttMs}],paired}]}`。
+/// 未配对设备 deviceId/name 为 null；发现不构成身份证明（配对仍须带外要素）。
+/// mDNS 不可用 → `enabled=false`（不报错，如实降级；不得显示「未发现设备」）。
+///
+/// # Safety
+/// `handle` 有效；`out_json` 非空（成功时写入引擎分配的 CString）。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_discover(
+    handle: *mut Session,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_DISCOVERY == 0 {
+        return ERR_CAPABILITY;
+    }
+    if handle.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let run = || -> Result<(), i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let c = CString::new(serde_json::to_string(&engine.discover()).map_err(|_| ERR_INTERNAL)?)
+            .map_err(|_| ERR_INTERNAL)?;
+        unsafe { out_json.write(c.into_raw()) };
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
 /// 路径与填充诊断（P8-6，docs/05-03 §四、05-04 F-07）：
 /// `{"padding":{tier,legacyPeer,frameLenHistogram[4]},"path":{directCandidates,
 /// punchedCandidates,relayCandidates}}`。候选计数在 P8-4 发现/打洞落地前

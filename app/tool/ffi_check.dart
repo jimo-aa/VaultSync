@@ -108,6 +108,7 @@ late P2pPairJoinDart _p2pPairJoin;
 late P2pSyncDart _p2pSync;
 late P2pSyncTaskDart _p2pSyncTask;
 late P2pPathStatusDart _p2pPathStatus;
+late P2pDiscoverDart _p2pDiscover;
 late P2pStatusDart _p2pStatus;
 late P2pUnpairDart _p2pUnpair;
 late P2pDestroyArmDart _p2pDestroyArm;
@@ -238,6 +239,9 @@ typedef P2pSyncTaskDart = int Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
 typedef P2pPathStatusC = Pointer<Utf8> Function(Pointer<Void>);
 typedef P2pPathStatusDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pDiscoverC = Int32 Function(Pointer<Void>, Pointer<Pointer<Utf8>>);
+typedef P2pDiscoverDart = int Function(
+    Pointer<Void>, Pointer<Pointer<Utf8>>);
 late TaskFnD _taskPause;
 late TaskFnD _taskResume;
 late SessionReadonlyDart _sessionReadonly;
@@ -509,6 +513,8 @@ void main(List<String> args) {
       'vault_core_p2p_sync_task');
   _p2pPathStatus = lib.lookupFunction<P2pPathStatusC, P2pPathStatusDart>(
       'vault_core_p2p_path_status');
+  _p2pDiscover = lib.lookupFunction<P2pDiscoverC, P2pDiscoverDart>(
+      'vault_core_p2p_discover');
   _p2pStatus =
       lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
   _p2pUnpair =
@@ -1454,7 +1460,16 @@ void main(List<String> args) {
   check(
       pqJoined.address != 0 && pqJoined.toDartString().contains('"peerId":"vd-'),
       'P7 PQ 配对成功（suite 2 乐观探测即成功）');
-  if (pqJoined.address != 0) _free(pqJoined);
+  // P8-4：短码（双端独立计算一致；6 位十进制 + 120s 有效期）
+  if (pqJoined.address != 0) {
+    final joinedJson = jsonDecode(pqJoined.toDartString()) as Map<String, dynamic>;
+    final sc = joinedJson['shortCode']?.toString() ?? '';
+    check(sc.length == 6 && sc.contains(RegExp(r'^\d{6}$')),
+        'P8 配对短码为 6 位十进制（$sc）');
+    final exp = (joinedJson['matchCodeExpiresMs'] as num).toInt();
+    check(exp > 0, 'P8 短码有效期字段非零');
+    _free(pqJoined);
+  }
 
   // 协商结果强制可见：最近握手套件 + 对端能力登记
   final pqStA = _p2pStatus(hQA);
@@ -1518,6 +1533,28 @@ void main(List<String> args) {
   check(_p2pSyncTask(hQA, Pointer<Utf8>.fromAddress(0), p8task) == 7,
       'P8 sync_task(null addr) → 7');
   calloc.free(p8task);
+
+  // ===== P8-4 设备发现 + 配对短码 =====
+  // 能力位 bit5 CAP_DISCOVERY 置位
+  final abi5 = calloc<VsAbiInfo>();
+  check(_abiInfo(abi5) == 0 && abi5.ref.capabilityBits & (1 << 5) != 0,
+      'P8 能力位 bit5 CAP_DISCOVERY 置位');
+  calloc.free(abi5);
+  // 发现快照：schema / enabled / self / 候选数组（单机环境候选可为空——
+  // 不谎报「无设备」，enabled=true 表示发现本身可用）
+  final discOut = calloc<Pointer<Utf8>>();
+  check(_p2pDiscover(hQA, discOut) == 0 && discOut.value.address != 0,
+      'P8 p2p_discover 返回快照');
+  final disc = jsonDecode(str(discOut.value)) as Map<String, dynamic>;
+  _free(discOut.value);
+  discOut.value = Pointer<Utf8>.fromAddress(0);
+  check(disc['schema'] == 1, 'P8 discover schema == 1');
+  check(disc['enabled'] == true, 'P8 发现默认启用');
+  final selfObj = disc['self'] as Map<String, dynamic>;
+  check(selfObj['deviceId'].toString().startsWith('vd-') &&
+      selfObj['port'] as num > 0, 'P8 self 含 deviceId 与端口');
+  check(disc['candidates'] is List, 'P8 候选为数组');
+  calloc.free(discOut);
 
   // 指令队列：push_lock（kind=2）入队 / push_rotation（无待传播 → 7）/ 取消
   final pqTask = calloc<Uint32>();

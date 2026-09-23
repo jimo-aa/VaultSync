@@ -23,23 +23,36 @@ impl PathKind {
     }
 }
 
-/// 降级原因（`PATH_DEGRADED(13)` 的 `reason` 枚举子集；P8-4 补全打洞类）。
+/// 降级原因（`PATH_DEGRADED(13)` 的 `reason` 枚举：05-03 §4.2 六种
+/// + `padding_downgrade`（05-04 §3.3）+ `proto_downgrade`（02 事件表））。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DegradeReason {
-    /// 打洞超时（P8-4）。
+    /// 直连超时（≤3 s 未成功）。
+    DirectTimeout,
+    /// 打洞超时（≤5 s 未成功）。
     HolePunchTimeout,
-    /// 对端不支持（协议能力不足）。
-    ProtoDowngrade,
-    /// 中继限额 / 鉴权触发回落。
+    /// 对称 NAT（快速判定，不做无望长尝试）。
+    SymmetricNat,
+    /// 中继限额。
     RelayLimit,
+    /// 中继不可达。
+    RelayUnavailable,
+    /// 填充档位降级。
+    PaddingDowngrade,
+    /// 对端协议能力不足。
+    ProtoDowngrade,
 }
 
 impl DegradeReason {
     pub fn as_str(self) -> &'static str {
         match self {
+            DegradeReason::DirectTimeout => "direct_timeout",
             DegradeReason::HolePunchTimeout => "hole_punch_timeout",
-            DegradeReason::ProtoDowngrade => "proto_downgrade",
+            DegradeReason::SymmetricNat => "symmetric_nat",
             DegradeReason::RelayLimit => "relay_limit",
+            DegradeReason::RelayUnavailable => "relay_unavailable",
+            DegradeReason::PaddingDowngrade => "padding_downgrade",
+            DegradeReason::ProtoDowngrade => "proto_downgrade",
         }
     }
 }
