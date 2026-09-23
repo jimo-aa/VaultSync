@@ -9,7 +9,7 @@ use std::io::{BufRead, Write as IoWrite};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use vault_crypto::{aead_decrypt, aead_encrypt, hex_encode, random_bytes, KEY_LEN};
@@ -31,6 +31,37 @@ const RELAY_MAGIC: &str = "VSR1";
 pub type WipeFn = Box<dyn Fn() -> Result<(), String> + Send>;
 /// P7-10 远程锁定的本机执行回调（清保险箱槽位与密钥材料）。
 pub type LockFn = Box<dyn Fn() + Send>;
+
+/// 同步作业控制面（P8-2）：取消 + 暂停门，成员与宿主任务注册表的
+/// TaskCtl 同源（由 FFI 层桥接），使 task_pause/task_cancel 在引擎的
+/// 文件 / 块检查点上即时生效。
+#[derive(Clone, Default)]
+pub struct SyncCtl {
+    pub cancel: Arc<AtomicBool>,
+    pub pause: Arc<AtomicBool>,
+    pub gate: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl SyncCtl {
+    /// 检查点：取消 → Err("cancelled")；暂停中阻塞等待恢复。
+    pub fn checkpoint(&self) -> Result<(), String> {
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err("cancelled".into());
+        }
+        let (lock, cv) = &*self.gate;
+        let mut go = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while !*go && !self.cancel.load(Ordering::SeqCst) {
+            go = cv
+                .wait_timeout(go, Duration::from_millis(200))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err("cancelled".into());
+        }
+        Ok(())
+    }
+}
 
 /// 销毁指令被拒的原因（docs/08 §四.3：破坏性信令必须验签后执行）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +165,12 @@ pub struct EngineInner {
     rate_bps: AtomicU64,
     /// P7-8：最近一次成功握手的 cipher_suite（0 = 尚未握手 / 1 / 2），status 暴露。
     last_suite: AtomicU8,
+    /// P8-6：最近一次握手的填充协商结果与诊断（status 暴露）。
+    pad_tier: AtomicU8,
+    pad_legacy: AtomicBool,
+    frame_hist: Mutex<[u64; 4]>,
+    /// P8-2：当前同步作业的控制面（None = 非队列作业，检查点直通）。
+    sync_ctl: Mutex<Option<SyncCtl>>,
     dead: AtomicBool,
 }
 
@@ -235,6 +272,10 @@ impl P2pEngine {
                 port: AtomicU64::new(0),
                 rate_bps: AtomicU64::new(0),
                 last_suite: AtomicU8::new(0),
+                pad_tier: AtomicU8::new(0),
+                pad_legacy: AtomicBool::new(false),
+                frame_hist: Mutex::new([0u64; 4]),
+                sync_ctl: Mutex::new(None),
                 dead: AtomicBool::new(false),
             }),
         };
@@ -243,6 +284,7 @@ impl P2pEngine {
         engine.resume_armed_on_startup();
 
         // 打开保险箱进槽位；设备位供向量时钟自增
+        let mut part_scan_report = String::new();
         {
             let mut guard = engine
                 .inner
@@ -252,8 +294,43 @@ impl P2pEngine {
             if guard.is_none() {
                 let mut v = Vault::open(vault_path, mk, &keys.index, &keys.search)?;
                 v.set_device_id(&engine.inner.ident.device_id());
+                // P8-3：启动恢复扫描（05-03 §6.2 情形 1/3/5/6；情形 2 需配对表，
+                // 由对端投递时校验兜底）——配额 = max(5 GiB, 库大小 × 20%)
+                let known: HashSet<(u64, [u8; 32])> = {
+                    let manifest = v.sync_manifest().unwrap_or_default();
+                    serde_json::from_str::<Vec<ManifestItem>>(&manifest)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|i| {
+                            vault_crypto::hex_decode(&i.file_sha)
+                                .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                                .map(|s| (i.id, s))
+                        })
+                        .collect()
+                };
+                let vault_bytes = std::fs::metadata(vault_path).map(|m| m.len()).unwrap_or(0);
+                let quota = (vault_bytes * 20 / 100).max(5 * 1024 * 1024 * 1024);
+                let actions = vault_net::part::scan_dir(&data_dir, now_ms(), quota, &|id, sha| {
+                    known.contains(&(id, *sha))
+                });
+                let mut kept = 0usize;
+                let mut dropped = 0usize;
+                for (p, a) in &actions {
+                    match a {
+                        vault_net::part::ScanAction::Resumable { .. } => kept += 1,
+                        _ => dropped += 1,
+                    }
+                    let _ = p;
+                }
+                if !actions.is_empty() {
+                    part_scan_report =
+                        format!("part scan: kept={kept} dropped={dropped} (quota={quota})");
+                }
                 *guard = Some(v);
             }
+        }
+        if !part_scan_report.is_empty() {
+            engine.log(&part_scan_report);
         }
 
         let listener = TcpListener::bind(("0.0.0.0", 0)).map_err(|_| "cannot bind listener")?;
@@ -286,6 +363,31 @@ impl P2pEngine {
         self.inner.rate_bps.store(bps, Ordering::SeqCst);
     }
 
+    /// P8-2：绑定/清除当前同步作业的控制面（task_pause / task_cancel 在
+    /// 引擎的文件与块检查点上生效）。
+    pub fn set_sync_ctl(&self, ctl: Option<SyncCtl>) {
+        *self
+            .inner
+            .sync_ctl
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = ctl;
+    }
+
+    /// 同步检查点：取消 → Err("cancelled")；暂停中阻塞等待恢复。
+    /// 无控制面（非队列作业）时直通。
+    pub fn sync_checkpoint(&self) -> Result<(), String> {
+        let ctl = self
+            .inner
+            .sync_ctl
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match ctl {
+            Some(c) => c.checkpoint(),
+            None => Ok(()),
+        }
+    }
+
     fn log(&self, msg: &str) {
         let mut ev = self.inner.events.lock().unwrap_or_else(|e| e.into_inner());
         ev.push(format!("{} {msg}", now_ms()));
@@ -306,6 +408,20 @@ impl P2pEngine {
             }
             _ => self.log(&format!("{context}: cipher_suite=1")),
         }
+    }
+
+    /// P8-6：连接结束（或同步完成）后把该信道的帧统计累加进引擎诊断。
+    fn absorb_padding(&self, ch: &SecureChannel) {
+        let mut h = self
+            .inner
+            .frame_hist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (a, b, c, d) = ch.frame_histogram();
+        h[0] += a;
+        h[1] += b;
+        h[2] += c;
+        h[3] += d;
     }
 
     /// 拨号 + 握手（配对路径用：同一地址可重拨重试）。返回流与信道供后续业务收发。
@@ -399,6 +515,7 @@ impl P2pEngine {
                 },
             )
             .map_err(|e| e.to_string())?;
+        self.absorb_padding(&ch);
         Ok(serde_json::json!({"peerId": peer_id, "name": peer_name}))
     }
 
@@ -428,6 +545,9 @@ impl P2pEngine {
         let sig = self.inner.ident.sign(&hello_sign_body(&hh, &x25519_hex));
         // 本端 pq 能力现算（每次握手 ~0.1ms 级派生，不缓存，fail-open 天然新鲜）
         let pq_local = vault_crypto::pq::mlkem768_sk_from_seed(&self.inner.ident.seed()).is_some();
+        // P8-6：协议版本与填充档位声明（05-04 §3.3；字段不在签名体内，同 port 口径）
+        const PROTO_VER: u16 = 2;
+        const PAD_TIER_MAX: u8 = 4;
         send_json(
             ch,
             stream,
@@ -439,10 +559,24 @@ impl P2pEngine {
                 sig,
                 port: self.port(),
                 pq: pq_local,
+                proto_ver: PROTO_VER,
+                pad_tier_min: 0,
+                pad_tier_max: PAD_TIER_MAX,
             },
         )?;
         let resp: Msg = recv_json(ch, stream)?;
-        let (device_id, name, pub_hex, x25519_hex, sig, port, pq_peer) = match resp {
+        let (
+            device_id,
+            name,
+            pub_hex,
+            x25519_hex,
+            sig,
+            port,
+            pq_peer,
+            peer_proto,
+            peer_pad_min,
+            peer_pad_max,
+        ) = match resp {
             Msg::Hello {
                 device_id,
                 name,
@@ -451,7 +585,21 @@ impl P2pEngine {
                 sig,
                 port,
                 pq,
-            } => (device_id, name, pub_hex, x25519_hex, sig, port, pq),
+                proto_ver,
+                pad_tier_min,
+                pad_tier_max,
+            } => (
+                device_id,
+                name,
+                pub_hex,
+                x25519_hex,
+                sig,
+                port,
+                pq,
+                proto_ver,
+                pad_tier_min,
+                pad_tier_max,
+            ),
             Msg::Error { msg } => return Err(leak_str(&msg)),
             _ => return Err("expected hello"),
         };
@@ -463,6 +611,33 @@ impl P2pEngine {
         }
         if Identity::device_id_of(&pub_hex).as_deref() != Some(device_id.as_str()) {
             return Err("device id mismatch");
+        }
+        // P8-6：填充协商（05-04 §3.3）。旧端（proto_ver < 2 或字段未声明）→ 档 0，
+        // 恒旧帧格式（不得在未协商时填充）；下限违背取低档不中断同步，降级可见。
+        let effective = if peer_proto >= 2 && peer_pad_max > 0 {
+            vault_net::frame::negotiate(PAD_TIER_MAX, peer_pad_max)
+        } else {
+            0
+        };
+        ch.set_padding(effective);
+        self.inner.pad_tier.store(effective, Ordering::SeqCst);
+        self.inner
+            .pad_legacy
+            .store(effective == 0, Ordering::SeqCst);
+        let (h1, h2, h3, h4) = ch.frame_histogram();
+        *self
+            .inner
+            .frame_hist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = [h1, h2, h3, h4];
+        if effective == 0 {
+            self.log("padding: tier=0 (legacy peer or undeclared); legacy framing");
+        } else if vault_net::frame::floor_breached(0, peer_pad_min, effective) {
+            self.log(&format!(
+                "padding: tier={effective} (floor breached; PATH_DEGRADED padding_downgrade)"
+            ));
+        } else {
+            self.log(&format!("padding: tier={effective} negotiated"));
         }
         // 能力自愈：对端升级（false→true）或能力丢失（true→false）都如实回写。
         {
@@ -1212,6 +1387,7 @@ impl P2pEngine {
 
         let summary = self.execute_plan(&mut ch, &mut stream, &local_items, &peer_items)?;
         let _ = send_json(&mut ch, &mut stream, &Msg::SyncDone);
+        self.absorb_padding(&ch);
         let cnt = |k: &str| summary[k].as_array().map(Vec::len).unwrap_or(0);
         self.log(&format!(
             "sync with {peer_id}: pushed {} pulled {} deleted {} conflicts {} merged {}",
@@ -1247,6 +1423,8 @@ impl P2pEngine {
         };
 
         for id in ids {
+            // P8-2：文件边界检查点（取消立即收敛；暂停阻塞等待恢复）
+            self.sync_checkpoint()?;
             let a = lm.get(&id).copied();
             let b = pm.get(&id).copied();
             match (a, b) {
@@ -1413,6 +1591,7 @@ impl P2pEngine {
                 let v = slot.as_ref().ok_or("vault locked")?;
                 v.read_chunk_ct(id, idx).map_err(|e| e.to_string())?
             };
+            self.sync_checkpoint()?;
             self.throttle(ct.len());
             send_json(
                 ch,
@@ -1596,6 +1775,7 @@ impl P2pEngine {
                     if vault_crypto::hash_sha256(&ct) != item.chunks[idx].hash {
                         return Err("block hash mismatch".into());
                     }
+                    self.sync_checkpoint()?;
                     self.throttle(ct.len());
                     pf.write_chunk(idx, &ct).map_err(|e| e.to_string())?;
                 }
@@ -1805,6 +1985,7 @@ impl P2pEngine {
                 let v = slot.as_ref().ok_or("vault locked")?;
                 v.read_chunk_ct(id, idx).map_err(|e| e.to_string())?
             };
+            self.sync_checkpoint()?;
             self.throttle(ct.len());
             send_json(
                 ch,
@@ -2195,6 +2376,19 @@ impl P2pEngine {
         let peers = self.inner.peers.lock().unwrap_or_else(|e| e.into_inner());
         let events = self.inner.events.lock().unwrap_or_else(|e| e.into_inner());
         let armed = self.inner.armed.lock().unwrap_or_else(|e| e.into_inner());
+        // P8-6：填充协商诊断（05-04 F-07；帧数直方图按档 1–4）
+        let padding = {
+            let h = self
+                .inner
+                .frame_hist
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            serde_json::json!({
+                "tier": self.inner.pad_tier.load(Ordering::SeqCst),
+                "legacyPeer": self.inner.pad_legacy.load(Ordering::SeqCst),
+                "frameLenHistogram": [h[0], h[1], h[2], h[3]],
+            })
+        };
         serde_json::json!({
             "deviceId": self.device_id(),
             "fingerprint": self.fingerprint(),
@@ -2202,6 +2396,7 @@ impl P2pEngine {
             "name": self.inner.device_name,
             // P7-8：最近一次握手协商结果（0 尚未握手 / 1 经典 / 2 混合 KEM），强制可见
             "pqSuite": self.inner.last_suite.load(Ordering::SeqCst),
+            "padding": padding,
             "peers": peers.list().iter().map(|(id, p)| serde_json::json!({
                 "deviceId": id, "name": p.name,
                 "fingerprint": crate::identity::Identity::fingerprint_of(&p.pub_hex),

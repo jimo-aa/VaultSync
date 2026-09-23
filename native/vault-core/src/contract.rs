@@ -289,6 +289,8 @@ pub struct TaskSnapshot {
     pub total_chunks: u64,
     pub rate_bps: u64,
     pub eta_ms: u64,
+    /// P8-1：成功结果载荷（TASK_DONE 的 resultJson 同源）。
+    pub result_json: Option<serde_json::Value>,
 }
 
 struct TaskEntry {
@@ -307,6 +309,8 @@ struct TaskEntry {
     pause: std::sync::Arc<AtomicBool>,
     /// true = 允许推进；暂停时置 false，作业体在 checkpoint 阻塞。
     gate: std::sync::Arc<(Mutex<bool>, Condvar)>,
+    /// P8-1：作业成功结果（done 时写入）。
+    result: Mutex<Option<serde_json::Value>>,
 }
 
 static TASKS: OnceLock<Mutex<Vec<(u32, TaskEntry)>>> = OnceLock::new();
@@ -333,6 +337,21 @@ impl TaskCtl {
         self.cancel.load(Ordering::SeqCst)
     }
 
+    /// 取消令牌（宿主桥接引擎检查点用，P8-1/P8-2）。
+    pub fn cancel_flag(&self) -> std::sync::Arc<AtomicBool> {
+        std::sync::Arc::clone(&self.cancel)
+    }
+
+    /// 暂停标志（同上）。
+    pub fn pause_flag(&self) -> std::sync::Arc<AtomicBool> {
+        std::sync::Arc::clone(&self.pause)
+    }
+
+    /// 暂停门（true = 允许推进；宿主把它作为引擎同步检查点的闸门）。
+    pub fn gate(&self) -> std::sync::Arc<(Mutex<bool>, Condvar)> {
+        std::sync::Arc::clone(&self.gate)
+    }
+
     /// 检查点（块边界 / 步骤边界调用）：取消 → Err；暂停中阻塞等待恢复。
     pub fn checkpoint(&self) -> Result<(), &'static str> {
         if self.cancelled() {
@@ -354,12 +373,15 @@ impl TaskCtl {
     }
 }
 
-/// 注册并启动一个后台任务（P8-1：优先级语义 + 暂停可续做）。
-/// 作业体应周期调用 `ctl.checkpoint()` 并经 `progress` 汇报块粒度进度。
+/// 注册并启动一个后台任务（P8-1：优先级语义 + 暂停可续做 + 结果载荷）。
+/// 作业体应周期调用 `ctl.checkpoint()` 并经 `progress` 汇报块粒度进度；
+/// 成功返回值作为 `resultJson` 进入 TASK_DONE 载荷与 task_status。
 /// 返回 task_id。
 pub fn spawn_task<F>(kind: &str, prio: &str, body: F) -> u32
 where
-    F: Fn(&TaskCtl, &dyn Fn(u64, u64, u64, u64)) -> Result<(), String> + Send + 'static,
+    F: Fn(&TaskCtl, &dyn Fn(u64, u64, u64, u64)) -> Result<serde_json::Value, String>
+        + Send
+        + 'static,
 {
     let id = NEXT_TASK.fetch_add(1, Ordering::Relaxed);
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
@@ -381,6 +403,7 @@ where
             cancel: cancel.clone(),
             pause: pause.clone(),
             gate: gate.clone(),
+            result: Mutex::new(None),
         },
     ));
     publish(
@@ -438,9 +461,12 @@ where
         let result = body(&ctl, &progress);
         let mut guard = tasks_lock();
         if let Some((_, t)) = guard.iter_mut().find(|(tid, _)| *tid == id) {
+            if let Ok(v) = &result {
+                *t.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.clone());
+            }
             if t.state == "running" {
                 t.state = match &result {
-                    Ok(()) => "done".into(),
+                    Ok(_) => "done".into(),
                     Err(e) if e == "cancelled" => "cancelled".into(),
                     Err(_) => "failed".into(),
                 };
@@ -448,7 +474,11 @@ where
             let state = t.state.clone();
             drop(guard);
             match state.as_str() {
-                "done" => publish(EV_TASK_DONE, id, serde_json::json!({"kind": kind_owned})),
+                "done" => publish(
+                    EV_TASK_DONE,
+                    id,
+                    serde_json::json!({"kind": kind_owned, "resultJson": result.unwrap_or_default()}),
+                ),
                 "failed" => publish(
                     EV_TASK_FAILED,
                     id,
@@ -480,6 +510,7 @@ pub fn task_list() -> Vec<TaskSnapshot> {
             total_chunks: t.total_chunks,
             rate_bps: t.rate_bps,
             eta_ms: t.eta_ms,
+            result_json: t.result.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         })
         .collect()
 }

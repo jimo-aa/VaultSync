@@ -1493,6 +1493,55 @@ pub unsafe extern "C" fn vault_core_p2p_sync(
     }
 }
 
+/// 发起一次增量同步（P8-1 入队语义）：作业入后台队列（优先级 background），
+/// 立即返回 task_id；摘要 JSON 经 TASK_DONE 的 `resultJson` / `task_status` 获取。
+/// 作业在文件与块检查点上响应 `task_pause` / `task_cancel`。
+/// 返回 0；7 = 参数非法；9 = 只读；13 = 能力未置位。
+///
+/// # Safety
+/// `handle` 有效；`addr` 合法 UTF-8；`out_task_id` 可为 null。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_sync_task(
+    handle: *mut Session,
+    addr: *const c_char,
+    out_task_id: *mut u32,
+) -> i32 {
+    if crate::contract::capability_bits() & crate::contract::CAP_TASKS == 0 {
+        return ERR_CAPABILITY;
+    }
+    if handle.is_null() || addr.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let run = || -> Result<u32, i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let a = unsafe { cstr(addr) }?.to_string();
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let id = crate::contract::spawn_task("sync", "background", move |ctl, _progress| {
+            // 桥接注册表控制面 → 引擎文件/块检查点（task_pause/cancel 即时生效）
+            let sync_ctl = vault_p2p::engine::SyncCtl {
+                cancel: ctl.cancel_flag(),
+                pause: ctl.pause_flag(),
+                gate: ctl.gate(),
+            };
+            engine.set_sync_ctl(Some(sync_ctl));
+            let result = engine.sync_with(&a);
+            engine.set_sync_ctl(None);
+            result
+        });
+        Ok(id)
+    };
+    match run() {
+        Ok(id) => {
+            if !out_task_id.is_null() {
+                unsafe { out_task_id.write(id) };
+            }
+            OK
+        }
+        Err(e) => e,
+    }
+}
+
 /// 发起一次经中继的增量同步（发起端）。返回摘要 JSON。
 ///
 /// # Safety
@@ -1550,6 +1599,34 @@ pub unsafe extern "C" fn vault_core_p2p_status(handle: *mut Session) -> *mut c_c
         let session = unsafe { &*handle };
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
         Ok(engine.status())
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 路径与填充诊断（P8-6，docs/05-03 §四、05-04 F-07）：
+/// `{"padding":{tier,legacyPeer,frameLenHistogram[4]},"path":{directCandidates,
+/// punchedCandidates,relayCandidates}}`。候选计数在 P8-4 发现/打洞落地前
+/// **恒为 0**（不得编造，原则 7）。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_path_status(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let st = engine.status();
+        Ok(serde_json::json!({
+            "padding": st["padding"],
+            "path": {
+                "directCandidates": 0,
+                "punchedCandidates": 0,
+                "relayCandidates": 0,
+            },
+        }))
     };
     match run() {
         Ok(v) => json_out(v),
@@ -1985,6 +2062,7 @@ fn task_json(t: crate::contract::TaskSnapshot) -> serde_json::Value {
             "doneChunks": t.done_chunks, "totalChunks": t.total_chunks,
             "rateBps": t.rate_bps, "etaMs": t.eta_ms,
         },
+        "resultJson": t.result_json,
     })
 }
 
@@ -2043,7 +2121,7 @@ pub unsafe extern "C" fn vault_core_task_spawn_selfcheck(out: *mut u32) -> i32 {
             progress(i * 5, 100, i, 20);
         }
         if vault_crypto::self_check() && vault_audit::self_check() {
-            Ok(())
+            Ok(serde_json::json!({"selfCheck": "ok"}))
         } else {
             Err("self check failed".into())
         }

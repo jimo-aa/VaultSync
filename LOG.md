@@ -391,3 +391,13 @@
   3. `scan_dir` 六情形接入 `vault_core_open` 启动序列；
   4. P8-4 发现/打洞、P8-5 中继 V2（VSR2）、P8-7 选择性同步、P8-8 冲突 V2、P8-9 阅后即焚、P8-10 隐写跨图：未开始。
 - **过程注记**：queue 首版有 worker 生命周期竞态（pending 检查与退出竞态）与终态不可查缺陷（终态前移出 live 表），改为构造期常驻 worker + 终态保留后消除；`write_chunk` 索引条目曾写偏 8 字节（覆盖邻条目），由跨会话续传测试抓出并修复——正是该测试存在的意义。
+
+## 2026-09-23 P8 批次二——填充信道集成 / sync 入队语义 / 启动扫描接线（冒烟 254 断言）
+
+- **已交付**：
+  1. **P8-6 信道内集成**：`Msg::Hello` 增 `proto_ver=2` / `pad_tier_min` / `pad_tier_max`（serde default——旧端不发即 0，零扰动）；协商生效档 = min(两端 max)（05-04 §3.3），协商后信道切换新帧格式：每帧 `[u32 real_len][payload 分片][0x00 填充]` 加密前施加（AEAD 覆盖），**消息体 `seq‖body` 语义与旧格式一致、仅外层分帧不同**；旧端（proto_ver < 2 或未声明）恒旧帧格式。填充诊断（tier / legacyPeer / frameLenHistogram）入 `p2p_status.padding` 与新导出 `vault_core_p2p_path_status`（路径候选计数在 P8-4 前恒 0，不编造）。**过程缺陷（测试抓出）**：首版 padded 发送漏了 8B 序号前缀——对端按旧语义读 seq 必败、连接中断，由引擎 e2e 立即暴露并修复；信道级测试 `padded_framing_roundtrip_and_tier_lengths` 固化帧长恒档位值 / 跨帧重组 / 直方图证据。
+  2. **P8-1 入队语义**：`vault_core_p2p_sync_task(handle, addr, out_task_id)`——同步作业入 background 队列，摘要经 `TASK_DONE.resultJson` 与 `task_status.resultJson` 获取（注册表补结果载荷存储）；旧阻塞导出 `p2p_sync` 保留至 P9-1 队列页切换后退役（偏差记 LOG）。
+  3. **P8-2 检查点**：`SyncCtl`（注册表 TaskCtl 桥接引擎，成员同源）——`execute_plan` 文件边界与推送/接收块循环响应 `task_pause`（阻塞等待恢复）与 `task_cancel`（立即收敛）。
+  4. **P8-3 启动扫描**：引擎启动打开保险箱后执行 `scan_dir`（配额 = max(5GiB, 库×20%)，版本判据 = 索引清单 file_sha），结果入事件日志。
+- **验证**：workspace 全测试绿（vault-p2p 34）、clippy 零告警、fmt 干净、`flutter analyze` 零问题、冒烟 244 → **254 断言全 PASS**（入队同步 → 轮询 done → resultJson 摘要；双新端 tier=4 / legacyPeer=false / 直方图有帧 / 候选计数恒 0）。双设备全部同步流量已在填充帧上运行。
+- **如实登记**：PATH_DEGRADED(13) 契约事件发布与 overheadRatio 数值随 P8-4 一并；`TRANSFER_QUEUE`(11) 事件随 Dart 队列页；P8-4 发现/打洞、P8-5 中继 V2、P8-7/8/9/10 未开始（面板逐条 `[ ]`）。

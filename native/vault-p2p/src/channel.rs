@@ -73,6 +73,14 @@ pub struct SecureChannel {
     cipher_suite: u8,
     /// 请求过 PQ 却未启用时的可见原因（fail-open 审计线索）。
     pq_note: Option<&'static str>,
+    /// P8-6 生效填充档（0 = 旧帧格式不填充）；Hello 协商后由引擎设置。
+    pad_tier: u8,
+    /// P8-6 帧重组器（新帧格式接收侧）。
+    assembler: vault_net::frame::FrameAssembler,
+    /// 填充诊断：逐档帧计数（档 1–4）与载荷/线上字节累计。
+    frames_by_tier: [u64; 4],
+    payload_bytes: u64,
+    wire_bytes: u64,
 }
 
 impl SecureChannel {
@@ -248,7 +256,42 @@ impl SecureChannel {
             pq_keys,
             cipher_suite,
             pq_note,
+            pad_tier: 0,
+            assembler: vault_net::frame::FrameAssembler::default(),
+            frames_by_tier: [0u64; 4],
+            payload_bytes: 0,
+            wire_bytes: 0,
         })
+    }
+
+    /// P8-6：Hello 协商后设置生效填充档（0 = 旧帧格式）。
+    /// 旧端（proto_ver < 2 或未声明）恒 0——**不得**在未协商时填充，否则解析损坏。
+    pub fn set_padding(&mut self, tier: u8) {
+        self.pad_tier = tier.min(4);
+    }
+
+    /// 填充诊断快照（05-04 F-07）：生效档、逐档帧数、载荷/线上字节比。
+    pub fn padding_stats(&self) -> (u8, [u64; 4], f64) {
+        let ratio = if self.wire_bytes > 0 {
+            self.payload_bytes as f64 / self.wire_bytes as f64
+        } else {
+            0.0
+        };
+        (
+            self.pad_tier,
+            self.frames_by_tier,
+            (ratio * 1000.0).round() / 1000.0,
+        )
+    }
+
+    /// 逐档帧计数（宿主聚合进 frameLenHistogram）。
+    pub fn frame_histogram(&self) -> (u64, u64, u64, u64) {
+        (
+            self.frames_by_tier[0],
+            self.frames_by_tier[1],
+            self.frames_by_tier[2],
+            self.frames_by_tier[3],
+        )
     }
 
     pub fn handshake_hash(&self) -> &[u8; 32] {
@@ -286,6 +329,8 @@ impl SecureChannel {
 
     /// 发送一条应用消息（自动分帧）。噪声层已认证加密，序号再防重放；
     /// suite 2 时载荷先经 PQ AEAD（内层），两层密钥独立。
+    /// pad_tier > 0 时走新帧格式：每帧 `[u32 real_len][payload][填充]`，
+    /// 填充在加密前施加（AEAD 覆盖，观测者无法区分真假），计入线上字节统计。
     pub fn send_msg<S: Read + Write>(
         &mut self,
         stream: &mut S,
@@ -299,6 +344,28 @@ impl SecureChannel {
                 .map_err(|_| "pq encrypt")?,
             None => payload.to_vec(),
         };
+        if self.pad_tier > 0 {
+            let tier = self.pad_tier;
+            // 消息体格式与旧格式一致：`[u64 seq][payload]`，仅外层分帧不同
+            let mut plain = Vec::with_capacity(8 + body.len());
+            plain.extend_from_slice(&self.send_seq.to_be_bytes());
+            plain.extend_from_slice(&body);
+            for frame in vault_net::frame::encode_frames(&plain, tier) {
+                self.frames_by_tier[(tier - 1) as usize] += 1;
+                self.payload_bytes +=
+                    u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]) as u64;
+                let mut buf = [0u8; MAX_NOISE_FRAME];
+                let n = self
+                    .transport
+                    .write_message(&frame, &mut buf)
+                    .map_err(|_| "noise encrypt")?;
+                self.wire_bytes += (4 + n) as u64;
+                write_frame(stream, &buf[..n])?;
+            }
+            stream.flush().map_err(|_| "flush")?;
+            self.send_seq += 1;
+            return Ok(());
+        }
         let mut plain = Vec::with_capacity(8 + body.len());
         plain.extend_from_slice(&self.send_seq.to_be_bytes());
         plain.extend_from_slice(&body);
@@ -319,8 +386,48 @@ impl SecureChannel {
         Ok(())
     }
 
+    /// 序号防重放 + PQ 内层解封（两种帧格式共用）。
+    fn finish_recv(&mut self, plain: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+        if plain.len() < 8 {
+            return Err("short message");
+        }
+        let seq = u64::from_be_bytes(plain[..8].try_into().map_err(|_| "short")?);
+        if seq != self.recv_seq {
+            return Err("replay or out-of-order sequence");
+        }
+        self.recv_seq += 1;
+        let body = &plain[8..];
+        let payload = match &self.pq_keys {
+            Some((_, k)) => vault_crypto::aead_decrypt(k, body).ok_or("pq decrypt or tampered")?,
+            None => body.to_vec(),
+        };
+        Ok(payload)
+    }
+
     /// 接收一条应用消息；序号必须严格 +1，否则判定重放/乱序并拒绝（docs/05-04 §4.2）。
     pub fn recv_msg<S: Read + Write>(&mut self, stream: &mut S) -> Result<Vec<u8>, &'static str> {
+        if self.pad_tier > 0 {
+            // 新帧格式：逐帧解密喂重组器，末帧（real_len < 帧容量）完成消息
+            let mut buf = [0u8; MAX_NOISE_FRAME];
+            loop {
+                let n = read_frame(stream, &mut buf)?;
+                let m = {
+                    let tmp = buf[..n].to_vec();
+                    self.transport
+                        .read_message(&tmp, &mut buf)
+                        .map_err(|_| "noise decrypt")?
+                };
+                let frame = buf[..m].to_vec();
+                self.frames_by_tier[(self.pad_tier - 1) as usize] += 1;
+                self.wire_bytes += (4 + n) as u64;
+                let done = self.assembler.push(&frame).map_err(|_| "frame decode")?;
+                if let Some(plain) = done {
+                    // 消息体格式与旧格式一致：`[u64 seq][payload]`，仅外层分帧不同
+                    self.payload_bytes += (plain.len() - 8) as u64;
+                    return self.finish_recv(plain);
+                }
+            }
+        }
         let mut total_buf = [0u8; 4];
         stream.read_exact(&mut total_buf).map_err(|_| "eof")?;
         let total = u32::from_be_bytes(total_buf) as usize;
@@ -348,20 +455,8 @@ impl SecureChannel {
                 return Err("truncated message");
             }
         }
-        if plain.len() < 8 {
-            return Err("short message");
-        }
-        let seq = u64::from_be_bytes(plain[..8].try_into().map_err(|_| "short")?);
-        if seq != self.recv_seq {
-            return Err("replay or out-of-order sequence");
-        }
-        self.recv_seq += 1;
-        let body = &plain[8..];
-        let payload = match &self.pq_keys {
-            Some((_, k)) => vault_crypto::aead_decrypt(k, body).ok_or("pq decrypt or tampered")?,
-            None => body.to_vec(),
-        };
-        Ok(payload)
+        self.payload_bytes += plain.len().saturating_sub(8) as u64;
+        self.finish_recv(plain)
     }
 }
 
@@ -577,5 +672,47 @@ mod tests {
         assert_eq!(chb.pq_note(), Some("pq not offered"));
         cha.send_msg(&mut ca, b"legacy").unwrap();
         assert_eq!(chb.recv_msg(&mut sb).unwrap(), b"legacy");
+    }
+
+    /// P8-6 证据：协商档位下（05-04 §3.2/§3.3）——
+    /// ① 帧（加密前明文）长度恒为档位值；② 大消息跨帧重组；
+    /// ③ 直方图与线上字节统计可查（诊断口径）。
+    #[test]
+    fn padded_framing_roundtrip_and_tier_lengths() {
+        let (mut ca, mut sb) = duplex_pair();
+        let ia = Identity::generate();
+        let ib = Identity::generate();
+        let (mut cha, mut chb) = std::thread::scope(|s| {
+            let t =
+                s.spawn(|| SecureChannel::handshake(&mut sb, Role::Responder, &ib, None, false));
+            let a = SecureChannel::handshake(&mut ca, Role::Initiator, &ia, None, false).unwrap();
+            (a, t.join().unwrap().unwrap())
+        });
+        cha.set_padding(3);
+        chb.set_padding(3);
+        // 小消息（档 3 单帧）与大消息（跨帧：70KB > 16360）
+        cha.send_msg(&mut ca, b"small").unwrap();
+        assert_eq!(chb.recv_msg(&mut sb).unwrap(), b"small");
+        let big: Vec<u8> = (0..70_000usize).map(|i| (i % 241) as u8).collect();
+        cha.send_msg(&mut ca, &big).unwrap();
+        assert_eq!(chb.recv_msg(&mut sb).unwrap(), big);
+        // 反向
+        chb.send_msg(&mut sb, b"ack").unwrap();
+        assert_eq!(cha.recv_msg(&mut ca).unwrap(), b"ack");
+        // 帧长（加密前明文）恒等于档 3 上限 16364；帧数 = ceil
+        let (t, hist, ratio) = cha.padding_stats();
+        assert_eq!(t, 3);
+        let total_frames: u64 = hist.iter().sum();
+        assert!(
+            total_frames >= 2,
+            "小消息 + 跨帧大消息至少 2 帧（{hist:?}）"
+        );
+        assert_eq!(hist[2], total_frames, "全部帧都落在档 3");
+        assert_eq!(hist[0] + hist[1] + hist[3], 0);
+        // 载荷/线上字节比 ≤ 1：填充与 tag 开销如实计入统计（小消息整帧填充拉低占比）
+        assert!(
+            (0.0..=1.0).contains(&ratio) && ratio > 0.0,
+            "overheadRatio 必须在 (0,1]（{ratio}）"
+        );
     }
 }

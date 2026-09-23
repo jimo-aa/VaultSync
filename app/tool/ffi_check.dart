@@ -106,6 +106,8 @@ late ShareOpenDart _vaultShareOpen;
 late P2pPairBeginDart _p2pPairBegin;
 late P2pPairJoinDart _p2pPairJoin;
 late P2pSyncDart _p2pSync;
+late P2pSyncTaskDart _p2pSyncTask;
+late P2pPathStatusDart _p2pPathStatus;
 late P2pStatusDart _p2pStatus;
 late P2pUnpairDart _p2pUnpair;
 late P2pDestroyArmDart _p2pDestroyArm;
@@ -230,6 +232,12 @@ late TaskSpawnDart _taskSpawn;
 // P8-2（独立 typedef：每导出一套）
 typedef TaskFnC = Int32 Function(Uint32);
 typedef TaskFnD = int Function(int);
+typedef P2pSyncTaskC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef P2pSyncTaskDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef P2pPathStatusC = Pointer<Utf8> Function(Pointer<Void>);
+typedef P2pPathStatusDart = Pointer<Utf8> Function(Pointer<Void>);
 late TaskFnD _taskPause;
 late TaskFnD _taskResume;
 late SessionReadonlyDart _sessionReadonly;
@@ -497,6 +505,10 @@ void main(List<String> args) {
   _p2pPairJoin = lib.lookupFunction<P2pPairJoinC, P2pPairJoinDart>(
       'vault_core_p2p_pair_join');
   _p2pSync = lib.lookupFunction<P2pSyncC, P2pSyncDart>('vault_core_p2p_sync');
+  _p2pSyncTask = lib.lookupFunction<P2pSyncTaskC, P2pSyncTaskDart>(
+      'vault_core_p2p_sync_task');
+  _p2pPathStatus = lib.lookupFunction<P2pPathStatusC, P2pPathStatusDart>(
+      'vault_core_p2p_path_status');
   _p2pStatus =
       lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
   _p2pUnpair =
@@ -1471,6 +1483,41 @@ void main(List<String> args) {
   if (pqSync.address != 0) _free(pqSync);
   final pqOut = '${pqDir.path}${Platform.pathSeparator}pq-out.txt';
   check(_vaultExport(hQB, pqId.value, n(pqOut)) == 0, 'P7 B 导出 suite 2 信道收到的文件');
+
+  // ===== P8-1 入队同步 + P8-6 填充诊断 =====
+  final p8task = calloc<Uint32>();
+  check(_p2pSyncTask(hQA, pqAddr, p8task) == 0 && p8task.value > 0,
+      'P8 sync_task 入队返回 task id');
+  var stSync = taskStatusOf(p8task.value);
+  final dlSync = DateTime.now().add(const Duration(seconds: 15));
+  while (stSync != null &&
+      stSync['state'] != 'done' &&
+      DateTime.now().isBefore(dlSync)) {
+    sleep(const Duration(milliseconds: 50));
+    stSync = taskStatusOf(p8task.value);
+  }
+  check(stSync != null && stSync['state'] == 'done', 'P8 队列同步任务轮询至 done');
+  final resultJson = stSync != null ? stSync['resultJson'] : null;
+  check(resultJson != null && resultJson.toString().contains('pushed'),
+      'P8 同步摘要经 resultJson 获取（${resultJson?.toString().substring(0, 40)}…）');
+  // 填充协商诊断（两新端 → tier=4，非 legacy，直方图有帧）
+  final padPtr = _p2pPathStatus(hQA);
+  check(padPtr.address != 0, 'P8 path_status 返回 JSON');
+  final pad = jsonDecode(str(padPtr)) as Map<String, dynamic>;
+  _free(padPtr);
+  final padObj = pad['padding'] as Map<String, dynamic>;
+  check(padObj['tier'] == 4, 'P8 协商填充档位 == 4');
+  check(padObj['legacyPeer'] == false, 'P8 legacyPeer == false');
+  final hist = (padObj['frameLenHistogram'] as List).map((e) => (e as num).toInt()).toList();
+  check(hist.isNotEmpty && hist.fold<int>(0, (a, b) => a + b) > 0,
+      'P8 帧长直方图有帧（$hist）');
+  check(hist.where((e) => e > 0).isNotEmpty, 'P8 直方图非零桶 ≥ 1');
+  final pathObj = pad['path'] as Map<String, dynamic>;
+  check((pathObj['directCandidates'] as num).toInt() == 0,
+      'P8 路径候选计数 P8-4 前恒 0（不编造）');
+  check(_p2pSyncTask(hQA, Pointer<Utf8>.fromAddress(0), p8task) == 7,
+      'P8 sync_task(null addr) → 7');
+  calloc.free(p8task);
 
   // 指令队列：push_lock（kind=2）入队 / push_rotation（无待传播 → 7）/ 取消
   final pqTask = calloc<Uint32>();

@@ -60,6 +60,16 @@ pub enum Msg {
         port: u16,
         #[serde(default)]
         pq: bool,
+        /// P8-6（不在签名体内，同 `port` 信任口径）：协议版本。≥ 2 = 支持
+        /// 每帧 `real_len` 新帧格式与填充；0/1 = 旧端（恒旧帧格式，不填充）。
+        #[serde(default)]
+        proto_ver: u16,
+        /// 填充档位下/上限（0 = 未声明）；生效档 = min(两端 max)，下限违背
+        /// 取低档并发 PATH_DEGRADED（可用性优先，降级可见，05-04 §3.3）。
+        #[serde(default)]
+        pad_tier_min: u8,
+        #[serde(default)]
+        pad_tier_max: u8,
     },
     /// 配对：发起端（已配对设备）请求登记；响应端凭 PSK 信任。
     PairReq,

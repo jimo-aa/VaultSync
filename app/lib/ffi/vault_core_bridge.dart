@@ -294,6 +294,14 @@ abstract class VaultCoreBridge {
   /// 返回 JSON {"schema":1,"total","rankVer","hits":[…]}；负值为状态码。
   String? vaultSearchV2(Object sessionHandle, String query, String? optsJson);
 
+  /// 发起一次增量同步（P8-1 入队语义）：立即返回 task id（负值为状态码）。
+  /// 摘要经 task_status 的 resultJson / TASK_DONE 获取；可 pause/cancel。
+  int p2pSyncTask(Object sessionHandle, String addr, List<int> taskIdOut);
+
+  /// 路径与填充诊断（P8-6）：JSON {"padding":{tier,legacyPeer,frameLenHistogram},
+  /// "path":{directCandidates,punchedCandidates,relayCandidates}}。
+  String? p2pPathStatus(Object sessionHandle);
+
   /// 按平台返回动态库文件名。
   static String get libraryName {
     if (Platform.isWindows) return 'vault_core.dll';
@@ -440,6 +448,9 @@ typedef _MigrateResumeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _MigrateCancelC = Int32 Function(Pointer<Void>);
 typedef _SearchV2C = Int32 Function(Pointer<Void>, Pointer<Utf8>,
     Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef _P2pSyncTaskC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>);
+typedef _P2pPathStatusC = Pointer<Utf8> Function(Pointer<Void>);
 
 
 class VaultCoreBridgeFfi implements VaultCoreBridge {
@@ -666,6 +677,11 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
     _searchV2 = _lib.lookupFunction<_SearchV2C,
         int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
             Pointer<Pointer<Utf8>>)>('vault_core_vault_search_v2');
+    _p2pSyncTask = _lib.lookupFunction<_P2pSyncTaskC,
+        int Function(Pointer<Void>, Pointer<Utf8>,
+            Pointer<Uint32>)>('vault_core_p2p_sync_task');
+    _p2pPathStatus = _lib.lookupFunction<_P2pPathStatusC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_p2p_path_status');
     _version = version;
     _freeString = freeString;
   }
@@ -769,6 +785,9 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Void>) _migrateCancel;
   late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
       Pointer<Pointer<Utf8>>) _searchV2;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Uint32>)
+      _p2pSyncTask;
+  late final Pointer<Utf8> Function(Pointer<Void>) _p2pPathStatus;
 
   /// 引擎事件回调：订阅进程内注册一次、随进程存活（引擎侧为全局事件总线）。
   NativeCallable<_EventCallbackC>? _eventCallable;
@@ -1068,6 +1087,24 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
       calloc.free(a);
     }
   }
+
+  @override
+  int p2pSyncTask(Object sessionHandle, String addr, List<int> taskIdOut) {
+    final a = _toNative(addr);
+    final taskId = calloc<Uint32>();
+    try {
+      final status = _p2pSyncTask(_handle(sessionHandle), a, taskId);
+      if (taskIdOut.isNotEmpty) taskIdOut[0] = taskId.value;
+      return status;
+    } finally {
+      calloc.free(taskId);
+      calloc.free(a);
+    }
+  }
+
+  @override
+  String? p2pPathStatus(Object sessionHandle) =>
+      _takeJson(_p2pPathStatus(_handle(sessionHandle)));
 
   @override
   String? p2pSyncRelay(Object sessionHandle, String relay, String room) {
@@ -1848,5 +1885,13 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
 
   @override
   String? vaultSearchV2(Object sessionHandle, String query, String? optsJson) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pSyncTask(Object sessionHandle, String addr, List<int> taskIdOut) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pPathStatus(Object sessionHandle) =>
       throw UnsupportedError('stub: native not linked');
 }
