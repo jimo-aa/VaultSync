@@ -176,12 +176,7 @@ impl TransferQueue {
     }
 
     /// 入队。destroy 插队首；worker 取件按 `(prio, 入队序)`。
-    pub fn submit(
-        &self,
-        kind: &str,
-        prio: Prio,
-        body: JobBody,
-    ) -> u64 {
+    pub fn submit(&self, kind: &str, prio: Prio, body: JobBody) -> u64 {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let slot = Arc::new(Slot {
             id,

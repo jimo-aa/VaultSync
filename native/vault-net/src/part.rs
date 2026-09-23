@@ -151,6 +151,11 @@ impl PartFile {
         self.index.iter().filter(|(_, l)| *l > 0).count() as u32
     }
 
+    /// 第 `idx` 块是否已收（免读数据的判据）。
+    pub fn has_chunk(&self, idx: usize) -> bool {
+        self.index.get(idx).map(|(_, l)| *l > 0).unwrap_or(false)
+    }
+
     /// 已收块字节合计（配额与续传百分比口径）。
     pub fn received_bytes(&self) -> u64 {
         self.index.iter().map(|(_, l)| *l as u64).sum()
@@ -343,12 +348,9 @@ mod tests {
             file_id: id,
             total_bytes: 3000,
             // 判据哈希按「期望内容」计算：三个块各为重复字节 1/2/3（与测试块一致）
-            file_sha256: vault_crypto::hash_sha256_bytes(&[
-                vec![1u8; 1000],
-                vec![2u8; 1000],
-                vec![3u8; 1000],
-            ]
-            .concat()),
+            file_sha256: vault_crypto::hash_sha256_bytes(
+                &[vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 1000]].concat(),
+            ),
             chunk_count: chunks,
         }
     }

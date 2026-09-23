@@ -1079,6 +1079,7 @@ dependencies = [
  "tempfile",
  "vault-audit",
  "vault-crypto",
+ "vault-net",
  "vault-vault",
  "x25519-dalek",
 ]

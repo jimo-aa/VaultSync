@@ -5,7 +5,7 @@
 //!
 //! 密钥红线：FSKey 仅经 E2E 信道携带给已配对对端；中继只见不透明 Noise 帧。
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::io::{BufRead, Seek, Write as IoWrite};
+use std::io::{BufRead, Write as IoWrite};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -1490,7 +1490,37 @@ impl P2pEngine {
             }
         }
 
-        // 与本地既有容器块清单比对：哈希相同的块不再传输（增量 + 断点续传的幂等基础）
+        // 05-03 §6.1：.part 头部持久化（VSPT，vault-net::part）——跨会话续传，
+        // 取代 V1.0「每次开始传输即截断清零」。同版本判据 = 整文件哈希 + 大小 + 块数；
+        // 对端文件已变 → 作废重传（安全优先于带宽）。
+        let part = self.part_path(id);
+        let part_raw = part.with_extension("raw");
+        let sha32: [u8; 32] = vault_crypto::hex_decode(&item.file_sha)
+            .and_then(|v| <[u8; 32]>::try_from(v).ok())
+            .unwrap_or([0u8; 32]);
+        let expected = vault_net::part::PartMeta {
+            file_id: id,
+            total_bytes: item.size,
+            file_sha256: sha32,
+            chunk_count: item.chunks.len() as u32,
+        };
+        let mut pf = match vault_net::part::open(&part) {
+            Ok(pf)
+                if pf.file_sha256() == &expected.file_sha256
+                    && pf.total_bytes() == expected.total_bytes
+                    && pf.chunk_count() == expected.chunk_count =>
+            {
+                pf // 跨会话续传：已收块直接沿用
+            }
+            _ => {
+                let _ = std::fs::remove_file(&part);
+                vault_net::part::create(&part, &expected).map_err(|e| e.to_string())?;
+                vault_net::part::open(&part).map_err(|e| e.to_string())?
+            }
+        };
+
+        // 与本地既有容器块清单比对：哈希相同的块不再传输（增量 + 断点续传的幂等基础）；
+        // 上次会话已收进 .part 的块同样不再请求
         let have: HashSet<String> = {
             let slot = self
                 .inner
@@ -1514,7 +1544,7 @@ impl P2pEngine {
             .chunks
             .iter()
             .enumerate()
-            .filter(|(_, c)| !have.contains(&c.hash))
+            .filter(|(i, c)| !have.contains(&c.hash) && !pf.has_chunk(*i))
             .map(|(i, _)| i)
             .collect();
         send_json(
@@ -1527,10 +1557,6 @@ impl P2pEngine {
         )
         .map_err(|e| e.to_string())?;
 
-        // 已有块从本地容器原样拷入 part（密文一致），缺块等 BlockData
-        let part = self.part_path(id);
-        std::fs::write(&part, b"").map_err(|e| e.to_string())?;
-        let mut copied = 0usize;
         {
             let slot = self
                 .inner
@@ -1538,20 +1564,17 @@ impl P2pEngine {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let v = slot.as_ref().ok_or("vault locked")?;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&part)
-                .map_err(|e| e.to_string())?;
             for (i, c) in item.chunks.iter().enumerate() {
+                if pf.has_chunk(i) {
+                    continue; // 跨会话已收：沿用（不做重复拷贝）
+                }
                 if !idxs.contains(&i) {
+                    // 本地既有块：校验哈希后拷入 VSPT（密文一致）
                     let ct = v.read_chunk_ct(id, i).map_err(|e| e.to_string())?;
                     if vault_crypto::hash_sha256(&ct) != c.hash {
                         return Err("local chunk hash mismatch".into());
                     }
-                    f.seek(std::io::SeekFrom::Start(c.offset))
-                        .map_err(|e| e.to_string())?;
-                    f.write_all(&ct).map_err(|e| e.to_string())?;
-                    copied += 1;
+                    pf.write_chunk(i, &ct).map_err(|e| e.to_string())?;
                 }
             }
         }
@@ -1574,21 +1597,26 @@ impl P2pEngine {
                         return Err("block hash mismatch".into());
                     }
                     self.throttle(ct.len());
-                    let mut f = std::fs::OpenOptions::new()
-                        .write(true)
-                        .open(&part)
-                        .map_err(|e| e.to_string())?;
-                    f.seek(std::io::SeekFrom::Start(item.chunks[idx].offset))
-                        .map_err(|e| e.to_string())?;
-                    f.write_all(&ct).map_err(|e| e.to_string())?;
+                    pf.write_chunk(idx, &ct).map_err(|e| e.to_string())?;
                 }
                 Msg::BlockEnd { id: rid } if rid == id => break,
                 Msg::Error { msg } => return Err(msg),
                 _ => return Err("expected blockdata".into()),
             }
         }
-        if got.len() + copied != item.chunks.len() {
+        if pf.received_count() as usize != item.chunks.len() {
             return Err("missing blocks".into());
+        }
+        // 物化原始数据区（按块序拼接）供 ingest_remote 装配容器
+        {
+            let mut raw = std::fs::File::create(&part_raw).map_err(|e| e.to_string())?;
+            for i in 0..item.chunks.len() {
+                let ct = pf
+                    .read_chunk(i)
+                    .ok_or_else(|| "missing chunk at materialize".to_string())?;
+                raw.write_all(&ct).map_err(|e| e.to_string())?;
+            }
+            raw.flush().map_err(|e| e.to_string())?;
         }
 
         // 覆盖冲突：先把本地既有版本另存为加密冲突副本并摘除原条目，
@@ -1638,7 +1666,7 @@ impl P2pEngine {
                 item.size,
                 item.modified_ms,
                 meta,
-                &part,
+                &part_raw,
                 &fskey_hex,
                 item.vc.clone(),
             )
@@ -1646,6 +1674,7 @@ impl P2pEngine {
             v.verify_file(id).map_err(|e| e.to_string())?;
         }
         std::fs::remove_file(&part).ok();
+        std::fs::remove_file(&part_raw).ok();
         send_json(
             ch,
             stream,
