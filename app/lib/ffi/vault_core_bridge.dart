@@ -240,6 +240,13 @@ abstract class VaultCoreBridge {
   /// 协作式取消：0 = 已请求 / 7 = 未知 / 12 = 已取消（幂等）。
   int taskCancel(int id);
 
+  /// 任务暂停（P8-2）：下一检查点转 paused，槽位与已收块保留。
+  /// 0 / 7（未知）/ 12（状态不允许）。
+  int taskPause(int id);
+
+  /// 任务恢复（P8-2）：paused → 原任务内续做。0 / 7 / 12。
+  int taskResume(int id);
+
   /// 启动诊断自检任务（约 0.5 s，进度经 TASK_PROGRESS 事件上报），返回任务 id。
   int taskSpawnSelfcheck();
 
@@ -622,6 +629,10 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
         int Function(int, Pointer<Pointer<Utf8>>)>('vault_core_task_status');
     _taskCancel =
         _lib.lookupFunction<_TaskCancelC, int Function(int)>('vault_core_task_cancel');
+    _taskPause =
+        _lib.lookupFunction<_TaskCancelC, int Function(int)>('vault_core_task_pause');
+    _taskResume =
+        _lib.lookupFunction<_TaskCancelC, int Function(int)>('vault_core_task_resume');
     _taskSpawn = _lib.lookupFunction<_TaskSpawnC, int Function(Pointer<Uint32>)>(
         'vault_core_task_spawn_selfcheck');
     _sessionReadonly = _lib.lookupFunction<_SessionReadonlyC,
@@ -737,6 +748,8 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final int Function(Pointer<Pointer<Utf8>>) _taskList;
   late final int Function(int, Pointer<Pointer<Utf8>>) _taskStatus;
   late final int Function(int) _taskCancel;
+  late final int Function(int) _taskPause;
+  late final int Function(int) _taskResume;
   late final int Function(Pointer<Uint32>) _taskSpawn;
   late final int Function(Pointer<Void>, Pointer<Int32>) _sessionReadonly;
   late final int Function(
@@ -1358,6 +1371,12 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   int taskCancel(int id) => _taskCancel(id);
 
   @override
+  int taskPause(int id) => _taskPause(id);
+
+  @override
+  int taskResume(int id) => _taskResume(id);
+
+  @override
   int taskSpawnSelfcheck() {
     final id = calloc<Uint32>();
     try {
@@ -1768,6 +1787,12 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
 
   @override
   int taskCancel(int id) => VaultStatus.invalidArg;
+
+  @override
+  int taskPause(int id) => VaultStatus.invalidArg;
+
+  @override
+  int taskResume(int id) => VaultStatus.invalidArg;
 
   @override
   int taskSpawnSelfcheck() => 1;

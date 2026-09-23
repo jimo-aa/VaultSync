@@ -227,6 +227,11 @@ late TaskListDart _taskList;
 late TaskStatusDart _taskStatus;
 late TaskCancelDart _taskCancel;
 late TaskSpawnDart _taskSpawn;
+// P8-2（独立 typedef：每导出一套）
+typedef TaskFnC = Int32 Function(Uint32);
+typedef TaskFnD = int Function(int);
+late TaskFnD _taskPause;
+late TaskFnD _taskResume;
 late SessionReadonlyDart _sessionReadonly;
 late ThumbnailDart _vaultThumbnail;
 
@@ -547,6 +552,8 @@ void main(List<String> args) {
       lib.lookupFunction<TaskCancelC, TaskCancelDart>('vault_core_task_cancel');
   _taskSpawn = lib
       .lookupFunction<TaskSpawnC, TaskSpawnDart>('vault_core_task_spawn_selfcheck');
+  _taskPause = lib.lookupFunction<TaskFnC, TaskFnD>('vault_core_task_pause');
+  _taskResume = lib.lookupFunction<TaskFnC, TaskFnD>('vault_core_task_resume');
   _sessionReadonly = lib.lookupFunction<SessionReadonlyC, SessionReadonlyDart>(
       'vault_core_session_readonly');
   _vaultThumbnail = lib
@@ -1180,6 +1187,32 @@ void main(List<String> args) {
   check(_taskCancel(task2) == 0, 'P6 运行中任务取消请求返回 0');
   check(waitForEvent(10) != null, 'P6 事件流含 TASK_CANCELLED(10)');
   calloc.free(idOut2);
+
+  // ===== P8-2 任务暂停/恢复（docs/v2.0/02 §6.5：pause 保留槽位与进度，区别于 cancel）=====
+  check(_taskPause(0xDEADBEEF) == 7, 'P8 task_pause 未知任务 → 7');
+  final idP8 = calloc<Uint32>();
+  check(_taskSpawn(idP8) == 0, 'P8 启动暂停测试任务');
+  final taskP = idP8.value;
+  sleep(const Duration(milliseconds: 60)); // 进入 running（selfcheck 20ms/tick）
+  check(_taskPause(taskP) == 0, 'P8 暂停运行中任务 → 0');
+  var stP = taskStatusOf(taskP);
+  check(stP != null && stP['state'] == 'paused', 'P8 任务状态转 paused');
+  final frozenBytes = stP != null ? (stP['progress']['doneBytes'] as num).toInt() : -1;
+  check(stP != null && (stP['progress']['doneChunks'] as num).toInt() >= 0,
+      'P8 进度含块粒度字段');
+  check(_taskResume(taskP) == 0, 'P8 恢复任务 → 0');
+  stP = taskStatusOf(taskP);
+  final dlP8 = DateTime.now().add(const Duration(seconds: 5));
+  while (stP != null && stP['state'] != 'done' && DateTime.now().isBefore(dlP8)) {
+    sleep(const Duration(milliseconds: 50));
+    stP = taskStatusOf(taskP);
+  }
+  check(stP != null && stP['state'] == 'done', 'P8 resume 后原任务内续做至 done');
+  check(stP != null && (stP['progress']['doneBytes'] as num).toInt() > frozenBytes,
+      'P8 续做不清空已有进度（冻结点 $frozenBytes → ${stP?['progress']['doneBytes']}）');
+  check(_taskPause(taskP) == 12, 'P8 终态任务暂停 → 12');
+  check(_taskResume(0xDEADBEEF) == 7, 'P8 task_resume 未知任务 → 7');
+  calloc.free(idP8);
 
   // seq 全程单调递增（环形缓冲按全局 seq 排队，poll 顺序即发布顺序）
   var seqOk = true;
