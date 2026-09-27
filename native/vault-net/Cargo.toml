@@ -11,7 +11,7 @@ license.workspace = true
 # P8-4 局域网发现：纯 Rust mDNS（无 async runtime 依赖；非密码学依赖，
 # 不受 R2 受审约束——发现不构成任何身份证明，配对仍须经带外要素）。
 mdns-sd = "0.21"
-if-addrs = "0.13"
+if-addrs = "0.15"
 vault-crypto = { path = "../vault-crypto" }
 
 [dev-dependencies]
