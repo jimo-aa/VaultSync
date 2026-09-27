@@ -1600,6 +1600,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get syncPageRoomId => 'Room ID';
 
   @override
+  String get syncPageRelayToken => 'Relay access token';
+
+  @override
+  String get syncPageRelayTokenHint =>
+      'Distributed by your relay operator (≥16 chars)';
+
+  @override
+  String get syncPageTokenVisibility => 'Show / hide token';
+
+  @override
   String get syncPageScanning => 'Scanning…';
 
   @override

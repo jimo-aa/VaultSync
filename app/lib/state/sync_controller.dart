@@ -241,13 +241,13 @@ class SyncController extends Notifier<SyncState> {
     await _afterSync();
   }
 
-  /// 经中继同步。
-  Future<void> runSyncRelay(String relay, String room) async {
+  /// 经中继同步（P8-5 VSR2：relay + room + token）。
+  Future<void> runSyncRelay(String relay, String room, String token) async {
     final handle = _handle;
     if (handle == null) return;
     final engine = ref.read(vaultEngineProvider);
     state = state.copyWith(running: true, error: null);
-    final json = await engine.syncRelay(handle, relay, room);
+    final json = await engine.syncRelay(handle, relay, room, token);
     if (!ref.mounted) return;
     if (json == null) {
       state = state.copyWith(

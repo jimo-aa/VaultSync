@@ -100,15 +100,67 @@ class FakeEngine implements VaultEngine {
 
   @override
   Future<Map<String, dynamic>?> syncRelay(
-          Object sessionHandle, String relay, String room) =>
+          Object sessionHandle, String relay, String room, String token) =>
       Future.value(null);
 
   @override
-  Future<int> serveRelay(Object sessionHandle, String relay, String room) =>
+  Future<int> serveRelay(
+          Object sessionHandle, String relay, String room, String token) =>
+      Future.value(0);
+
+  @override
+  Future<Map<String, dynamic>?> relaySettingsGet(Object sessionHandle) =>
+      Future.value(null);
+
+  @override
+  Future<int> relaySettingsSet(Object sessionHandle, String json) =>
+      Future.value(0);
+
+  @override
+  Future<Map<String, dynamic>?> syncRelayCandidates(
+          Object sessionHandle, String room) =>
+      Future.value(null);
+
+  @override
+  Future<int> serveRelayCandidates(Object sessionHandle, String room) =>
       Future.value(0);
 
   @override
   Future<Map<String, dynamic>?> status(Object sessionHandle) =>
+      Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> syncPolicyGet(Object sessionHandle) =>
+      Future.value(null);
+
+  @override
+  Future<int> syncPolicySet(
+          Object sessionHandle, Map<String, dynamic> policy) =>
+      Future.value(0);
+
+  @override
+  Future<int> setSyncContext(Object sessionHandle,
+          {required bool inWindow, required String netType}) =>
+      Future.value(0);
+
+  @override
+  Future<Map<String, dynamic>?> stegoPlan(Object sessionHandle, int fileId,
+          List<String> imagePaths, Map<String, dynamic>? opts) =>
+      Future.value(null);
+
+  @override
+  Future<int> applyEdit(Object sessionHandle, int fileId, String src,
+          {int keepRevs = 1}) =>
+      Future.value(0);
+
+  @override
+  Future<Map<String, dynamic>?> stegoEmbedMulti(Object sessionHandle, int fileId,
+          List<String> imagePaths, Map<String, dynamic>? opts) =>
+      Future.value(null);
+
+  @override
+  Future<Map<String, dynamic>?> stegoExtractMulti(
+          Object sessionHandle, List<String> imagePaths, String destPath) =>
       Future.value(null);
 
   @override

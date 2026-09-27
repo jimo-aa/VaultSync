@@ -49,7 +49,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     if (mode.type == _SyncKind.direct) {
       await notifier.runSync(mode.addr);
     } else {
-      await notifier.runSyncRelay(mode.relay, mode.room);
+      await notifier.runSyncRelay(mode.relay, mode.room, mode.token);
     }
   }
 
@@ -403,15 +403,16 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   }
 }
 
-// 同步方式：直连（需要 addr）或中继（需要 relay + room）。
+// 同步方式：直连（需要 addr）或中继（需要 relay + room + token）。
 enum _SyncKind { direct, relay }
 
 class _SyncMode {
   const _SyncMode.direct(this.addr)
       : type = _SyncKind.direct,
         relay = '',
-        room = '';
-  const _SyncMode.relay(this.relay, this.room)
+        room = '',
+        token = '';
+  const _SyncMode.relay(this.relay, this.room, this.token)
       : type = _SyncKind.relay,
         addr = '';
 
@@ -419,6 +420,7 @@ class _SyncMode {
   final String addr;
   final String relay;
   final String room;
+  final String token;
 }
 
 /// “立即同步”弹窗：直连 / 中继切换 + 对应字段（VsSeg + 原型弹窗骨架）。
@@ -434,12 +436,15 @@ class _SyncModeDialogState extends State<_SyncModeDialog> {
   final _addrCtl = TextEditingController();
   final _relayCtl = TextEditingController();
   final _roomCtl = TextEditingController();
+  final _tokenCtl = TextEditingController();
+  bool _tokenObscure = true;
 
   @override
   void dispose() {
     _addrCtl.dispose();
     _relayCtl.dispose();
     _roomCtl.dispose();
+    _tokenCtl.dispose();
     super.dispose();
   }
 
@@ -463,13 +468,14 @@ class _SyncModeDialogState extends State<_SyncModeDialog> {
             final ok = _kind == _SyncKind.direct
                 ? _addrCtl.text.trim().isNotEmpty
                 : _relayCtl.text.trim().isNotEmpty &&
-                    _roomCtl.text.trim().isNotEmpty;
+                    _roomCtl.text.trim().isNotEmpty &&
+                    _tokenCtl.text.trim().isNotEmpty;
             if (!ok) return;
             Navigator.of(ctx).pop(
               _kind == _SyncKind.direct
                   ? _SyncMode.direct(_addrCtl.text.trim())
-                  : _SyncMode.relay(
-                      _relayCtl.text.trim(), _roomCtl.text.trim()),
+                  : _SyncMode.relay(_relayCtl.text.trim(),
+                      _roomCtl.text.trim(), _tokenCtl.text.trim()),
             );
           },
         ),
@@ -509,6 +515,25 @@ class _SyncModeDialogState extends State<_SyncModeDialog> {
               decoration: InputDecoration(
                 labelText: l.syncPageRoomId,
                 hintText: l.syncPageRoomHint,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // P8-5：中继接入 token（≥128 位）。VSR2 强制鉴权——不提供
+            // 「无 token」路径；输入框 obscure 且不写日志（docs/08 §3.2）。
+            TextField(
+              controller: _tokenCtl,
+              obscureText: _tokenObscure,
+              decoration: InputDecoration(
+                labelText: l.syncPageRelayToken,
+                hintText: l.syncPageRelayTokenHint,
+                suffixIcon: IconButton(
+                  onPressed: () =>
+                      setState(() => _tokenObscure = !_tokenObscure),
+                  icon: Icon(_tokenObscure
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined),
+                  tooltip: l.syncPageTokenVisibility,
+                ),
               ),
             ),
           ],

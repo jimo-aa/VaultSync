@@ -6,6 +6,8 @@ import 'dart:ffi';
 import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
@@ -69,10 +71,57 @@ typedef P2pPairJoinDart = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef P2pSyncDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+// P8-5：中继导出带 token（relay + room + token）
+typedef P2pSyncRelayC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef P2pSyncRelayDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef P2pServeRelayC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef P2pServeRelayDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 typedef P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
 typedef P2pStatusDart = Pointer<Utf8> Function(Pointer<Void>);
 typedef P2pUnpairC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef P2pUnpairDart = int Function(Pointer<Void>, Pointer<Utf8>);
+
+// P8-4 打洞探针（7 参：句柄 + relay/room/token/code + role + timeout_ms）
+typedef PunchProbeC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Uint32, Uint64);
+typedef PunchProbeDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int, int);
+
+// P8-5 收尾：中继设置 + 多中继候选（各导出 typedef 独立）
+typedef RelaySettingsGetC = Pointer<Utf8> Function(Pointer<Void>);
+typedef RelaySettingsGetDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef RelaySettingsSetC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef RelaySettingsSetDart = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef RelayCandsSyncC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>);
+typedef RelayCandsSyncDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>);
+typedef RelayCandsServeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef RelayCandsServeDart = int Function(Pointer<Void>, Pointer<Utf8>);
+
+// P8-9 阅后即焚（参数个数各不相同，typedef 严禁复用）
+typedef BurnCreateC = Pointer<Utf8> Function(
+    Pointer<Void>, Uint64, Uint64, Uint64);
+typedef BurnCreateDart = Pointer<Utf8> Function(
+    Pointer<Void>, int, int, int);
+typedef BurnReceiveC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef BurnReceiveDart = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef BurnSendC = Pointer<Utf8> Function(Pointer<Void>, Uint64,
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef BurnSendDart = Pointer<Utf8> Function(Pointer<Void>, int,
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef BurnOpenC = Pointer<Utf8> Function(Pointer<Void>, Uint64);
+typedef BurnOpenDart = Pointer<Utf8> Function(Pointer<Void>, int);
+typedef BurnEraseC = Pointer<Utf8> Function(Pointer<Void>, Uint64);
+typedef BurnEraseDart = Pointer<Utf8> Function(Pointer<Void>, int);
+typedef BurnStatusC = Pointer<Utf8> Function(Pointer<Void>, Uint64);
+typedef BurnStatusDart = Pointer<Utf8> Function(Pointer<Void>, int);
 typedef P2pDestroyArmC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Uint64);
 typedef P2pDestroyArmDart = Pointer<Utf8> Function(
@@ -106,11 +155,23 @@ late ShareOpenDart _vaultShareOpen;
 late P2pPairBeginDart _p2pPairBegin;
 late P2pPairJoinDart _p2pPairJoin;
 late P2pSyncDart _p2pSync;
+late P2pSyncRelayDart _p2pSyncRelay;
+late P2pServeRelayDart _p2pServeRelay;
 late P2pSyncTaskDart _p2pSyncTask;
 late P2pPathStatusDart _p2pPathStatus;
 late P2pDiscoverDart _p2pDiscover;
 late P2pStatusDart _p2pStatus;
 late P2pUnpairDart _p2pUnpair;
+late PunchProbeDart _punchProbe;
+late RelaySettingsGetDart _relaySettingsGet;
+late RelaySettingsSetDart _relaySettingsSet;
+late RelayCandsSyncDart _p2pSyncRelayCands;
+late BurnCreateDart _burnCreate;
+late BurnReceiveDart _burnReceive;
+late BurnSendDart _burnSend;
+late BurnOpenDart _burnOpen;
+late BurnEraseDart _burnErase;
+late BurnStatusDart _burnStatus;
 late P2pDestroyArmDart _p2pDestroyArm;
 // P5 审计 / 销毁 / 隐写（每函数独立 typedef）
 typedef AuditListC = Pointer<Utf8> Function(Pointer<Void>);
@@ -132,6 +193,39 @@ typedef StegoExtractC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef StegoExtractDart = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+// P8-7 选择性同步策略（get 返回 JSON；set 与上下文上报为 int + JSON 字符串）
+typedef SyncPolicyGetC = Pointer<Utf8> Function(Pointer<Void>);
+typedef SyncPolicyGetDart = Pointer<Utf8> Function(Pointer<Void>);
+typedef SyncPolicySetC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef SyncPolicySetDart = int Function(Pointer<Void>, Pointer<Utf8>);
+// P8-8 原地编辑
+typedef ApplyEditC = Int32 Function(
+    Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
+typedef ApplyEditDart = int Function(
+    Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>);
+// P8-10 隐写跨图（plan / embed_multi 走 out_json；extract_multi 返回码 + out_json）
+typedef StegoPlanC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef StegoPlanDart = int Function(Pointer<Void>, int, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef StegoEmbedMultiC = Int32 Function(
+    Pointer<Void>,
+    Int64,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Pointer<Utf8>>,
+    Pointer<Uint32>);
+typedef StegoEmbedMultiDart = int Function(
+    Pointer<Void>,
+    int,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Pointer<Utf8>>,
+    Pointer<Uint32>);
+typedef StegoExtractMultiC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef StegoExtractMultiDart = int Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Pointer<Utf8>>);
 late AuditListDart _auditList;
 late AuditListDart _auditVerify;
 late AuditExportDart _auditExport;
@@ -141,6 +235,12 @@ late StegoSetEnabledDart _stegoSetEnabled;
 late StegoCapacityDart _stegoCapacity;
 late StegoEmbedDart _stegoEmbed;
 late StegoExtractDart _stegoExtract;
+late SyncPolicyGetDart _syncPolicyGetFn;
+late SyncPolicySetDart _syncPolicySetFn;
+late ApplyEditDart _applyEditFn;
+late StegoPlanDart _stegoPlanFn;
+late StegoEmbedMultiDart _stegoEmbedMultiFn;
+late StegoExtractMultiDart _stegoExtractMultiFn;
 // P5-7 更新通道：清单验签与文件哈希（纯函数，无需会话）
 typedef VerifyManifestC = Pointer<Utf8> Function(
     Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
@@ -434,6 +534,96 @@ Map<String, dynamic>? taskStatusOf(int id) {
   }
 }
 
+/// 读回 out_json 并释放（P8-7/P8-10 的 JSON 导出共用）。
+String? readOutJson(Pointer<Pointer<Utf8>> out) {
+  if (out.value.address == 0) return null;
+  final s = out.value.toDartString();
+  _free(out.value);
+  out.value = Pointer<Utf8>.fromAddress(0);
+  return s;
+}
+
+/// P8-7：策略读取。
+String? _syncPolicyGet(Pointer<Void> h) => _jsonOf(_syncPolicyGetFn(h));
+
+/// P8-7：策略写入 / 上下文上报。
+int _syncPolicySet(Pointer<Void> h, String json) {
+  final j = n(json);
+  try {
+    return _syncPolicySetFn(h, j);
+  } finally {
+    calloc.free(j);
+  }
+}
+
+int _setSyncContext(Pointer<Void> h, String json) => _syncPolicySet(h, json);
+
+/// P8-8：原地编辑。
+int _vaultApplyEdit(Pointer<Void> h, int fileId, Pointer<Utf8> src, String? opts) {
+  final o = opts == null ? nullptr : n(opts);
+  try {
+    return _applyEditFn(h, fileId, src, o);
+  } finally {
+    if (opts != null) calloc.free(o);
+  }
+}
+
+/// P8-10：容量协商。
+String? _stegoPlan(Pointer<Void> h, int fileId, String images, String? opts) {
+  final imgs = n(images);
+  final o = opts == null ? nullptr : n(opts);
+  final out = calloc<Pointer<Utf8>>();
+  try {
+    final rc = _stegoPlanFn(h, fileId, imgs, o, out);
+    if (rc != 0) return null;
+    return readOutJson(out);
+  } finally {
+    calloc.free(imgs);
+    if (opts != null) calloc.free(o);
+    calloc.free(out);
+  }
+}
+
+/// P8-10：跨图嵌入（返回 `{taskId, images, shards}`）。
+String? _stegoEmbedMulti(
+    Pointer<Void> h, int fileId, String images, String? opts) {
+  final imgs = n(images);
+  final o = opts == null ? nullptr : n(opts);
+  final out = calloc<Pointer<Utf8>>();
+  final task = calloc<Uint32>();
+  try {
+    final rc = _stegoEmbedMultiFn(h, fileId, imgs, o, out, task);
+    if (rc != 0) return null;
+    return readOutJson(out);
+  } finally {
+    calloc.free(imgs);
+    if (opts != null) calloc.free(o);
+    calloc.free(out);
+    calloc.free(task);
+  }
+}
+
+/// P8-10：跨图提取（返回码；`out_json` 丢弃）。
+int _stegoExtractMulti(Pointer<Void> h, String images, Pointer<Utf8> dest) {
+  final imgs = n(images);
+  final out = calloc<Pointer<Utf8>>();
+  try {
+    return _stegoExtractMultiFn(h, imgs, dest, out);
+  } finally {
+    calloc.free(imgs);
+    if (out.value.address != 0) _free(out.value);
+    calloc.free(out);
+  }
+}
+
+/// 读取引擎返回的 JSON 字符串并释放；空指针 → null。
+String? _jsonOf(Pointer<Utf8> p) {
+  if (p.address == 0) return null;
+  final s = p.toDartString();
+  _free(p);
+  return s;
+}
+
 /// 拉取 JSON 字符串导出（task_list / poll_events 复用）。
 String? takeOutJson(int Function(Pointer<Pointer<Utf8>>) fn) {
   final out = calloc<Pointer<Utf8>>();
@@ -448,7 +638,362 @@ String? takeOutJson(int Function(Pointer<Pointer<Utf8>>) fn) {
   }
 }
 
-void main(List<String> args) {
+/// P8-5 中继冒烟：spawn vault-relay.exe（配置经 stdin）→ 双会话经中继同步
+/// （token 挑战应答 + 帧化数据阶段）→ 错 token 负向 + PATH_DEGRADED 契约事件
+/// + path_status per-peer 断言。
+Future<void> relaySection(
+    Pointer<Void> hA2, Pointer<Void> hB2, Directory dir, String dllPath) async {
+  final handleB = hB2.address;
+  // 参数门禁（复用主 isolate 绑定）：null relay/room/token → 7
+  check(
+      _p2pServeRelay(
+              hA2,
+              Pointer<Utf8>.fromAddress(0),
+              Pointer<Utf8>.fromAddress(0),
+              Pointer<Utf8>.fromAddress(0)) ==
+          7,
+      'P8-5 serve_relay(null relay/room/token) → 7');
+  final relayExe = File(r'..\native\target\release\vault-relay.exe');
+  if (!relayExe.existsSync()) {
+    final r = await Process.run('cargo', ['build', '--release', '-p', 'vault-relay'],
+        workingDirectory: r'..\native');
+    check(r.exitCode == 0, 'P8-5 现构建 vault-relay（exit=${r.exitCode}）');
+  }
+  if (!relayExe.existsSync()) {
+    check(false, 'P8-5 vault-relay.exe 缺失且构建失败——中继冒烟无法执行');
+    return;
+  }
+  const relayToken = 'vsr2-smoke-token-0123456789abcdef';
+  Process? relayProc;
+  try {
+    relayProc = await Process.start(relayExe.path, const []);
+    relayProc.stdin.writeln('bind = "127.0.0.1:0"');
+    relayProc.stdin.writeln('');
+    relayProc.stdin.writeln('[[tokens]]');
+    relayProc.stdin.writeln('name = "smoke"');
+    relayProc.stdin.writeln('secret = "$relayToken"');
+    relayProc.stdin.writeln('tier = "private"');
+    // P8-4：开启 UDP 映射观测端点（bind2 提供第二个观测目标 → 对称 NAT 前置判定）
+    relayProc.stdin.writeln('');
+    relayProc.stdin.writeln('[observe]');
+    relayProc.stdin.writeln('enabled = true');
+    relayProc.stdin.writeln('bind = "127.0.0.1:0"');
+    relayProc.stdin.writeln('bind2 = "127.0.0.1:0"');
+    // P8-5 收尾：运维端点（loopback + Bearer 强制；随机端口随启动行打印）
+    relayProc.stdin.writeln('');
+    relayProc.stdin.writeln('[ops]');
+    relayProc.stdin.writeln('enabled = true');
+    relayProc.stdin.writeln('bind = "127.0.0.1:0"');
+    relayProc.stdin.writeln('token = "vsr2-smoke-ops-token-0123456789"');
+    await relayProc.stdin.flush();
+    await relayProc.stdin.close();
+    final lines = StreamIterator(relayProc.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter()));
+    check(
+        await lines.moveNext().timeout(const Duration(seconds: 15)),
+        'P8-5 relay 启动行可读');
+    final firstLine = lines.current;
+    final m = RegExp(r'listening on (\S+)').firstMatch(firstLine);
+    check(m != null, 'P8-5 relay 启动行可解析：$firstLine');
+    final relayAddr = m!.group(1)!;
+    check(relayAddr.startsWith('127.0.0.1:'), 'P8-5 relay 随机端口绑定：$relayAddr');
+    check(firstLine.contains('observe_ports=2'),
+        'P8-4 relay 观测端点已就绪（两个观测目标）：$firstLine');
+    final hasOpsLine = await lines.moveNext().timeout(const Duration(seconds: 5),
+        onTimeout: () => false);
+    final opsLine = hasOpsLine ? lines.current : '';
+    final om = RegExp(r'ops endpoint on (\S+)').firstMatch(opsLine);
+    check(om != null, 'P8-5 运维端点已启动：$opsLine');
+    final opsPort = int.parse(om!.group(1)!.split(':').last);
+
+    const room = 'smoke-room-1';
+    // 响应端在独立 Isolate（FFI 阻塞调用不得占住主 isolate；句柄为不透明地址，
+    // 与 engine_service 的 Isolate 编排同款）
+    final serveFut = Isolate.run(() {
+      final lib2 = DynamicLibrary.open(dllPath);
+      final serve = lib2.lookupFunction<P2pServeRelayC, P2pServeRelayDart>(
+          'vault_core_p2p_serve_relay');
+      final pa = relayAddr.toNativeUtf8();
+      final pr = room.toNativeUtf8();
+      final pt = relayToken.toNativeUtf8();
+      try {
+        return serve(Pointer<Void>.fromAddress(handleB), pa, pr, pt);
+      } finally {
+        calloc.free(pa);
+        calloc.free(pr);
+        calloc.free(pt);
+      }
+    });
+
+    final relaySrc = '${dir.path}${Platform.pathSeparator}relay-sync.txt';
+    final relayPayload = utf8.encode('VSR2 relayed sync payload! ' * 4000);
+    File(relaySrc).writeAsBytesSync(relayPayload);
+    final relayId = calloc<Uint64>();
+    check(_vaultImport(hA2, n(relaySrc), 0, relayId) == 0, 'P8-5 A 导入中继同步文件');
+    final sumPtr = _p2pSyncRelay(hA2, n(relayAddr), n(room), n(relayToken));
+    check(sumPtr.address != 0, 'P8-5 经中继同步成功（VSR2 鉴权 + 帧化数据阶段）');
+    final sumJson = sumPtr.address != 0 ? str(sumPtr) : '';
+    if (sumPtr.address != 0) _free(sumPtr);
+    check(sumJson.contains('pushed'), 'P8-5 中继同步摘要含 pushed');
+    final serveCode =
+        await serveFut.timeout(const Duration(seconds: 120), onTimeout: () => -999);
+    check(serveCode == 0, 'P8-5 B 响应端经中继完成（exit=$serveCode）');
+    final relayOut = '${dir.path}${Platform.pathSeparator}relay-out.txt';
+    check(_vaultExport(hB2, relayId.value, n(relayOut)) == 0,
+        'P8-5 B 导出经中继收到的文件');
+    final got = File(relayOut).readAsBytesSync();
+    check(
+        got.length == relayPayload.length && got.isNotEmpty,
+        'P8-5 导出内容长度一致（${got.length}B，跨多个中继 DATA 帧）');
+
+    // path_status per-peer：relay 路径 + 尝试计数 + 线上字节记账
+    final psPtr = _p2pPathStatus(hA2);
+    final ps = jsonDecode(str(psPtr)) as Map<String, dynamic>;
+    _free(psPtr);
+    final peers2 = (ps['peers'] as List).cast<Map<String, dynamic>>();
+    check(peers2.isNotEmpty, 'P8-5 per-peer 段非空');
+    final rec = peers2.firstWhere(
+        (p) => p['path'] == 'relay',
+        orElse: () => <String, dynamic>{});
+    check(rec.isNotEmpty, 'P8-5 存在 relay 路径记录');
+    check((rec['attempts']?['relay'] ?? 0) >= 1, 'P8-5 relay 尝试计数 ≥ 1');
+    check((rec['bytesOut'] ?? 0) > 0, 'P8-5 中继线上字节已记账（bytesOut>0）');
+
+    // ==== P8-4 打洞：中继 UDP 观测端点 + 候选经 Hello 交换 + 双向验证 ====
+    // 打洞在引擎侧后台执行（不阻塞会话），故轮询等待结果落进 path_status。
+    Map<String, dynamic> punchOf() {
+      final p = _p2pPathStatus(hA2);
+      final j = jsonDecode(str(p)) as Map<String, dynamic>;
+      _free(p);
+      final list = (j['peers'] as List).cast<Map<String, dynamic>>();
+      final r = list.firstWhere((e) => e['path'] == 'relay',
+          orElse: () => <String, dynamic>{});
+      return (r['punch'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    }
+
+    var punch = punchOf();
+    for (var i = 0; i < 40 && (punch['attempts'] ?? 0) < 1; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      punch = punchOf();
+    }
+    check((punch['attempts'] ?? 0) >= 1, 'P8-4 打洞尝试已记账：$punch');
+    check(punch['ok'] == true, 'P8-4 回环网络双向证实打通：$punch');
+    check((punch['localCandidates'] ?? 0) >= 1 && (punch['remoteCandidates'] ?? 0) >= 1,
+        'P8-4 两端候选经 Hello 交换非空：$punch');
+    check(punch['symmetricNat'] == false, 'P8-4 回环非对称 NAT：$punch');
+    check(punch['kind'] == 'punched' && punch['degradedSteps'] == 0,
+        'P8-4 路径状态机停在 punched（无降级）：$punch');
+    // 隐私纪律：打洞段只有计数与原因，**不得含 IP**
+    check(!jsonEncode(punch).contains('127.0.0.1'), 'P8-4 打洞段不得泄露地址：$punch');
+    check((rec['path'] ?? '') == 'relay',
+        'P8-4 数据路径仍如实为 relay（不谎称已走打洞承载）');
+
+    // ==== P8-4 探针：两端各调一次（不要求已配对独立于同步），各拿结构化结果 ====
+    // 两端都要阻塞在同一房间上 → 响应端放 Isolate，发起端在主 isolate。
+    const probeCode = 'natlab-probe-shared-code-1';
+    final respProbeFut = Isolate.run(() {
+      final lib2 = DynamicLibrary.open(dllPath);
+      final probe = lib2.lookupFunction<PunchProbeC, PunchProbeDart>(
+          'vault_core_p2p_punch_probe');
+      final pa = n(relayAddr);
+      final pr = n('probe-room-1');
+      final pt = n(relayToken);
+      final pc = n(probeCode);
+      try {
+        // role = 1（响应端）
+        final out = probe(Pointer<Void>.fromAddress(handleB), pa, pr, pt, pc, 1, 8000);
+        return out.address == 0 ? null : str(out);
+      } finally {
+        calloc.free(pa);
+        calloc.free(pr);
+        calloc.free(pt);
+        calloc.free(pc);
+      }
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    final initPtr =
+        _punchProbe(hA2, n(relayAddr), n('probe-room-1'), n(relayToken), n(probeCode), 0, 8000);
+    check(initPtr.address != 0, 'P8-4 探针（发起端）返回结果');
+    final initJson = initPtr.address != 0
+        ? jsonDecode(str(initPtr)) as Map<String, dynamic>
+        : <String, dynamic>{};
+    if (initPtr.address != 0) _free(initPtr);
+    final respRaw = await respProbeFut.timeout(const Duration(seconds: 60),
+        onTimeout: () => null);
+    final respJson = respRaw == null
+        ? <String, dynamic>{}
+        : jsonDecode(respRaw) as Map<String, dynamic>;
+
+    check(initJson['ok'] == true, 'P8-4 探针（发起端）双向证实打通：$initJson');
+    check(respJson['ok'] == true, 'P8-4 探针（响应端）双向证实打通：$respJson');
+    check(initJson['role'] == 'initiator' && respJson['role'] == 'responder',
+        'P8-4 探针角色如实标注：$initJson / $respJson');
+    check(
+        (initJson['peerDeviceId'] as String?)?.startsWith('vd-') == true,
+        'P8-4 探针报出对端身份：$initJson');
+    check(initJson['kind'] == 'punched' && initJson['degradedSteps'] == 0,
+        'P8-4 探针路径状态机停在 punched：$initJson');
+    check(
+        initJson['mappedPort'] is int && initJson['peerObservedPort'] is int,
+        'P8-4 探针给出两次观测端口（核对 NAT 类型用）：$initJson');
+    check((initJson['elapsedMs'] ?? 99999) < 8000,
+        'P8-4 探针在窗口内完成：$initJson');
+    check(!jsonEncode(initJson).contains('127.0.0.1') &&
+            !jsonEncode(respJson).contains('127.0.0.1'),
+        'P8-4 探针结果不得泄露地址：$initJson / $respJson');
+
+    // 错 token → 拒绝（R 码映射为本机码，返回 null）+ 可读诊断 + 契约事件
+    final badPtr =
+        _p2pSyncRelay(hA2, n(relayAddr), n(room), n('vsr2-wrong-token-0123456789abcd'));
+    check(badPtr.address == 0, 'P8-5 错 token 同步被拒');
+    if (badPtr.address != 0) _free(badPtr);
+    final stA = _p2pStatus(hA2);
+    final stAj = jsonDecode(str(stA)) as Map<String, dynamic>;
+    _free(stA);
+    check(
+        stAj['lastPathFailure'] != null &&
+            stAj['lastPathFailure']['reason'] == 'auth-failed',
+        'P8-5 lastPathFailure.reason == auth-failed');
+    check(
+        (stAj['events'] as List).any((e) => e.toString().contains('auth-failed')),
+        'P8-5 可读诊断进引擎事件日志');
+    final frames = pollDrain();
+    final degraded = frames.any((f) =>
+        f['type'] == 13 && f['payload'].toString().contains('relay_unavailable'));
+    check(degraded, 'P8-5 PATH_DEGRADED(13, relay_unavailable) 进契约事件流');
+
+    // ==== P8-5 收尾：运维端点 /healthz /stats.json /metrics（loopback + Bearer）====
+    Future<String> httpGet(String path, {String? bearer}) async {
+      final sock = await Socket.connect('127.0.0.1', opsPort,
+          timeout: const Duration(seconds: 5));
+      final auth =
+          bearer == null ? '' : 'Authorization: Bearer $bearer\r\n';
+      sock.add(utf8.encode('GET $path HTTP/1.1\r\n'
+          'Host: ops\r\n'
+          '${auth}Connection: close\r\n'
+          '\r\n'));
+      await sock.flush();
+      final resp = <int>[];
+      await for (final chunk in sock) {
+        resp.addAll(chunk);
+      }
+      await sock.close();
+      return utf8.decode(resp);
+    }
+
+    final health = await httpGet('/healthz');
+    check(health.startsWith('HTTP/1.1 200'),
+        'P8-5 /healthz 无鉴权可读：${health.split('\r\n').first}');
+    check(health.contains('uptimeS') && health.contains('"ver":2'),
+        'P8-5 /healthz 只含存活 + 版本 + uptimeS');
+    final noAuth = await httpGet('/stats.json');
+    check(noAuth.startsWith('HTTP/1.1 401'), 'P8-5 /stats.json 无 Bearer → 401');
+    const opsToken = 'vsr2-smoke-ops-token-0123456789';
+    final stats = await httpGet('/stats.json', bearer: opsToken);
+    check(stats.startsWith('HTTP/1.1 200'), 'P8-5 /stats.json 带 Bearer → 200');
+    final statsBody = stats.split('\r\n\r\n').last;
+    final statsJson = jsonDecode(statsBody) as Map<String, dynamic>;
+    check((statsJson['sessions'] ?? 0) >= 1,
+        'P8-5 /stats.json 5 min 聚合含会话数：$statsBody');
+    check((statsJson['bytes'] ?? 0) > 0, 'P8-5 /stats.json 聚合字节数 > 0');
+    check((statsJson['closeReasons'] as Map<String, dynamic>? ?? {}).isNotEmpty,
+        'P8-5 /stats.json close_reason 直方图非空');
+    check(!statsBody.contains('127.0.0.1') && !statsBody.contains(relayToken),
+        'P8-5 /stats.json 聚合体不含 IP / token（匿名纪律）');
+    final metrics = await httpGet('/metrics', bearer: opsToken);
+    check(metrics.contains('vsr2_sessions_total'), 'P8-5 /metrics 输出计数');
+
+    // ==== P8-5 收尾：中继设置（settings.enc）+ 多中继候选顺序 ====
+    final rsDef = _relaySettingsGet(hA2);
+    check(rsDef.address != 0, 'P8-5 relaySettingsGet 默认值可读');
+    final rsDefJson =
+        rsDef.address != 0 ? jsonDecode(str(rsDef)) as Map<String, dynamic> : <String, dynamic>{};
+    if (rsDef.address != 0) _free(rsDef);
+    check(rsDefJson['allowPublicRelay'] == true && (rsDefJson['relays'] as List).isEmpty,
+        'P8-5 默认 allowPublicRelay=true 且无候选');
+
+    // 非法设置（短 token）→ 7（原子拒绝）
+    check(
+        _relaySettingsSet(
+                hA2,
+                n('{"allowPublicRelay":true,"relays":[{"addr":"x:1","token":"short"}]}')) ==
+            7,
+        'P8-5 短 token 设置被原子拒绝（7）');
+
+    // 负向：仅官方条目 + allowPublicRelay=false → 候选为空 → 不拨号、13
+    check(
+        _relaySettingsSet(
+                hA2,
+                n('{"allowPublicRelay":false,"relays":[{"addr":"$relayAddr",'
+                    '"token":"$relayToken","public":true}]}')) ==
+            0,
+        'P8-5 写入「仅官方条目 + 禁用官方中继」设置');
+    final negPtr = _p2pSyncRelayCands(hA2, n('smoke-cand-neg'));
+    check(negPtr.address == 0, 'P8-5 禁用官方中继后候选同步被拒（不拨号）');
+    if (negPtr.address != 0) _free(negPtr);
+    final stNegPtr = _p2pStatus(hA2);
+    final stNeg = jsonDecode(str(stNegPtr)) as Map<String, dynamic>;
+    _free(stNegPtr);
+    check(
+        stNeg['lastPathFailure']?['reason'] == 'relay_unavailable',
+        'P8-5 禁用官方中继失败原因 = relay_unavailable');
+
+    // 正向：自建条目（public=false）不受开关影响 → 候选顺序同步端到端
+    check(
+        _relaySettingsSet(
+                hA2,
+                n('{"allowPublicRelay":false,"relays":[{"addr":"$relayAddr",'
+                    '"token":"$relayToken","public":false}]}')) ==
+            0,
+        'P8-5 写入自建中继候选（public=false）');
+    final rsBackPtr = _relaySettingsGet(hA2);
+    final rsBack = jsonDecode(str(rsBackPtr)) as Map<String, dynamic>;
+    _free(rsBackPtr);
+    final rsList = rsBack['relays'] as List;
+    check(rsList.length == 1 && rsList.first['addr'] == relayAddr,
+        'P8-5 中继设置往返保真');
+    const candRoom = 'smoke-cand-room-1';
+    // 中继设置按会话隔离：B 侧同样要写入候选（响应端凭同一自建条目接入）
+    check(
+        _relaySettingsSet(
+                hB2,
+                n('{"allowPublicRelay":false,"relays":[{"addr":"$relayAddr",'
+                    '"token":"$relayToken","public":false}]}')) ==
+            0,
+        'P8-5 B 写入自建中继候选');
+    final candServeFut = Isolate.run(() {
+      final lib2 = DynamicLibrary.open(dllPath);
+      final serve = lib2.lookupFunction<RelayCandsServeC, RelayCandsServeDart>(
+          'vault_core_p2p_serve_relay_candidates');
+      final pr = n(candRoom);
+      try {
+        return serve(Pointer<Void>.fromAddress(handleB), pr);
+      } finally {
+        calloc.free(pr);
+      }
+    });
+    final candSrc = '${dir.path}${Platform.pathSeparator}cand.txt';
+    final candPayload = utf8.encode('relay candidates payload! ' * 500);
+    File(candSrc).writeAsBytesSync(candPayload);
+    final candId = calloc<Uint64>();
+    check(_vaultImport(hA2, n(candSrc), 0, candId) == 0, 'P8-5 A 导入候选同步文件');
+    final candPtr = _p2pSyncRelayCands(hA2, n(candRoom));
+    check(candPtr.address != 0, 'P8-5 候选顺序同步成功（自建条目拨号）');
+    if (candPtr.address != 0) _free(candPtr);
+    final candServe = await candServeFut.timeout(const Duration(seconds: 120), onTimeout: () => -999);
+    check(candServe == 0, 'P8-5 B 候选响应端完成（exit=$candServe）');
+    final candOut = '${dir.path}${Platform.pathSeparator}cand-out.txt';
+    check(_vaultExport(hB2, candId.value, n(candOut)) == 0, 'P8-5 B 导出候选同步文件');
+    check(File(candOut).readAsBytesSync().length == candPayload.length,
+        'P8-5 候选同步内容长度一致');
+    calloc.free(candId);
+  } finally {
+    relayProc?.kill();
+  }
+}
+
+Future<void> main(List<String> args) async {
   final dll = args.isNotEmpty
       ? args.first
       : r'build\windows\x64\runner\Debug\vault_core.dll';
@@ -509,6 +1054,10 @@ void main(List<String> args) {
   _p2pPairJoin = lib.lookupFunction<P2pPairJoinC, P2pPairJoinDart>(
       'vault_core_p2p_pair_join');
   _p2pSync = lib.lookupFunction<P2pSyncC, P2pSyncDart>('vault_core_p2p_sync');
+  _p2pSyncRelay = lib.lookupFunction<P2pSyncRelayC, P2pSyncRelayDart>(
+      'vault_core_p2p_sync_relay');
+  _p2pServeRelay = lib.lookupFunction<P2pServeRelayC, P2pServeRelayDart>(
+      'vault_core_p2p_serve_relay');
   _p2pSyncTask = lib.lookupFunction<P2pSyncTaskC, P2pSyncTaskDart>(
       'vault_core_p2p_sync_task');
   _p2pPathStatus = lib.lookupFunction<P2pPathStatusC, P2pPathStatusDart>(
@@ -519,6 +1068,25 @@ void main(List<String> args) {
       lib.lookupFunction<P2pStatusC, P2pStatusDart>('vault_core_p2p_status');
   _p2pUnpair =
       lib.lookupFunction<P2pUnpairC, P2pUnpairDart>('vault_core_p2p_unpair');
+  _punchProbe = lib.lookupFunction<PunchProbeC, PunchProbeDart>(
+      'vault_core_p2p_punch_probe');
+  _relaySettingsGet = lib.lookupFunction<RelaySettingsGetC, RelaySettingsGetDart>(
+      'vault_core_relay_settings_get');
+  _relaySettingsSet = lib.lookupFunction<RelaySettingsSetC, RelaySettingsSetDart>(
+      'vault_core_relay_settings_set');
+  _p2pSyncRelayCands = lib.lookupFunction<RelayCandsSyncC, RelayCandsSyncDart>(
+      'vault_core_p2p_sync_relay_candidates');
+  // P8-9 阅后即焚
+  _burnCreate = lib.lookupFunction<BurnCreateC, BurnCreateDart>(
+      'vault_core_burn_create');
+  _burnReceive = lib.lookupFunction<BurnReceiveC, BurnReceiveDart>(
+      'vault_core_burn_receive');
+  _burnSend = lib.lookupFunction<BurnSendC, BurnSendDart>('vault_core_burn_send');
+  _burnOpen = lib.lookupFunction<BurnOpenC, BurnOpenDart>('vault_core_burn_open');
+  _burnErase =
+      lib.lookupFunction<BurnEraseC, BurnEraseDart>('vault_core_burn_erase');
+  _burnStatus = lib.lookupFunction<BurnStatusC, BurnStatusDart>(
+      'vault_core_burn_status');
   _auditList =
       lib.lookupFunction<AuditListC, AuditListDart>('vault_core_audit_list');
   _auditVerify =
@@ -537,6 +1105,20 @@ void main(List<String> args) {
       lib.lookupFunction<StegoEmbedC, StegoEmbedDart>('vault_core_stego_embed');
   _stegoExtract = lib.lookupFunction<StegoExtractC, StegoExtractDart>(
       'vault_core_stego_extract');
+  _syncPolicyGetFn = lib.lookupFunction<SyncPolicyGetC, SyncPolicyGetDart>(
+      'vault_core_sync_policy_get');
+  _syncPolicySetFn = lib.lookupFunction<SyncPolicySetC, SyncPolicySetDart>(
+      'vault_core_sync_policy_set');
+  _applyEditFn = lib.lookupFunction<ApplyEditC, ApplyEditDart>(
+      'vault_core_vault_apply_edit');
+  _stegoPlanFn = lib.lookupFunction<StegoPlanC, StegoPlanDart>(
+      'vault_core_stego_plan');
+  _stegoEmbedMultiFn =
+      lib.lookupFunction<StegoEmbedMultiC, StegoEmbedMultiDart>(
+          'vault_core_stego_embed_multi');
+  _stegoExtractMultiFn =
+      lib.lookupFunction<StegoExtractMultiC, StegoExtractMultiDart>(
+          'vault_core_stego_extract_multi');
   _verifyManifest = lib.lookupFunction<VerifyManifestC, VerifyManifestDart>(
       'vault_core_verify_update_manifest');
   _fileSha256 =
@@ -955,6 +1537,83 @@ void main(List<String> args) {
       'P3 B 侧保留误删保护冲突副本');
   if (lstB.address != 0) _free(lstB);
 
+  // ==== P8-9 阅后即焚：一次性会话 → 单次性 → 打开 → 超时自动擦除 ====
+  // 能力位 bit13 必须置位（未置位则入口不渲染，见 docs/v2.0/05-04 §5.5）
+  final abiBurn = calloc<VsAbiInfo>();
+  check(
+      _abiInfo(abiBurn) == 0 &&
+          (abiBurn.ref.capabilityBits & (1 << 13)) != 0,
+      'P8-9 能力位 bit13 CAP_BURN_SHARE 置位');
+  check(abiBurn.ref.capabilityBits & (1 << 6) != 0,
+      'P8-4 能力位 bit6 CAP_HOLE_PUNCH 置位');
+  calloc.free(abiBurn);
+
+  final burnSrc = '${dirB.path}${Platform.pathSeparator}burn-once.txt';
+  final burnPayload = utf8.encode('burn-after-reading payload (P8-9)');
+  File(burnSrc).writeAsBytesSync(burnPayload);
+  final burnIdOut = calloc<Uint64>();
+  check(_vaultImport(hA, n(burnSrc), 0, burnIdOut) == 0, 'P8-9 A 导入待焚文件');
+  final burnFileId = burnIdOut.value;
+
+  final createPtr = _burnCreate(hA, burnFileId, 900, 1);
+  check(createPtr.address != 0, 'P8-9 burn_create 返回票据');
+  final createJson =
+      createPtr.address != 0 ? jsonDecode(str(createPtr)) as Map<String, dynamic> : {};
+  if (createPtr.address != 0) _free(createPtr);
+  final burnId = (createJson['burnId'] as num?)?.toInt() ?? 0;
+  final burnCode = (createJson['code'] as String?) ?? '';
+  check(burnId > 0 && burnCode.length == 16, 'P8-9 邀请码 16 字符（码即秘密载体）');
+  check(((createJson['room'] as String?) ?? '').isNotEmpty, 'P8-9 派生房间非空');
+
+  final recvPtr = _burnReceive(hB, n(burnCode), n(''), n(''));
+  check(recvPtr.address != 0 && str(recvPtr).contains('"ready":true'),
+      'P8-9 B 凭码登记票据（秘密仅内存）');
+  if (recvPtr.address != 0) _free(recvPtr);
+  final badRecv = _burnReceive(hB, n('BADCODE'), n(''), n(''));
+  check(badRecv.address == 0, 'P8-9 非法邀请码被拒');
+  if (badRecv.address != 0) _free(badRecv);
+
+  final sendPtr = _burnSend(hA, burnId, addrB, n(''), n(''));
+  check(sendPtr.address != 0 && str(sendPtr).contains('"delivered":true'),
+      'P8-9 直连投递成功');
+  if (sendPtr.address != 0) _free(sendPtr);
+  final reuse = _burnSend(hA, burnId, addrB, n(''), n(''));
+  check(reuse.address == 0, 'P8-9 已交付票据不可复用（单次性）');
+  if (reuse.address != 0) _free(reuse);
+
+  final stRecv = _burnStatus(hB, burnId);
+  check(stRecv.address != 0 && str(stRecv).contains('"phase":"delivered"'),
+      'P8-9 接收端状态 delivered');
+  if (stRecv.address != 0) _free(stRecv);
+
+  final openPtr = _burnOpen(hB, burnId);
+  check(openPtr.address != 0, 'P8-9 打开成功');
+  final openJson =
+      openPtr.address != 0 ? jsonDecode(str(openPtr)) as Map<String, dynamic> : {};
+  if (openPtr.address != 0) _free(openPtr);
+  final openPath = (openJson['path'] as String?) ?? '';
+  check(File(openPath).existsSync(), 'P8-9 受控临时明文已就绪');
+  check(
+      File(openPath).readAsBytesSync().length == burnPayload.length,
+      'P8-9 打开内容长度一致（${burnPayload.length}B）');
+
+  sleep(const Duration(milliseconds: 2600)); // 报价 open_timeout=1s
+  check(!File(openPath).existsSync(), 'P8-9 打开后超时自动擦除临时明文');
+  final stErased = _burnStatus(hB, burnId);
+  check(stErased.address != 0 && str(stErased).contains('"phase":"erased"'),
+      'P8-9 擦除后状态为 erased');
+  if (stErased.address != 0) _free(stErased);
+  final stSent = _burnStatus(hA, burnId);
+  check(stSent.address != 0 && str(stSent).contains('"consumed":true'),
+      'P8-9 发送端票据标记已消费');
+  if (stSent.address != 0) _free(stSent);
+  // 显式擦除幂等（残留已清 → 仍报 erased）
+  final erasePtr = _burnErase(hB, burnId);
+  check(erasePtr.address != 0 && str(erasePtr).contains('"erased":true'),
+      'P8-9 显式擦除幂等');
+  if (erasePtr.address != 0) _free(erasePtr);
+  calloc.free(burnIdOut);
+
   // 远程销毁：A 对 B 下发延迟 1s 销毁 → B 保险箱文件被擦除
   final stB = _p2pStatus(hB);
   final devBId = RegExp(r'"deviceId":"(vd-[0-9a-f]+)"')
@@ -1091,6 +1750,100 @@ void main(List<String> args) {
   check(File(stegoDest).readAsStringSync() == File(p5src).readAsStringSync(),
       'P5 隐写往返内容逐字节一致');
   check(File(pngOut).lengthSync() > 0, 'P5 载体图片可读');
+
+  // ===== P8-10 隐写跨图分割与容量协商 =====
+  final imgPaths = <String>[];
+  for (var i = 0; i < 3; i++) {
+    final p = '${p5dir.path}${Platform.pathSeparator}cover-$i.png';
+    File(p).writeAsBytesSync(makePng(64, 64));
+    imgPaths.add(p);
+  }
+  final planJson = _stegoPlan(hP, p5Id, jsonEncode(imgPaths), null);
+  check(planJson != null, 'P8-10 stego_plan 返回计划');
+  final plan = planJson == null
+      ? <String, dynamic>{}
+      : jsonDecode(planJson) as Map<String, dynamic>;
+  check(plan['fits'] == true, 'P8-10 三张小图足够 → fits=true（$planJson）');
+  check((plan['perImage'] as List).length == 3, 'P8-10 perImage 逐图给出');
+  check(!(plan['notes'] as List).contains('disperse=off'), 'P8-10 默认位分散启用');
+  // 容量不足：只给一张小图 + 20KB 文件 → fits=false 且外推所需图数（如实拒绝）
+  final bigFile = '${p5dir.path}${Platform.pathSeparator}big.bin';
+  File(bigFile).writeAsBytesSync(Uint8List(20000));
+  final bigId = calloc<Uint64>();
+  check(_vaultImport(hP, n(bigFile), 0, bigId) == 0, 'P8-10 导入 20KB 文件');
+  final plan2 = _stegoPlan(hP, bigId.value, jsonEncode([imgPaths.first]), null);
+  final p2 = plan2 == null
+      ? <String, dynamic>{}
+      : jsonDecode(plan2) as Map<String, dynamic>;
+  check(p2['fits'] == false, 'P8-10 容量不足 → fits=false（如实拒绝）');
+  check((p2['imagesNeeded'] as num) > 1, 'P8-10 给出所需图数（${p2['imagesNeeded']}）');
+  // 跨图嵌入（后台任务）→ 轮询 done → 乱序跨图提取 → 内容逐字节一致
+  final emJson = _stegoEmbedMulti(hP, p5Id, jsonEncode(imgPaths), null);
+  final em = emJson == null
+      ? <String, dynamic>{}
+      : jsonDecode(emJson) as Map<String, dynamic>;
+  check(emJson != null && (em['shards'] as num?) == 3, 'P8-10 分三片（$emJson）');
+  final stegoTask = (em['taskId'] as num?)?.toInt() ?? 0;
+  check(stegoTask > 0, 'P8-10 embed_multi 返回 task_id');
+  var stTask = taskStatusOf(stegoTask);
+  final dlTask = DateTime.now().add(const Duration(seconds: 15));
+  while (stTask != null &&
+      stTask['state'] != 'done' &&
+      DateTime.now().isBefore(dlTask)) {
+    sleep(const Duration(milliseconds: 20));
+    stTask = taskStatusOf(stegoTask);
+  }
+  check(stTask != null && stTask['state'] == 'done', 'P8-10 嵌入任务完成');
+  final multiDest = '${p5dir.path}${Platform.pathSeparator}multi-out.txt';
+  final md = n(multiDest);
+  // 提取的是**产出图**（`<stem>.stego.png`，源图不被覆盖）——乱序给出
+  final carriers = (em['images'] as List).cast<String>();
+  final shuffled = [carriers[2], carriers[0], carriers[1]];
+  check(carriers.length == 3 && _stegoExtractMulti(hP, jsonEncode(shuffled), md) == 0,
+      'P8-10 跨图提取（乱序）成功');
+  check(File(multiDest).readAsStringSync() == File(p5src).readAsStringSync(),
+      'P8-10 跨图往返内容逐字节一致');
+  final md2 = n(multiDest);
+  check(
+      _stegoExtractMulti(hP, jsonEncode([carriers[0], carriers[1]]), md2) != 0,
+      'P8-10 缺片必须失败（不静默）');
+  calloc.free(md);
+  calloc.free(md2);
+  calloc.free(bigId);
+
+  // ===== P8-7 选择性同步策略（sync-policy.enc）=====
+  final pol0 = _syncPolicyGet(hP);
+  check(pol0 != null, 'P8-7 策略读取返回 JSON');
+  check((jsonDecode(pol0 ?? '{}') as Map)['fromDefault'] == true,
+      'P8-7 无策略文件 → fromDefault=true（默认全同步）');
+  check(_syncPolicySet(hP, '{"concurrency":0}') == 7, 'P8-7 非法策略 → 7（原子拒绝）');
+  check(_syncPolicySet(hP, '{"concurrency":4,"filters":{"folderExclude":[7]}}') == 0,
+      'P8-7 合法策略写入成功');
+  final pj = jsonDecode(_syncPolicyGet(hP) ?? '{}') as Map<String, dynamic>;
+  check(pj['fromDefault'] == false && pj['concurrency'] == 4, 'P8-7 策略往返保真');
+  check(_setSyncContext(hP, '{"inWindow":true,"netType":"wifi"}') == 0,
+      'P8-7 上报同步上下文');
+  check(_syncPolicySet(hP, 'not-json') == 7, 'P8-7 非法 JSON → 7');
+
+  // ===== P8-8 原地编辑（同一 file_id 提交新版本）=====
+  // 用独立文件（不动 p5Id，避免影响后续 P5 轮换的内容一致性断言）
+  final editBase = '${p5dir.path}${Platform.pathSeparator}edit-base.txt';
+  File(editBase).writeAsStringSync('edit-base-v1');
+  final editId = calloc<Uint64>();
+  check(_vaultImport(hP, n(editBase), 0, editId) == 0, 'P8-8 导入编辑基线');
+  final editSrc = '${p5dir.path}${Platform.pathSeparator}edited.txt';
+  File(editSrc).writeAsStringSync('edit-base-v1 → v2（原地编辑）');
+  final es = n(editSrc);
+  check(_vaultApplyEdit(hP, editId.value, es, null) == 0, 'P8-8 原地编辑成功');
+  final editedOut = '${p5dir.path}${Platform.pathSeparator}edited-out.txt';
+  final eo = n(editedOut);
+  check(_vaultExport(hP, editId.value, eo) == 0, 'P8-8 编辑后仍可导出（同一 file_id）');
+  check(File(editedOut).readAsStringSync() == File(editSrc).readAsStringSync(),
+      'P8-8 编辑后内容即新版本');
+  check(_vaultApplyEdit(hP, 999999, es, null) != 0, 'P8-8 不存在的 file_id → 非 0');
+  calloc.free(es);
+  calloc.free(eo);
+  calloc.free(editId);
 
   // ===== P5-4 密钥轮换（docs/07 §二/§三）=====
   final rotDest = '${p5dir.path}${Platform.pathSeparator}after-rotate.txt';
@@ -1520,6 +2273,7 @@ void main(List<String> args) {
   check(padPtr.address != 0, 'P8 path_status 返回 JSON');
   final pad = jsonDecode(str(padPtr)) as Map<String, dynamic>;
   _free(padPtr);
+  check(pad['schema'] == 1, 'P8 path_status schema == 1');
   final padObj = pad['padding'] as Map<String, dynamic>;
   check(padObj['tier'] == 4, 'P8 协商填充档位 == 4');
   check(padObj['legacyPeer'] == false, 'P8 legacyPeer == false');
@@ -1527,9 +2281,9 @@ void main(List<String> args) {
   check(hist.isNotEmpty && hist.fold<int>(0, (a, b) => a + b) > 0,
       'P8 帧长直方图有帧（$hist）');
   check(hist.where((e) => e > 0).isNotEmpty, 'P8 直方图非零桶 ≥ 1');
-  final pathObj = pad['path'] as Map<String, dynamic>;
-  check((pathObj['directCandidates'] as num).toInt() == 0,
-      'P8 路径候选计数 P8-4 前恒 0（不编造）');
+  check(padObj['overheadRatio'] is num && (padObj['overheadRatio'] as num) >= 0,
+      'P8 overheadRatio 为非负数值');
+  check(pad['peers'] is List, 'P8 path_status 含 per-peer 段（P8-5）');
   check(_p2pSyncTask(hQA, Pointer<Utf8>.fromAddress(0), p8task) == 7,
       'P8 sync_task(null addr) → 7');
   calloc.free(p8task);
@@ -1574,6 +2328,9 @@ void main(List<String> args) {
   check(_p2pPushLock(Pointer<Void>.fromAddress(0), Pointer<Utf8>.fromAddress(0)) == 7,
       'P7 push_lock(null handle) → 7');
   calloc.free(pqTask);
+
+  // ===== P8-5 中继 VSR2（真实 vault-relay 子进程 + token 挑战-应答）=====
+  await relaySection(hQA, hQB, pqDir, dll);
 
   _lock(hQA);
   _lock(hQB);

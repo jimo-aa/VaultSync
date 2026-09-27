@@ -128,11 +128,52 @@ abstract class VaultCoreBridge {
 
   String? p2pSync(Object sessionHandle, String addr);
 
-  String? p2pSyncRelay(Object sessionHandle, String relay, String room);
+  /// P8-5：中继 token（≥128 位；合规中继必拒短 token）。
+  String? p2pSyncRelay(
+      Object sessionHandle, String relay, String room, String token);
 
-  int p2pServeRelay(Object sessionHandle, String relay, String room);
+  int p2pServeRelay(
+      Object sessionHandle, String relay, String room, String token);
+
+  // ==== P8-5 收尾：中继设置 + 多中继候选顺序（docs/08 §3.6）====
+
+  /// 中继设置读取（settings.enc 载体）：`{allowPublicRelay, relays:[{addr, token, public}]}`。
+  String? relaySettingsGet(Object sessionHandle);
+
+  /// 中继设置写入（原子拒绝：任一条不合法整体拒绝）。
+  int relaySettingsSet(Object sessionHandle, String json);
+
+  /// 多中继候选顺序同步（候选取自设置；`allowPublicRelay=false` 时官方条目拨号前剔除）。
+  String? p2pSyncRelayCandidates(Object sessionHandle, String room);
+
+  int p2pServeRelayCandidates(Object sessionHandle, String room);
 
   String? p2pStatus(Object sessionHandle);
+
+  /// P8-7：选择性同步策略（`sync-policy.enc`）读取；返回 JSON（含 `fromDefault`）。
+  String? syncPolicyGet(Object sessionHandle);
+
+  /// P8-7：写入策略（非法 → 7 原子拒绝；只读 9 / 维护 10）。
+  int syncPolicySet(Object sessionHandle, String json);
+
+  /// P8-7：上报同步上下文 `{"inWindow":bool,"netType":"wifi"}`（出站前复核用）。
+  int setSyncContext(Object sessionHandle, String json);
+
+  /// P8-8：原地编辑（同一 file_id 提交新版本；rev 递增，旧版本保留为合并基线）。
+  int vaultApplyEdit(
+      Object sessionHandle, int fileId, String src, String? optsJson);
+
+  /// P8-10：隐写容量协商（**容量唯一真值来源**）。返回 JSON（含 fits/imagesNeeded）。
+  String? stegoPlan(
+      Object sessionHandle, int fileId, String imagesJson, String? optsJson);
+
+  /// P8-10：跨图嵌入（后台任务，可 task_cancel）。返回 JSON `{taskId, images, shards}`。
+  String? stegoEmbedMulti(
+      Object sessionHandle, int fileId, String imagesJson, String? optsJson);
+
+  /// P8-10：跨图提取（乱序可；缺片 → null 并诊断）。返回 JSON `{name, size, shards}`。
+  String? stegoExtractMulti(
+      Object sessionHandle, String imagesJson, String dest);
 
   /// 解除与指定设备的配对（幂等：该设备本就不存在亦成功）。
   int p2pUnpair(Object sessionHandle, String deviceId);
@@ -352,6 +393,23 @@ typedef _ShareOpenC = Int32 Function(
 // P3 P2P 同步（每函数独立 typedef：参数个数不同严禁复用）
 typedef _P2pPairBeginC = Pointer<Utf8> Function(Pointer<Void>);
 typedef _P2pStatusC = Pointer<Utf8> Function(Pointer<Void>);
+// P8-10 隐写跨图（每函数独立 typedef）
+typedef _StegoPlanC = Int32 Function(Pointer<Void>, Int64, Pointer<Utf8>,
+    Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef _StegoEmbedMultiC = Int32 Function(
+    Pointer<Void>,
+    Int64,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Pointer<Utf8>>,
+    Pointer<Uint32>);
+typedef _StegoExtractMultiC = Int32 Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Pointer<Utf8>>);
+typedef _SyncPolicyGetC = Pointer<Utf8> Function(Pointer<Void>);
+typedef _SyncPolicySetC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+// P8-8 原地编辑
+typedef _VaultApplyEditC = Int32 Function(
+    Pointer<Void>, Int64, Pointer<Utf8>, Pointer<Utf8>);
 typedef _P2pUnpairC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 // P5 审计 / 销毁 / 隐写（每函数独立 typedef）
 typedef _AuditListC = Pointer<Utf8> Function(Pointer<Void>);
@@ -378,9 +436,18 @@ typedef _P2pPairJoinC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _P2pSyncC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef _P2pSyncRelayC = Pointer<Utf8> Function(
-    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _P2pServeRelayC = Int32 Function(
-    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+
+typedef _RelaySettingsGetC = Pointer<Utf8> Function(Pointer<Void>);
+
+typedef _RelaySettingsSetC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+
+typedef _P2pRelayCandsSyncC = Pointer<Utf8> Function(
+    Pointer<Void>, Pointer<Utf8>);
+
+typedef _P2pRelayCandsServeC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _P2pDestroyArmC = Pointer<Utf8> Function(
     Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Uint64);
 typedef _P2pConflictResolveC = Int32 Function(
@@ -550,15 +617,45 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
             Pointer<Void>, Pointer<Utf8>)>('vault_core_p2p_sync');
     _p2pSyncRelay = _lib.lookupFunction<
         _P2pSyncRelayC,
-        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
             Pointer<Utf8>)>('vault_core_p2p_sync_relay');
     _p2pServeRelay = _lib.lookupFunction<
         _P2pServeRelayC,
-        int Function(Pointer<Void>, Pointer<Utf8>,
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
             Pointer<Utf8>)>('vault_core_p2p_serve_relay');
+    _relaySettingsGet = _lib.lookupFunction<_RelaySettingsGetC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_relay_settings_get');
+    _relaySettingsSet = _lib.lookupFunction<_RelaySettingsSetC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>(
+        'vault_core_relay_settings_set');
+    _p2pSyncRelayCandidates = _lib.lookupFunction<_P2pRelayCandsSyncC,
+        Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>)>(
+        'vault_core_p2p_sync_relay_candidates');
+    _p2pServeRelayCandidates = _lib.lookupFunction<_P2pRelayCandsServeC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>(
+        'vault_core_p2p_serve_relay_candidates');
     _p2pStatus =
         _lib.lookupFunction<_P2pStatusC, Pointer<Utf8> Function(Pointer<Void>)>(
             'vault_core_p2p_status');
+    _syncPolicyGet = _lib.lookupFunction<_SyncPolicyGetC,
+        Pointer<Utf8> Function(Pointer<Void>)>('vault_core_sync_policy_get');
+    _syncPolicySet = _lib.lookupFunction<_SyncPolicySetC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_sync_policy_set');
+    _setSyncContext = _lib.lookupFunction<_SyncPolicySetC,
+        int Function(Pointer<Void>, Pointer<Utf8>)>('vault_core_set_sync_context');
+    _vaultApplyEdit = _lib.lookupFunction<_VaultApplyEditC,
+        int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)>(
+        'vault_core_vault_apply_edit');
+    _stegoPlan = _lib.lookupFunction<_StegoPlanC,
+        int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>,
+            Pointer<Pointer<Utf8>>)>('vault_core_stego_plan');
+    _stegoEmbedMulti = _lib.lookupFunction<_StegoEmbedMultiC,
+        int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>,
+            Pointer<Pointer<Utf8>>, Pointer<Uint32>)>(
+        'vault_core_stego_embed_multi');
+    _stegoExtractMulti = _lib.lookupFunction<_StegoExtractMultiC,
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
+            Pointer<Pointer<Utf8>>)>('vault_core_stego_extract_multi');
     _auditList =
         _lib.lookupFunction<_AuditListC, Pointer<Utf8> Function(Pointer<Void>)>(
             'vault_core_audit_list');
@@ -730,11 +827,30 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
       _p2pPairJoin;
   late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>) _p2pSync;
-  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+  late final Pointer<Utf8> Function(
+          Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
       _p2pSyncRelay;
-  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+  late final int Function(
+          Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
       _p2pServeRelay;
+  late final Pointer<Utf8> Function(Pointer<Void>) _relaySettingsGet;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _relaySettingsSet;
+  late final Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>)
+      _p2pSyncRelayCandidates;
+  late final int Function(Pointer<Void>, Pointer<Utf8>)
+      _p2pServeRelayCandidates;
   late final Pointer<Utf8> Function(Pointer<Void>) _p2pStatus;
+  late final Pointer<Utf8> Function(Pointer<Void>) _syncPolicyGet;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _syncPolicySet;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _setSyncContext;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
+      _vaultApplyEdit;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>,
+      Pointer<Pointer<Utf8>>) _stegoPlan;
+  late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>,
+      Pointer<Pointer<Utf8>>, Pointer<Uint32>) _stegoEmbedMulti;
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>,
+      Pointer<Pointer<Utf8>>) _stegoExtractMulti;
   late final int Function(Pointer<Void>, Pointer<Utf8>) _p2pUnpair;
   late final Pointer<Utf8> Function(Pointer<Void>) _auditList;
   late final Pointer<Utf8> Function(Pointer<Void>) _auditVerify;
@@ -1129,25 +1245,65 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   }
 
   @override
-  String? p2pSyncRelay(Object sessionHandle, String relay, String room) {
+  String? p2pSyncRelay(
+      Object sessionHandle, String relay, String room, String token) {
     final r = _toNative(relay);
     final rm = _toNative(room);
+    final tk = _toNative(token);
     try {
-      return _takeJson(_p2pSyncRelay(_handle(sessionHandle), r, rm));
+      return _takeJson(_p2pSyncRelay(_handle(sessionHandle), r, rm, tk));
     } finally {
       calloc.free(r);
+      calloc.free(rm);
+      calloc.free(tk);
+    }
+  }
+
+  @override
+  int p2pServeRelay(
+      Object sessionHandle, String relay, String room, String token) {
+    final r = _toNative(relay);
+    final rm = _toNative(room);
+    final tk = _toNative(token);
+    try {
+      return _p2pServeRelay(_handle(sessionHandle), r, rm, tk);
+    } finally {
+      calloc.free(r);
+      calloc.free(rm);
+      calloc.free(tk);
+    }
+  }
+
+  @override
+  String? relaySettingsGet(Object sessionHandle) =>
+      _takeJson(_relaySettingsGet(_handle(sessionHandle)));
+
+  @override
+  int relaySettingsSet(Object sessionHandle, String json) {
+    final j = _toNative(json);
+    try {
+      return _relaySettingsSet(_handle(sessionHandle), j);
+    } finally {
+      calloc.free(j);
+    }
+  }
+
+  @override
+  String? p2pSyncRelayCandidates(Object sessionHandle, String room) {
+    final rm = _toNative(room);
+    try {
+      return _takeJson(_p2pSyncRelayCandidates(_handle(sessionHandle), rm));
+    } finally {
       calloc.free(rm);
     }
   }
 
   @override
-  int p2pServeRelay(Object sessionHandle, String relay, String room) {
-    final r = _toNative(relay);
+  int p2pServeRelayCandidates(Object sessionHandle, String room) {
     final rm = _toNative(room);
     try {
-      return _p2pServeRelay(_handle(sessionHandle), r, rm);
+      return _p2pServeRelayCandidates(_handle(sessionHandle), rm);
     } finally {
-      calloc.free(r);
       calloc.free(rm);
     }
   }
@@ -1155,6 +1311,97 @@ class VaultCoreBridgeFfi implements VaultCoreBridge {
   @override
   String? p2pStatus(Object sessionHandle) =>
       _takeJson(_p2pStatus(_handle(sessionHandle)));
+
+  @override
+  String? syncPolicyGet(Object sessionHandle) =>
+      _takeJson(_syncPolicyGet(_handle(sessionHandle)));
+
+  @override
+  int syncPolicySet(Object sessionHandle, String json) {
+    final j = _toNative(json);
+    try {
+      return _syncPolicySet(_handle(sessionHandle), j);
+    } finally {
+      calloc.free(j);
+    }
+  }
+
+  @override
+  int setSyncContext(Object sessionHandle, String json) {
+    final j = _toNative(json);
+    try {
+      return _setSyncContext(_handle(sessionHandle), j);
+    } finally {
+      calloc.free(j);
+    }
+  }
+
+  @override
+  int vaultApplyEdit(
+      Object sessionHandle, int fileId, String src, String? optsJson) {
+    final s = _toNative(src);
+    final o = optsJson == null ? nullptr : _toNative(optsJson);
+    try {
+      return _vaultApplyEdit(_handle(sessionHandle), fileId, s, o);
+    } finally {
+      calloc.free(s);
+      if (optsJson != null) calloc.free(o);
+    }
+  }
+
+  @override
+  String? stegoPlan(Object sessionHandle, int fileId, String imagesJson,
+      String? optsJson) {
+    final imgs = _toNative(imagesJson);
+    final opts = optsJson == null ? nullptr : _toNative(optsJson);
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      final rc = _stegoPlan(_handle(sessionHandle), fileId, imgs, opts, out);
+      if (rc != 0) return null;
+      return _takeJson(out.value);
+    } finally {
+      calloc.free(imgs);
+      if (optsJson != null) calloc.free(opts);
+      calloc.free(out);
+    }
+  }
+
+  @override
+  String? stegoEmbedMulti(Object sessionHandle, int fileId, String imagesJson,
+      String? optsJson) {
+    final imgs = _toNative(imagesJson);
+    final opts = optsJson == null ? nullptr : _toNative(optsJson);
+    final out = calloc<Pointer<Utf8>>();
+    final task = calloc<Uint32>();
+    try {
+      final rc = _stegoEmbedMulti(
+          _handle(sessionHandle), fileId, imgs, opts, out, task);
+      if (rc != 0) return null;
+      return _takeJson(out.value);
+    } finally {
+      calloc.free(imgs);
+      if (optsJson != null) calloc.free(opts);
+      calloc.free(out);
+      calloc.free(task);
+    }
+  }
+
+  @override
+  String? stegoExtractMulti(Object sessionHandle, String imagesJson, String dest) {
+    final imgs = _toNative(imagesJson);
+    final d = _toNative(dest);
+    final out = calloc<Pointer<Utf8>>();
+    try {
+      final rc = _stegoExtractMulti(_handle(sessionHandle), imgs, d, out);
+      final raw = _takeJson(out.value);
+      // 失败（6）时也可能带结构化诊断——调用方按 null 判定失败
+      return rc == 0 ? raw : null;
+    } finally {
+      calloc.free(imgs);
+      calloc.free(d);
+      calloc.free(out);
+    }
+  }
 
   @override
   Map<String, dynamic>? verifyUpdateManifest(
@@ -1705,15 +1952,65 @@ class VaultCoreBridgeStub implements VaultCoreBridge {
       throw UnsupportedError('stub: native not linked');
 
   @override
-  String? p2pSyncRelay(Object sessionHandle, String relay, String room) =>
+  String? p2pSyncRelay(
+          Object sessionHandle, String relay, String room, String token) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
-  int p2pServeRelay(Object sessionHandle, String relay, String room) =>
+  int p2pServeRelay(
+          Object sessionHandle, String relay, String room, String token) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? relaySettingsGet(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int relaySettingsSet(Object sessionHandle, String json) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? p2pSyncRelayCandidates(Object sessionHandle, String room) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int p2pServeRelayCandidates(Object sessionHandle, String room) =>
       throw UnsupportedError('stub: native not linked');
 
   @override
   String? p2pStatus(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? syncPolicyGet(Object sessionHandle) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int syncPolicySet(Object sessionHandle, String json) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int setSyncContext(Object sessionHandle, String json) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? stegoPlan(Object sessionHandle, int fileId, String imagesJson,
+          String? optsJson) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  int vaultApplyEdit(
+          Object sessionHandle, int fileId, String src, String? optsJson) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? stegoEmbedMulti(Object sessionHandle, int fileId, String imagesJson,
+          String? optsJson) =>
+      throw UnsupportedError('stub: native not linked');
+
+  @override
+  String? stegoExtractMulti(
+          Object sessionHandle, String imagesJson, String dest) =>
       throw UnsupportedError('stub: native not linked');
 
   @override

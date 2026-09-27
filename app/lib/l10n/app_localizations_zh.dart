@@ -1519,6 +1519,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get syncPageRoomId => '房间号';
 
   @override
+  String get syncPageRelayToken => '中继接入 Token';
+
+  @override
+  String get syncPageRelayTokenHint => '由中继部署方分发（≥16 字符）';
+
+  @override
+  String get syncPageTokenVisibility => '显示 / 隐藏 Token';
+
+  @override
   String get syncPageScanning => '扫描中…';
 
   @override

@@ -313,24 +313,92 @@ class VaultEngine {
     return jsonDecode(json) as Map<String, dynamic>;
   }
 
-  /// 经中继同步（relay + room）。
+  /// 经中继同步（relay + room + token，P8-5 VSR2）。
   Future<Map<String, dynamic>?> syncRelay(
-      Object sessionHandle, String relay, String room) async {
+      Object sessionHandle, String relay, String room, String token) async {
     final h = sessionHandle as int;
     final json = isNative
-        ? await Isolate.run(() => _p2pSyncRelaySync(h, relay, room))
-        : _bridge.p2pSyncRelay(sessionHandle, relay, room);
+        ? await Isolate.run(() => _p2pSyncRelaySync(h, relay, room, token))
+        : _bridge.p2pSyncRelay(sessionHandle, relay, room, token);
     if (json == null) return null;
     return jsonDecode(json) as Map<String, dynamic>;
   }
 
   /// 《待定语义》serveRelay 返回 ERR 码 int（状态码语义见 AGENTS）。
   Future<int> serveRelay(
-      Object sessionHandle, String relay, String room) async {
+      Object sessionHandle, String relay, String room, String token) async {
     final h = sessionHandle as int;
     return isNative
-        ? await Isolate.run(() => _p2pServeRelaySync(h, relay, room))
-        : _bridge.p2pServeRelay(sessionHandle, relay, room);
+        ? await Isolate.run(() => _p2pServeRelaySync(h, relay, room, token))
+        : _bridge.p2pServeRelay(sessionHandle, relay, room, token);
+  }
+
+  // ==== P8-5 收尾：中继设置 + 多中继候选顺序（docs/08 §3.6；设置页 UI 归 P9-1）====
+
+  /// 中继设置读取（`{allowPublicRelay, relays:[{addr, token, public}]}`）。
+  Future<Map<String, dynamic>?> relaySettingsGet(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _relaySettingsGetSync(h))
+        : _bridge.relaySettingsGet(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 中继设置写入（原子拒绝：任一条不合法整体拒绝，旧设置完好）。
+  Future<int> relaySettingsSet(Object sessionHandle, String json) async {
+    final h = sessionHandle as int;
+    return isNative
+        ? await Isolate.run(() => _relaySettingsSetSync(h, json))
+        : _bridge.relaySettingsSet(sessionHandle, json);
+  }
+
+  /// 多中继候选顺序同步（发起端；候选取自设置，保序尝试）。
+  Future<Map<String, dynamic>?> syncRelayCandidates(
+      Object sessionHandle, String room) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _p2pSyncRelayCandsSync(h, room))
+        : _bridge.p2pSyncRelayCandidates(sessionHandle, room);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// 响应端的多中继候选顺序接入。
+  Future<int> serveRelayCandidates(Object sessionHandle, String room) async {
+    final h = sessionHandle as int;
+    return isNative
+        ? await Isolate.run(() => _p2pServeRelayCandsSync(h, room))
+        : _bridge.p2pServeRelayCandidates(sessionHandle, room);
+  }
+
+  /// P8-7：选择性同步策略读取（JSON，含 `fromDefault`）。
+  Future<Map<String, dynamic>?> syncPolicyGet(Object sessionHandle) async {
+    final h = sessionHandle as int;
+    final json = isNative
+        ? await Isolate.run(() => _syncPolicyGetSync(h))
+        : _bridge.syncPolicyGet(sessionHandle);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// P8-7：写入策略（非法 → 7 原子拒绝）。
+  Future<int> syncPolicySet(Object sessionHandle, Map<String, dynamic> policy) async {
+    final h = sessionHandle as int;
+    final json = jsonEncode(policy);
+    return isNative
+        ? await Isolate.run(() => _syncPolicySetSync(h, json))
+        : _bridge.syncPolicySet(sessionHandle, json);
+  }
+
+  /// P8-7：上报同步上下文（时段 / 网络类型；外壳判定）。
+  Future<int> setSyncContext(
+      Object sessionHandle, {required bool inWindow, required String netType}) async {
+    final h = sessionHandle as int;
+    final json = jsonEncode({'inWindow': inWindow, 'netType': netType});
+    return isNative
+        ? await Isolate.run(() => _setSyncContextSync(h, json))
+        : _bridge.setSyncContext(sessionHandle, json);
   }
 
   /// P2P 状态快照 JSON（设备身份 / peers / 部署销毁 / 事件时间线）。
@@ -511,6 +579,54 @@ class VaultEngine {
     final json = isNative
         ? await Isolate.run(() => _stegoExtractSync(h, imagePath, destPath))
         : _bridge.stegoExtract(sessionHandle, imagePath, destPath);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// P8-8：原地编辑（同一 file_id 提交新版本；`rev` 递增、旧版本留作合并基线）。
+  Future<int> applyEdit(
+      Object sessionHandle, int fileId, String src, {int keepRevs = 1}) async {
+    final h = sessionHandle as int;
+    final opts = jsonEncode({'keepRevs': keepRevs});
+    return isNative
+        ? await Isolate.run(() => _vaultApplyEditSync(h, fileId, src, opts))
+        : _bridge.vaultApplyEdit(sessionHandle, fileId, src, opts);
+  }
+
+  /// P8-10：容量协商（`_plan` 是容量唯一真值来源；UI 不得自行计算）。
+  Future<Map<String, dynamic>?> stegoPlan(Object sessionHandle, int fileId,
+      List<String> imagePaths, Map<String, dynamic>? opts) async {
+    final h = sessionHandle as int;
+    final images = jsonEncode(imagePaths);
+    final o = opts == null ? null : jsonEncode(opts);
+    final json = isNative
+        ? await Isolate.run(() => _stegoPlanSync(h, fileId, images, o))
+        : _bridge.stegoPlan(sessionHandle, fileId, images, o);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// P8-10：跨图嵌入（后台任务）。返回 `{taskId, images, shards}` 或 null。
+  Future<Map<String, dynamic>?> stegoEmbedMulti(Object sessionHandle, int fileId,
+      List<String> imagePaths, Map<String, dynamic>? opts) async {
+    final h = sessionHandle as int;
+    final images = jsonEncode(imagePaths);
+    final o = opts == null ? null : jsonEncode(opts);
+    final json = isNative
+        ? await Isolate.run(() => _stegoEmbedMultiSync(h, fileId, images, o))
+        : _bridge.stegoEmbedMulti(sessionHandle, fileId, images, o);
+    if (json == null) return null;
+    return jsonDecode(json) as Map<String, dynamic>;
+  }
+
+  /// P8-10：跨图提取（乱序可；缺片失败返回 null）。
+  Future<Map<String, dynamic>?> stegoExtractMulti(
+      Object sessionHandle, List<String> imagePaths, String destPath) async {
+    final h = sessionHandle as int;
+    final images = jsonEncode(imagePaths);
+    final json = isNative
+        ? await Isolate.run(() => _stegoExtractMultiSync(h, images, destPath))
+        : _bridge.stegoExtractMulti(sessionHandle, images, destPath);
     if (json == null) return null;
     return jsonDecode(json) as Map<String, dynamic>;
   }
@@ -724,22 +840,64 @@ String? _p2pSyncSync(int handle, String addr) {
   return lib.p2pSync(handle, addr);
 }
 
-String? _p2pSyncRelaySync(int handle, String relay, String room) {
+String? _p2pSyncRelaySync(int handle, String relay, String room, String token) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return null;
-  return lib.p2pSyncRelay(handle, relay, room);
+  return lib.p2pSyncRelay(handle, relay, room, token);
 }
 
-int _p2pServeRelaySync(int handle, String relay, String room) {
+int _p2pServeRelaySync(int handle, String relay, String room, String token) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return VaultStatus.internal;
-  return lib.p2pServeRelay(handle, relay, room);
+  return lib.p2pServeRelay(handle, relay, room, token);
+}
+
+String? _relaySettingsGetSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.relaySettingsGet(handle);
+}
+
+int _relaySettingsSetSync(int handle, String json) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.relaySettingsSet(handle, json);
+}
+
+String? _p2pSyncRelayCandsSync(int handle, String room) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.p2pSyncRelayCandidates(handle, room);
+}
+
+int _p2pServeRelayCandsSync(int handle, String room) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.p2pServeRelayCandidates(handle, room);
 }
 
 String? _p2pStatusSync(int handle) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return null;
   return lib.p2pStatus(handle);
+}
+
+String? _syncPolicyGetSync(int handle) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.syncPolicyGet(handle);
+}
+
+int _syncPolicySetSync(int handle, String json) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.syncPolicySet(handle, json);
+}
+
+int _setSyncContextSync(int handle, String json) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.setSyncContext(handle, json);
 }
 
 String? _destroyQueueAllSync(int handle, int delaySecs) {
@@ -838,6 +996,31 @@ String? _stegoExtractSync(int handle, String imagePath, String destPath) {
   final lib = VaultCoreBridgeFfi.tryOpen();
   if (lib == null) return null;
   return lib.stegoExtract(handle, imagePath, destPath);
+}
+
+String? _stegoPlanSync(int handle, int fileId, String images, String? opts) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.stegoPlan(handle, fileId, images, opts);
+}
+
+int _vaultApplyEditSync(int handle, int fileId, String src, String opts) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return VaultStatus.internal;
+  return lib.vaultApplyEdit(handle, fileId, src, opts);
+}
+
+String? _stegoEmbedMultiSync(
+    int handle, int fileId, String images, String? opts) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.stegoEmbedMulti(handle, fileId, images, opts);
+}
+
+String? _stegoExtractMultiSync(int handle, String images, String dest) {
+  final lib = VaultCoreBridgeFfi.tryOpen();
+  if (lib == null) return null;
+  return lib.stegoExtractMulti(handle, images, dest);
 }
 
 int _p2pUnpairSync(int handle, String deviceId) {

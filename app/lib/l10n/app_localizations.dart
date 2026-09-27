@@ -2790,6 +2790,24 @@ abstract class AppLocalizations {
   /// **'房间号'**
   String get syncPageRoomId;
 
+  /// No description provided for @syncPageRelayToken.
+  ///
+  /// In zh, this message translates to:
+  /// **'中继接入 Token'**
+  String get syncPageRelayToken;
+
+  /// No description provided for @syncPageRelayTokenHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'由中继部署方分发（≥16 字符）'**
+  String get syncPageRelayTokenHint;
+
+  /// No description provided for @syncPageTokenVisibility.
+  ///
+  /// In zh, this message translates to:
+  /// **'显示 / 隐藏 Token'**
+  String get syncPageTokenVisibility;
+
   /// No description provided for @syncPageScanning.
   ///
   /// In zh, this message translates to:
