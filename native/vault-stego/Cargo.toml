@@ -8,4 +8,4 @@ license.workspace = true
 [dependencies]
 vault-crypto = { path = "../vault-crypto" }
 # PNG 编解码（仅此一个外部依赖；不引入 image crate，避免过重）
-png = "0.17"
+png = "0.18"
