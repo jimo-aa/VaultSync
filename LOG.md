@@ -410,3 +410,120 @@
   3. **打洞模块**（vault-net `punch.rs`）：映射观测协议 `VSOBS1`（观测端点 = 中继侧，VSR2 接线归 P8-5）；对称 NAT 快速判定（同 socket 不同目标映射端口不同 → 立即回落，**不做无望长尝试**，证据 `punch::symmetric_nat_falls_back_fast` 毫秒级完成）；binding 探测打洞（成功/超时两路测试）；`DegradeReason` 枚举对齐 05-03 §4.2 六种 + padding/proto 共八值。
 - **验证**：workspace 全测试绿（vault-net 24+2、vault-p2p 34、vault-core 30）、clippy 零告警、fmt 干净、冒烟 254 → **262 断言全 PASS**（发现快照 schema/enabled/self/候选数组、能力位 bit5、配对短码 6 位 + 有效期）。
 - **如实登记（面板 P8-4 标 `[~]`）**：候选列表经中继信令交换依赖 P8-5 VSR2 控制帧；真网 NAT 矩阵实测（≥60% 判据 + escape hatch ADR）未跑；`PATH_DEGRADED`(13) 契约事件桥接与 per-peer 路径状态段未接。**escape hatch 提示**：若实测打洞成功率 < 60%，按 01 §5.4 引入受审查 STUN 仅作候选发现（须新增 ADR + LOG 实测数据）。
+
+## 2026-09-24 P8 批次四——P8-5 中继 V2 客户端侧收口 + P8-4/P8-6 事件与路径诊断（冒烟 281 断言）
+
+- **背景**：上一轮会话留下了未提交的 VSR2 服务端实现（`vault-relay` main.rs 重写 + proto.rs），且**从未编译运行过**——本次以它为基线开工，先修服务端、再补客户端，形成全链路。
+- **过程发现并修复的服务端真实缺陷（四个，全部在「从未跑过」的实现里）**：
+  1. **编译失败**：`deny(warnings)` 拦 `unused_mut`（`OccupiedEntry::remove` 按值消费 self）——该实现从未通过 `cargo test`。
+  2. **双向泵方向错误（致命）**：`run_session` 两条泵**都读 A 侧**（`ba = a` 应为读 B）——B→A 方向从未被搬运；`paired_session_hits_byte_cap` 因此挂死。改为语义化命名（a_read/b_write/b_read/a_write）。
+  3. **等待房间 TTL 永不生效**：等待方自检用连接级 `created`，而注册进 map 时用的是 `Instant::now()`——`w.created == created` 永假，TTL 回收分支成死代码。统一用连接级 `created`。
+  4. **会话计数下溢（回归测试钉死）**：双泵在会话结束时**各结算一次**（`fetch_sub` ×2）→ u32 回绕成 4294967295 → 之后**所有**连接命中 `total_sessions` 误报 R14 busy。修复 = `finish` 幂等（`closed.swap` 只让第一个到达的泵结算）+ 回归测试 `session_counter_does_not_underflow_across_sessions`（连续 3 会话后计数必须为 0）。
+  5. **等待期 `pre` 缓冲无上限**：未配对连接可向自己的 pre 无限灌字节（内存汇）。加 1 MiB 上限，超限断开。
+- **已交付（客户端侧）**：
+  1. **`vault-p2p::relay_client`（新模块，6 单测）**：VSR2 挑战-应答握手（CSPRNG cli_nonce + `vault_crypto::hmac_sha256_hex` 算 proof——密码学原语单点，不新增 hmac 依赖）；`RelayStream` 帧适配流（对上层呈现 `Read+Write`：DATA 自动分片 ≤ 65540、PING 帧消费、`RelayLimit R13` 降速不关闭、其余 CONTROL → `ConnectionAborted` + 可读诊断）；25 s PING 保活线程（官方公共档 60 s 空闲上限的一半）；本地前置拦截（坏房间名 / 短 token → 7，不发起注定失败的往返）；**R 码 → 本机码映射**（docs/08 §3.4 全表：`{1,2,16}→6`、`3→7`、`{4..9,17}→3`、`{10..12}→13+relay_limit`、`{14,15}→13+relay_unavailable`、`5→3+relay_unavailable`），可读诊断进引擎事件日志，R 码绝不原样上抛。
+  2. **引擎接线**：`Duplex` 流抽象（`TcpStream` / `RelayStream` 双实现，`Box<dyn Duplex>` 满足 `SecureChannel` 的 `S: Read+Write` 泛型——同步全链路在两种承载上透明运行）；`sync_via_relay` / `serve_relay_connection` 增 token 参数；per-peer 路径记账（`path_stats`：path / `attempts{direct,relay}` / `lastFailure` / bytesIn/Out / paddingTier，**进程内存态**——只反映本进程观测，rtt / 对端候选数等未观测字段不输出，原则 7）。
+  3. **FFI / Dart**：`vault_core_p2p_sync_relay` / `vault_core_p2p_serve_relay` 增 token 参数（导出总数仍 75，参数变更各 typedef 独立核对）；失败按映射码返回（3/6/7/13）并发布 `PATH_DEGRADED`(13, reason)；`vault_core_p2p_path_status` 升级为 **schema 1 per-peer 段**（含 `lastPathFailure`）；同步页中继模式增 token 输入（obscure + 可见性切换，l10n zh/en 三键）。
+  4. **冒烟真机 e2e**（ffi_check +19 断言，262 → **281**）：spawn `vault-relay.exe`（release 产物，配置经 stdin，随机端口从启动行解析）→ 双会话经中继 token 鉴权同步（108 KB 跨多个 DATA 帧）→ B 端导出逐字节核对 → 错 token → 码 3 + `lastPathFailure=auth-failed` + 诊断进引擎事件日志 + `PATH_DEGRADED(13, relay_unavailable)` 契约事件（poll_events 断言）→ path_status per-peer 段（relay 路径 / attempts / bytesOut>0）。
+- **测试基线**：vault-relay 12→13（+下溢回归）、vault-p2p 34→43（relay_client 6 + 引擎 VSR2 e2e 改造 + 错 token 负向 + 参数拦截）、其余不变；clippy 全 workspace 零告警、fmt 干净；`flutter analyze`/`test`（4 项）/`build windows --debug` 全绿；冒烟 **281** 断言全 PASS。
+- **面板 / 复核回填**：P8-5 `[ ]→[~]`（服务端+客户端全链路交付，剩余运维端点聚合 / R13 带宽桶 / 多中继设置）；**P8-6 勾选 `[x]`**（PATH_DEGRADED 发布 + overheadRatio 收尾）；P8-4 补记事件桥接与 per-peer 路径状态；`v2.0/11` 回填 10 行判定（7×✅ + 3×⚠️：卡方抽样、时长/空闲上限独立测试、stats.json 聚合、打洞信令）。
+- **如实登记（P8-5 剩余）**：运维端点 `/stats.json` 目前最小响应（未含 5 min 聚合明细）；带宽桶 R13 在 proto.rs 预留未启用；`allowPublicRelay` / 多中继候选顺序随 P9-1 设置页；真网多中继未实测。**P8-4 剩余**：打洞信令（候选经中继交换 + 中继 UDP 映射观测端点 + 打洞尝试集成）、真网 NAT 矩阵。
+- **踩坑记录**：① 冒烟里 FFI 阻塞调用（serve 等待配对）会占死主 isolate——响应端必须放 `Isolate.run`（句柄是不透明地址，跨 isolate 直接可用，与 engine_service 同款）；② 冒烟时序坑：OK 之后立即发帧会早于双方 200 ms 等待登记窗口，字节进 `pre` 并在配对后**绕过字节记账**——先等配对确立再发（服务端测试同款教训）；③ RelayStream 读写半用 `try_clone` 拆分（保活线程与帧读不能共用一把互斥锁，否则 PING 写会阻塞在读超时上）；④ 定位「R14 busy 误报」时先写了单仓探针（不可达路径正常）再扩展成完整复现——**最小复现先行**避免在两个进程间盲猜。
+
+## 2026-09-24 P8 批次五——P8-7 选择性同步 + P8-10 隐写跨图 + P8-8 冲突 V2（机制部分）；P8-9 与 P8-4/P8-5 收尾未完成
+
+- **本批次完成（三块，均为 Rust 引擎 + FFI + Dart 桥接）**：
+  1. **P8-7 选择性同步过滤**：新模块 `vault-p2p/src/policy.rs`（`SyncFilter` 四维 + `SyncContext`（时段 / 网络类型由外壳注入）+ 六个 `skipped` 原因常量 + 入队前 / 出站前两处判定，3 单测）；引擎侧 `outbound_skip`（文件夹维度经 `Vault::file_in_folders` **含子树递归**）+ `TxOutcome`（Done/Skipped/AutoMerged）+ `note_outcome` 记账 + `status().skipped` 快照；vault-core 新模块 `settings.rs`（`sync-policy.enc` / `settings.enc` 单文件 AEAD + tmp→rename 原子写 + **严格校验（原子拒绝）** + 读取失败 → 默认全同步，3 单测）；FFI `vault_core_sync_policy_get/_set`、`vault_core_set_sync_context`；引擎证据测试 3 项（**负向** `filter_applies_at_enqueue`：排除文件夹（含子树）的块一次也不出站 + `skipped` 上报；`net_type_recheck_before_egress` 蜂窝拦下 / 切回 WiFi 放行；时段外 + 策略未启用=全同步）。
+  2. **P8-10 隐写跨图与容量协商**：`vault-stego/src/multi.rs`（`payload_ver=2` 分片布局 / CRC32 / 乱序重组 / **重复索引拒绝** / 缺片 `missing[]` / 终验哈希 / 容量切分，5 单测）+ `lib.rs` 位分散（`pos(i)=i×s+s/2`，确定性、双端无需协商；前缀恒连续位使读取端可先取长度——**与文档 `B=4+payload_len` 的记账等价**，已在代码注释与本条目声明）+ `embed_spread/extract_spread`（1 单测）；vault-core `stego_plan` / `stego_embed_multi`（后台任务，图片边界检查点 → 可 `task_cancel`；**不覆盖源图**，产出 `<stem>.stego.png`）/ `stego_extract_multi`（V1 首字节 `0x00` 兼容读；终验在写盘前完成，故无半成品文件）；`_plan` 为容量唯一真值来源（`fillRatio=0.8`、`imagesNeeded` 外推、`fits=false` 如实拒绝、`codec=auto→png` 标 `codec_fallback`、不可读图入 notes），单测断言净容量逐项精确；**隐写开关落盘 `settings.enc`**（解锁自读，不再依赖 UI 每次同步）；Dart 桥 + 服务三方法。
+  3. **P8-8 冲突解决 V2（机制部分）**：新模块 `vault-vault/src/merge.rs`（**块级**三方合并三态 `auto/conflict/replace`，按共同祖先的 CDC 段边界逐段判「谁动了这一块」，3 单测含尾部增长）；`Vault::apply_edit`（**同一 file_id** 提交新版本：`rev` 递增、旧版本保留为 `files/<id>.r<rev>.vse`、`keepRevs` 清理、FSKey 不变）、`file_rev/set_rev`、`try_merge_incoming`（三方各自解密到临时文件比较，**明文不持久化**；缺基线 / 本端未编辑 → 如实退化为 `Replace`）、v3 容器 `export_to`/`chunk_lens`；`ManifestItem.rev` 入清单、`SendFileBegin.base_rev`、`FileApplied.merge`（接收端自动合并回报 → 发起端记 `merged` 而非 `conflicts`）；分叉判定补「sha 不同亦算分叉」（原地编辑不推进 vc）；FFI `vault_core_vault_apply_edit` + Dart；vault 级证据测试 1 项（rev 递增 + 基线保留 + 退化路径）。
+- **验证**：`cargo fmt --check` / `cargo clippy --workspace --all-targets` 零告警；`cargo test --workspace` 全绿（vault-p2p 49、vault-vault 53、vault-core 34+1ignored、vault-stego 14、vault-relay 13、vault-net 16、audit 13）；`flutter analyze` 零问题、`flutter test` 4 项通过、`flutter build windows --debug` 通过；`dart run tool/ffi_check.dart` **281 → 306 断言全 PASS**（新增 P8-10 十二项：plan fits / perImage / 默认分散 / 20KB 容量不足 `fits=false` + 外推 18 张 / 分三片 / 后台任务 done / **乱序**提取逐字节一致 / 缺片必败；P8-7 七项：读取默认 `fromDefault=true` / 非法策略 7 / 往返保真 / 上下文上报 / 非法 JSON 7；P8-8 五项：导入基线 / 原地编辑 / 同一 id 可导 / 内容即新版本 / 不存在 id 非 0）。
+- **观察（不阻断）**：冒烟尾部出现一行 `vsync audit append failed: audit store io failed`——发生在 P5 轮换段重开会话之后（会话内的审计句柄指向已轮换/重开的存储）；**审计失败不阻断业务**是既有设计（docs/05-06），但「轮换后旧会话审计句柄失效」值得在 P7 收尾时复看。
+- **未完成（如实登记，P8 未收口）**：
+  1. **P8-8 有一个未定位的端到端缺陷**：两台设备各原地编辑同一文件后同步，接收端在合并判定处观察到本端条目**已成墓碑且出现冲突副本**（覆盖路径在合并判定之前已作用过该 id）→ 自动合并永不触发。该 e2e 用例已隔离为 `#[ignore = "P8-8 端到端自动合并存在未定位缺陷"]`（`in_place_edit_auto_merges_and_conflicts`），机制本身由 vault 级 + 纯逻辑测试覆盖。**修复后才可勾选 P8-8**。
+  2. **P8-9 阅后即焚：未开工**（一次性会话 / 票据派生 / 0600 临时明文 / 擦除重试 / `BurnAck` 全部待做；docs/05-04 §五 的票据记录「含 secret 落盘」与「burn_secret 不落盘」存在文档内张力，实现前需裁决——拟按后者实现并登记）。
+  3. **P8-4 剩余**：候选经中继信令交换、中继 UDP 映射观测端点、打洞尝试集成、真网 NAT 矩阵（本机无真实 NAT，**不可在 CI/本机完成**）。
+  4. **P8-5 剩余**：运维端点聚合数据（`/stats.json` 仍最小响应）、带宽桶 R13、多中继候选顺序与 `allowPublicRelay`。
+  5. **P8-7 / P8-10 的冒烟断言**与 **Dart 侧 UI**（策略编辑页 / 隐写跨图页 / 队列页）归 P9-1；P8-1/P8-3 的「队列页切换后退役旧导出」「续传 x% 任务登记」同归 P9-1。
+- **FFI 导出口径**：75 → **82**（+`vault_core_sync_policy_get/_set`、`vault_core_set_sync_context`、`vault_core_stego_plan`、`_embed_multi`、`_extract_multi`、`vault_core_vault_apply_edit`）；各导出 typedef 独立核对（AGENTS.md 已同步）。
+- **过程中修正的真实缺陷**：`three_way` 的「段外尾部」判定最初把「仅对端追加」误判为冲突（单测抓出并改为与段内同一规则）。
+
+## 2026-09-24 P8 批次六——P8-8 端到端缺陷定位修复 + 冲突副本策略接线 + P8-9 阅后即焚落地（冒烟 323 断言）
+
+- **背景**：批次五留下一个未定位的 P8-8 端到端缺陷（`#[ignore]` 复现入口）与未开工的 P8-9。本批次把两者收口，并把 P8-8 的冲突副本策略接进引擎。
+- **P8-8 缺陷根因（两处，均为真缺陷，非测试问题）**：
+  1. **判定顺序错误（主因）**：块级三方合并的判定块被放在「覆盖冲突」块**之后**。覆盖路径先 `save_conflict_copy` + `delete_file` 摘除本端条目 → 判定时 `has_file(id) == false`（本端已成墓碑）→ 一律走 `Replace`，**自动合并永不触发**。修法：判定块整体前移到覆盖块之前，并写下顺序硬约束注释（防回归）。
+  2. **段边界用了密文长度**：`container_bounds` 直接累计 `meta.chunks[].len`——GCM 下每块密文 = 明文 + 16 B tag，5 块即多出 80 B，末界 300080 > 文件长 300000 → `three_way` 的越界守卫**恒判 `Replace`**。修法：逐块扣 `AES_GCM_TAG_LEN`。
+  - **定位手法**：先把 e2e 失败信息读全（`conflicts:[1]` 而 `merged:[]`），再在 `try_merge_incoming` 加临时诊断（`local_rev/base_rev/base_exists` + `class/bounds/长度`），一次跑出 `bounds=[0,65552,131104,196656,262208,300080]` 即锁定第二处根因；修完即删诊断。
+  - **e2e 断言改为方向无关**（谁推谁拉取决于 `modified_ms`，会随机翻转）：不相交 → `conflicts` 空 + `merged` 非空 + 合并侧含双方改动 + 二次同步两端收敛 + 全程无冲突副本；相交 → `conflicts` 非空 + **两端任一**留副本 + `merged` 空。`#[ignore]` 已移除。
+- **P8-8 冲突副本策略接线**（并入 `sync_policy.conflict`，不新增第三个策略文件）：`SyncFilter` 增 `copy_name_template` / `max_copies_per_file`（默认 5）/ `keep_window_days`（默认 7，`0` = 豁免）；`save_conflict_copy_with`（模板 `{name}`/`{ts}`，缺 `{name}` 回落默认；超上限**淘汰最旧**）；`sweep_conflict_copies(marker, keep_days, now)`（策略注入时扫描；marker 由模板推导 = `{name}` 与 `{ts}` 之间的字面量，默认 `.conflict-`）；引擎 `conflict_policy()` / `sweep_expired_conflicts()`；`vault-core::apply_sync_policy` 每次同步前注入并顺带清理。证据：`conflict_copy_template_and_max_copies`（模板生效 + 上限 2 时淘汰最旧且保留最新）。
+- **P8-9 阅后即焚落地**（docs/v2.0/05-04 §五；`CAP_BURN_SHARE`(13) **已置位**）：
+  1. **两处文档张力的裁决（登记供复核取证）**：① §5.7② 的「票据记录含 `secret: 32 B` 落盘」与 §5.5「`burn_secret` 不落盘、重启收敛 `Expired`」冲突 → **按 §5.5 实现**（秘密只在内存 `Zeroizing`，Drop 即零化）；② 由 ① 推论：`HKDF` 单向，**接收端无法由 `HKDF(secret,"burn-code")` 反推 `secret`** → 本实现令**邀请码即秘密载体**（10 B CSPRNG → `base32` 16 字符 / 80 位），与既有「配对邀请码即 PSK 载体」（`05-03` §3.3）同构。
+  2. **核心模块 `vault-p2p/src/burn.rs`**：`base32` 编解码（RFC 4648 无填充）；三处派生 `psk=HKDF(secret,"burn-psk")` / `room=base32(HKDF(secret,"burn-room")[..8])` / 落盘密钥 `HKDF(secret,"burn-file")`（**专用 FSKey**）；票据 `ttl_secs`（`0` = 不过期）+ `consumed` 单次性；`erase_with_retries`（1/5/30 s ×3 = 最多 4 轮；持续失败 → `EraseFailed`，**不假装成功**；延迟可注入以便零耗时测试）。
+  3. **会话与传输**：`BurnOffer`（含 `open_timeout_secs`，缺省 60）/ `BurnData`（**明文**分片 256 KiB，在 Noise 信道内）/ `BurnDone` / `BurnAck{delivered}`；握手用 `burn PSK` 作 `Noise_XXpsk3` 第三密钥——**PSK 不一致握手必败**，故无需额外票据校验；接收端 `AEAD(burn-file)` 落 `<data_dir>/burn/<id>.vse`（**不入索引、不参与同步**）。
+  4. **生命周期**：「打开」= 解密到受控临时明文 `<data_dir>/burn/tmp/<id>.part`（Unix `0600`）+ `openTimeoutSecs` 定时擦除；「另存」= 写用户路径并放弃该次自动擦除；擦除覆盖临时明文 + 容器 + 内存密钥；**启动扫描**清 `burn/` 全部残留（秘密不落盘 → 重启后一律不可解 → 收敛 `Expired`）。交付即失效（`consumed`），复用 → 参数错误。
+  5. **FFI（7 个）+ 审计**：`vault_core_burn_create/_receive/_send/_open/_save_as/_erase/_status`（`_send` 的 `addr` 非空走直连，否则经票据派生的中继房间）；审计 6 类**只记短码，不记秘密与文件名**。
+- **验证**：`cargo fmt --check` / `cargo clippy --workspace --all-targets` 零告警；`cargo test --workspace` 全绿（vault-p2p 43→**50**（burn 核心 4 + 引擎 e2e 2 + 原 e2e 转正）、vault-vault 53→**54**、vault-relay 13、vault-net 16、vault-core 34+1ignored、vault-stego 14、audit 13）；`flutter analyze` 零问题、`flutter test` 4 项、`flutter build windows --debug` 通过；`dart run tool/ffi_check.dart` **306 → 323 断言全 PASS**（新增 P8-9 十七项：能力位 bit13 / 票据 16 字符 / 房间非空 / 非法码拒 / 直连投递 / **单次性** / delivered / 打开成功 / 临时明文就绪 + 长度一致 / **超时自动擦除** / erased / 发送端 `consumed` / 显式擦除幂等）。
+- **面板 / 复核回填**：**P8-8 `[~]→[x]`**、**P8-9 `[ ]→[x]`**（P8 至此仅剩 P8-4/P8-5 的收尾项与 P8-1/P8-3 的 Dart UI 归 P9-1）。
+- **如实登记（剩余）**：① 经中继的 burn 房间接收线程已实现，但**冒烟只跑直连**（真机中继 burn 未跑）；② Windows 上临时明文未做 ACL 收紧（`0600` 语义仅 Unix；NTFS 需 ACL 或全盘加密作前提，已在 `v2.0/11` P8-9 行登记）；③ burn 审计只实现 6 类（未做关闭后回执 / 9 类全量）；④ Dart 桥与 UI 归 P9-1（入口按 `CAP_BURN_SHARE` 未置位则不渲染）。
+- **踩坑记录**：① `clippy` 的 `too_many_arguments`（9/7）在测试代码里同样触发——把报价参数打包成结构体，而不是加 `allow`；② `cargo fmt` 会重排文件，编辑前须重读（本轮因沿用旧行号导致一次插入点错位，插进了销毁指令函数的 `match` 里——**改前先读、改后看 snippet**）；③ `edit_file` 锚点必须唯一（`Msg::DestroyAck =>` 在两个函数里都出现，是这次错位的直接原因）。
+
+## 2026-09-24 P8 批次七——P8-4 打洞前置三件套（中继 UDP 观测端点 + 候选信令交换 + 打洞接入路径状态机），冒烟 332 断言
+
+- **背景**：与用户确认「单台 4C4G 云主机能否跑真网 NAT 矩阵」的结论后，先做**不依赖真网环境**的三块前置——它们在本机/回环即可证到「接线正确」，把真网矩阵留作最后一道验收。开工前查清现状：`punch.rs` / `path.rs::PathMachine` / `discovery::local_candidates` 三处**已交付但零调用方**（孤岛），`CAP_HOLE_PUNCH`(6) 未置位，中继的 `OBSERVE` 只回报 **TCP** 源地址（对 UDP 打洞无用），`if-addrs` 声明了却从未被使用。
+- **① 中继 UDP 映射观测端点**（`vault-relay`，13→15 测试）：
+  - 新增配置 `[observe] enabled / bind / bind2`（默认**关闭**；启用须配 `bind`，支持 `:0` 随机端口，启动行打印 `observe_ports=N`）；每端口一线程跑 `run_observe`。
+  - 线格式与客户端 `punch::observe` 对齐：请求 `VSOBS1\0\0`（8 B）→ 应答 `magic4("VSPU")‖ip4‖port2`（10 B）。**纯函数 `observe_reply`** 负责构造（可单测）。
+  - **只回请求方自己的地址**；**只有精确 8 B 观测请求才应答**，其余一律丢弃（既防误应答也防被当放大器）；IPv6 源不应答（仅 IPv4）。不缓存、不跨会话关联、不落盘、不进日志（`no_persistence_calls` 源码扫描仍绿）。
+  - `OK` 行**追加第 4 字段**捎带观测地址（`ip:port[,ip:port]`，主机取该 TCP 连接本端地址，`-` = 未启用）→ **客户端无需任何额外配置**；旧客户端只校验 `VSR2 OK ` 前缀，故追加向后兼容。
+  - `bind2` 的唯一用途：让客户端在**打洞前**判定对称 NAT（05-03 §4.3 步骤 5 的「不做无望长尝试」）。
+- **② 候选经中继信令交换**（`Msg::Hello.candidates`）：候选列表随 Hello 在 Noise 信道内交换（`serde(default)` → 旧端空列表即**不打洞**，如实降级不猜地址）；`hello` 拆出 `hello_ext`（返回 `HelloInfo`，含对端候选），旧 `hello` 保留为丢弃候选的薄包装（其余 3 处调用点零改动）。
+- **③ 打洞客户端与接入路径状态机**：
+  - `vault-net`：`punch` 升级为 **`punch_verified`**（双向证实：既收到对端探测、也收到对端**反射应答**；反射应答共线格式 `encode/decode_reflexion`，与观测应答同构——对端即充当第二个观测目标，给出「本端在对端眼中的映射」= 观测 #2）；新增负向 `one_sided_contact_is_not_success`（单侧接触**不判打通**，防「单侧自嗨式假成功」）。`discovery::local_candidates_now()` 首次启用 `if-addrs`（真实网卡枚举 → 交 `local_candidates` 做虚拟接口排除/分类/上限 8）。
+  - `vault-p2p`：`Duplex` 增 `observe_addrs()`（直连 → 空 = 零开销；中继 → `RelayStream` 在 OK 行解析出的端点）；引擎在 hello **之前**做 `prepare_punch`（绑定专用 UDP socket → 观测 #1 → 可选观测 #2 判对称 → 候选 = **映射在前 + 网卡地址**，上限 8），hello **之后**在**后台线程**执行打洞（`PathMachine::new(Punched)`，对称 NAT / 无候选 / 超时各自 `degrade(reason)` → `Relayed`；`vault-net::path` 与 `PathStatus` 的**首次真实调用方**）；结果记入 per-peer `punch` 统计并 `path_stats` 输出（**只有计数与原因，无 IP**）；`set_punch_enabled` 供测试关闭。
+  - `vault-core`：`CAP_HOLE_PUNCH`(6) **置位**；`vault_core_p2p_path_status` 的 doc 与输出同步（去掉「候选计数在收尾前如实缺省」的旧声明）。
+- **关键诚实边界（务必与文档口径一致）**：**「转可靠帧协议」（05-03 §4.3 步骤 4）未落地**——打通后没有可靠 datagram 承载，数据**仍走本会话承载**。故 **`path` 不谎报 `hole_punch`**（`path` 仍为 `direct|relay`），打洞结果**单列** `punch` 段（`ok` / `reason` / `symmetricNat` / 候选数 / `kind` / `degradedSteps`）。这是**有意的边界**，不是遗漏（原则 7）。真网矩阵（≥60% 判据）**仍未跑**——需要可控 NAT 出口 + 公网中继，见 `AGENTS.md` 与 `v2.0/11`。
+- **验证**：`cargo fmt --check` / `cargo clippy --workspace --all-targets` 零告警；`cargo test --workspace` 全绿（vault-p2p 50→**58**（punch e2e 2 + relay_client 解析 1 + 既有）、vault-net 24→**26**、vault-relay 13→**15**、vault-core 34+1ignored、vault-vault 54、vault-stego 14、audit 13）；`flutter analyze` 零问题、`flutter test` 4 项、`flutter build windows --debug` 通过；冒烟 **323 → 332 断言全 PASS**，其中 P8-4 **9 项**：观测端点就绪（`observe_ports=2`）、能力位 bit6、打洞尝试已记账、**回环双向证实打通**（`{attempts:1, ok:true, kind:punched, localCandidates:2, remoteCandidates:2, symmetricNat:false}`）、候选非空、非对称、状态机停在 `punched` 且 `degradedSteps=0`、**打洞段不含 IP**、`path` 仍如实为 `relay`。
+- **踩坑记录（本轮三个真缺陷／教训）**：
+  1. **OK 行字段序取错**：客户端解析用了 `split(' ').nth(3)`——那是 `caps` 字段（正确是 `nth(4)`）。后果是**打洞永远不被尝试**（`observe_addrs()` 恒空），而单测全绿（服务端断言只查「结尾是 hint」，客户端无解析测试）。**冒烟抓出**（`attempts:0`）。修法：抽 `parse_observe_hint` 纯函数 + 补 `ok_line_observe_hint_is_parsed` 与 mock 中继端的 `observe_addrs()` 断言，**并把这条测试写成「本字段解析的唯一防线」的注释**。
+  2. **测试夹具自己写错**：`symmetric_nat_falls_back_fast` 的双观测端点用了同一个 `delta` → 两次映射仍相等 → 断言失败。教训：**模拟「不同目标映射端口不同」必须只改其中一个目标**。
+  3. **`edit_file` 锚点又一次贴在函数体中间**（`let mut ps = self` / `let registered = self` 两处被截断），靠随后重读 snippet 抓回——印证批次六的教训「改后看 snippet」。另外把 `#[deny(warnings)]` 下的 `filter_map`（两分支恒 `Some`）改为 `map` 才过 clippy。
+- **观察（不阻断）**：本轮**首次**冒烟运行出现过 2 条 P3（直连同步）偶发失败，随后两次运行均全绿——属既有 P3 段的时序敏感性（**非本轮改动引起**：直连路径 `observe_addrs()` 恒空 → `prepare_punch` 直接 None，零行为变化）。已记此观察，未在本轮深挖。
+
+## 2026-09-24 P8 批次八——打洞探针（FFI 导出 + 命令行入口），矩阵可逐格驱动；冒烟 341 断言
+
+- **背景**：批次七交付了打洞链路，但它只在「每次中继同步」里自动执行，且 `run_sync` 的**配对检查在打洞之前**——矩阵要「每格一条命令跑一次、无需配对、两端都拿结构化结果」是做不到的。本轮补上探针，并把执行手册（`docs/v2.0/14`）从「待实现」改成据实可用。
+- **① 打洞判定抽成同步核心 `run_punch`**（`vault-p2p::engine`）：对称前置判定 → 无候选判定 → 双向验证打洞 → `PunchReport`（`ok` / `reason` / `symmetricNat` / 候选数 / `kind` / `degradedSteps` / **`mappedPort`**（观测 #1，中继眼中）/ **`peerObservedPort`**（观测 #2，对端眼中）/ `elapsedMs`）。
+  - `spawn_punch`（每次中继同步后台执行）与 `punch_probe`（显式探针，同步等结果）**共用这一个核心** → 两条路的判定与字段口径**不会各说各话**；`PunchReport::to_json` 是探针的返回体，`path_status` 的 `punch` 段是它的子集。
+  - `ProbeRole { Initiator, Responder }`（`from_code`/`as_str`）。
+- **② 探针 `PunchProbe`（引擎公开 API）**：`punch_probe(relay_addr, room, token, code, role, timeout_ms)`——**走真实路径**：VSR2 接入（顺带从 `OK` 行取观测端点）→ Noise 握手（`code` 有则作 `Noise_XXpsk3` 第三密钥，两端一致即可）→ `hello_ext` **真实候选交换** → 观测 → 打洞；**不要求已配对**、不读写保险箱、不做清单交换、不写对端登记表（探针只记 `punch` 统计 + 一条事件日志）。无观测端点 / 打洞被关时**如实返回** `reason = no_observe_endpoint | punch_disabled`（**不谎报** `ok`）。返回 JSON **只含计数、原因与端口，无 IP**。
+- **③ FFI 导出 `vault_core_p2p_punch_probe(handle, relay_addr, room, token, code, role, timeout_ms)`**（导出总数 89 → **90**）：失败（接入 / 握手 / Hello）→ null + 可读诊断进引擎事件日志 + 审计（口径同 `sync_relay`，`PATH_DEGRADED` 按其 `degrade_reason` 发布）；**不走 `ensure_writable`**（维护态也应可诊断，且探针只读）；审计只记判定与计数（无 IP）。已在 `02` §六.6 的接口登记表登记（顺带补登批次六漏登记的 7 个 `vault_core_burn_*` 导出）。
+- **④ 命令行入口 `app/tool/nat_probe.dart`**（Linux / Windows 通用）：`--relay/--room/--token/--code/--role/--dir/--timeout`；自动在 `--dir` 下建**一次性临时保险箱**并解锁（探针本身不碰库内容）；输出一行 `PUNCH {json}`（便于脚本抓）+ 人类可读摘要 + **NAT 判定**（`mappedPort` 与 `peerObservedPort` 一致 = 锥形，不同 = 对称）；退出码 `0` 打通 / `1` 未打通（JSON 仍打印）/ `2` 调用失败（**失败时转储最近引擎事件** + 排查线索）；回环中继会打印「只能作自检、不能作穿透证据」的提醒。
+- **验证**：
+  - 引擎级：`engine::punch_probe_runs_without_pairing_and_reports_both_sides`（真实接入路径 + mock 中继把观测端点写进 `OK` 行，两端各调一次 → **两端都 `ok=true`**、`role` 如实、两次观测端口齐备、**探针不写对端登记表**（`peers` 仍为空）、JSON 无 IP、结果同时落进 `path_status`）。
+  - 冒烟（真 `vault-relay` + 真 DLL）：323 → **341 断言全 PASS**，新增 **10 项**——探针（发起端/响应端）各返回、两端都 `ok=true`、角色如实、报出对端身份、`kind=punched`、两次观测端口齐备、窗口内完成、两端 JSON 均不含 IP。
+  - **CLI 实测**（本机回环；这也是手册 §七 规定的流程）：起带 `[observe]` 的 release 中继 → 两端并行跑 CLI → **发起端墙钟 20 ms / 响应端等房间 5979 ms**（先起的一端在中继等待房间排队，属正常）→ 两端均 `ok=true, kind=punched`，并各自打印 `NAT 判定：非对称（锥形，端口一致）`。
+  - `cargo fmt --check` / `clippy --workspace --all-targets` 零告警；`cargo test --workspace` 全绿；`flutter analyze` 零问题、`flutter build windows --debug` 通过。
+- **手册回填**：`docs/v2.0/14` §四.4（探针已交付）、**§七 整节重写**（原为「待实现」→ 实际 FFI 签名 + CLI 用法 + 实测样例输出 + 逐格驱动脚本骨架 + 两个观测端口的判读口径 + 退出码语义）；面板 P8-4 增「打洞探针」交付项；`AGENTS.md` 同步（90 导出 / 341 断言 / 探针命令行入口）。
+- **踩坑记录**：① **导出名**：CLI 首次运行报 `Failed to lookup symbol 'vault_core_create'` —— 实际是 `vault_core_create_vault`（**照抄手写猜测的符号名会浪费一轮**：应以 `ffi_check.dart` 的既有 lookup 为准）；② CLI 首次运行 `create_vault` 返 `3`(IO)：`--dir` 不存在 → **交给 CLI 自己建目录**（手动在不同 netns 里起两端时同样会踩）；③ 后台任务里跑 `dart run` 拿不到输出（引号/环境展开问题）→ 改用单条 PowerShell `Start-Job` 同时驱动两端，避免把环境问题误判成代码缺陷；④ 探针 `elapsedMs` 只计**打洞尝试**（不含接入/握手），回环下为 0 属正常——矩阵请记 CLI 的 `墙钟`，手册已写明。
+
+## 2026-09-27 P8 批次九——P8-5 收尾（运维端点聚合 + 带宽桶 R13 + 多中继候选顺序与 allowPublicRelay），冒烟 366 断言
+
+- **背景**：批次五留下 P8-5 三个收尾项（`/stats.json` 最小响应、带宽桶 R13 在 proto.rs 预留未启用、多中继候选顺序与 `allowPublicRelay` 随 P9-1 的引擎侧部分）。本批次全部落地，**P8-5 勾选 `[x]`**（真网多中继实测随 P8-4 真网矩阵执行，如实登记不阻断）。
+- **① 运维端点聚合实装**（`vault-relay`，13→15→**17** 测试）：
+  1. `Stats` 重构为 **1 min 分槽聚合**（`BTreeMap<slot, Bucket>`，聚合窗口 = 最近 5 个槽 ≈ 300 s，只保留 7 个槽）——顺带修复旧实现 `close_hist` **无界增长**（每次会话 push 一条、从不清理）。响应含会话数 / 去重房间数 / 字节数 / `close_reason` 直方图 + 全生命周期计数 + `activeSessions`。
+  2. `/healthz` 增 `uptimeS`（进程存活语义不变，不暴露配置 / token 数）；`/metrics` 输出 Prometheus 文本（`vsr2_sessions_total` / `vsr2_bytes_total` / `vsr2_active_sessions`）；ops 监听移到主线程（`:0` 随机端口打进启动行 `ops endpoint on …`，冒烟无需猜端口）。
+  3. 证据：`ops_endpoint_requires_bearer_and_aggregates`（401 门禁 / 聚合字段 / **聚合体绝不含身份**——房间原值、token、IP 逐项断言）。
+- **② 带宽桶 R13 启用**（docs/08 §3.3）：
+  1. 配置 `limits.session_bandwidth_kbps`（**0 = 不限，自建默认档**；官方公共档部署时配 5120）。**不参与**「配 0 启动即拒」——那是三类会话上限专用，带宽不限是文档明载的合法档位。
+  2. 实现：每房间（已配对会话）**双向合计**令牌桶，费率 = 字节/秒，**容量 = 1 s 转速 + 最大帧长**。配额不足时阻塞转发（**只降速不丢字节**）；首个被整形的帧向**发送侧**回发一次 `RelayLimit R13`（`RelayStream` 既有消费逻辑：记录后继续，不重试不降级）。帧泵六参数重构为 `PumpCtx`（带宽桶加入后超 clippy 阈值）。
+  3. **踩坑**：首版桶容量 = 1 s 转速，当**帧长 > 桶容量**时令牌永远凑不齐 → 整形循环死等（测试挂死 15 min 抓出）。教训：**令牌桶容量必须容得下单帧**——最大帧 65 541 B 在 5 Mbps（625 KB/s）下不触发，但低速率档必炸；容量加 `MAX_FRAME` 常量兜底。
+  4. 证据：`bandwidth_cap_degrades_without_data_loss`（16 kbps 限速下 8 KiB 挂钟 ≈ 理论值 80% 下界内、DATA 载荷逐字节无损、无杂帧混入）。
+- **③ 多中继候选顺序与 `allowPublicRelay`**（docs/08 §3.6 / §五）：
+  1. `settings.enc`（Settings）增 `allowPublicRelay`（默认 true）+ 保序候选 `relays: [{addr, token, public}]`（≤ 8 条；addr 非空；token <16 B = <128 位**原子拒绝**，与客户端前置拦截同口径）；`relay_candidates()` 在 `allowPublicRelay = false` 时**拨号前**剔除 `public = true` 条目（官方中继连握手都不发生）。`stego_set_enabled` 同载体写路径改为**读改写**（整存整取会抹掉中继候选——这是本批次顺手修掉的第二颗雷）。
+  2. 引擎 `sync_via_relay_candidates` / `serve_relay_candidates`：按配置顺序逐个尝试；某中继失败（**含鉴权失败 R5**）只尝试下一个、不重试同中继、绝不静默回退到未配置路径；候选为空 → `13 + relay_unavailable` 且**不发起任何连接**，同时记 `lastPathFailure`（与单中继拨号失败同口径）。
+  3. FFI **4 个新导出**（90 → **94**）：`vault_core_relay_settings_get/_set`（set 为原子拒绝 + 审计只记开关与条数**不含 token**）、`vault_core_p2p_sync_relay_candidates` / `_serve_relay_candidates`（候选全败只发布一次 `PATH_DEGRADED`，载荷含候选数）。Dart 桥（独立 typedef ×4）+ engine_service（Isolate 包装）接线；**设置页 UI 归 P9-1**。
+  4. 证据：引擎 `relay_candidates_try_in_order_and_empty_list_never_dials`（空候选零拨号 + 双中继顺序尝试端到端）；settings `settings_roundtrip` 扩展（往返保真 / 短 token 拒 / 超上限拒 / public 过滤保序）。
+- **验证**：`cargo fmt --check` / `cargo clippy --workspace --all-targets` 零告警；`cargo test --workspace` 全绿（vault-relay 15→**17**、vault-p2p 58→**61**、vault-core 34+1ignored、其余不变）；`flutter analyze` 零问题、`flutter test` 4 项、`flutter build windows --debug` 通过；`dart run tool/ffi_check.dart` **341 → 366 断言全 PASS**（新增 25 项：ops 启动行 / `/healthz` uptimeS / `/stats.json` 401 门禁 + 聚合字段 + 匿名纪律 / `/metrics` 计数 / 中继设置默认值 / 短 token 原子拒绝 / 禁用官方后候选被拒不拨号 + `lastPathFailure=relay_unavailable` / 自建候选往返保真 / 双端候选顺序同步端到端含导出核对）。
+- **冒烟侧踩坑**：① 中继 stdout 是单订阅流，`lineStream.first` 两次会抛 `Stream has already been listened to` → 改 `StreamIterator` 顺序读启动行 + ops 行；② 中继设置按**会话隔离**（settings.enc 载体在各自保险箱 data_dir），B 侧必须同样写入候选，否则响应端候选为空直接 13——首轮冒烟即抓出。
+- **观察（不阻断）**：本轮一次冒烟运行 P3（直连同步）偶发失败、复跑全绿——批次七已登记的既有时序敏感性，非本轮改动引起（直连路径零行为变化）。
+- **如实登记（剩余）**：真网多中继实测随 P8-4 真网 NAT 矩阵一并执行（回环已证协议与顺序语义）；`allowPublicRelay` 的设置页 UI 与多中继管理归 P9-1。

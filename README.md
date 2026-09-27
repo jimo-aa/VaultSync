@@ -111,7 +111,7 @@ VaultSync/
 ├── AGENTS.md        # AI / 协作者工作区指南（安全红线、命令、约定）
 ├── LOG.md           # 开发日志：问题、隐患、决策（新条目追加在末尾）
 ├── docs/            # 设计文档（仅本地/私有版本控制，不随仓库上传）
-├── prototype/       # 桌面端高保真 HTML 原型（交互与视觉验收基准）
+├── prototype/       # 高保真 HTML 原型（v1.0 冻结 / v2.0 桌面端 / mobile 移动端）
 ├── packaging/       # 安装包配方（Windows Inno Setup）与未决决策清单
 ├── app/             # Flutter 桌面客户端
 │   ├── lib/core/          # Design Token 主题 + SVG 图标 + l10n 取词桥
@@ -127,7 +127,7 @@ VaultSync/
 
 ## 🧩 原型
 
-`prototype/index.html` 为纯静态高保真原型（零依赖，双击即开），是 UI 的交互与视觉验收基准。演示口令：`1234`（真实保险箱 / `88888888` 伪装空间）。原型中的 SVG 图标库已提取为 Flutter 资产（`app/assets/icons/`）。
+`prototype/index.html` 为纯静态高保真原型版本索引（零依赖，双击即开），是 UI 的交互与视觉验收基准。原型**按设计基线与端分目录**：`prototype/v1.0/`（对应 `docs/v1.0/`，已冻结只读）、`prototype/v2.0/`（对应 `docs/v2.0/`，现行 · 桌面端 `≥1280` 档）与 `prototype/mobile/`（现行 · 移动端 `<720` 档）。移动端**不复制内核**，直接引用 `../v2.0/js/{core,ui,data}.js`，即产品原则「一套内核、受管外壳」在原型工程上的投影。演示口令：`1234`（真实保险箱 / `88888888` 伪装空间）。原型中的 SVG 图标库已提取为 Flutter 资产（`app/assets/icons/`）。各端的路由、弹窗与组件清单见 `prototype/v2.0/README.md` 与 `prototype/mobile/README.md`。
 
 ## 🤝 参与开发
 
