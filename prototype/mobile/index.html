@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark" data-bp="phone">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10131A">
+<title>VaultSync V2.0 · 移动端原型（<720 档）</title>
+<meta name="description" content="VaultSync V2.0 移动端高保真 HTML 原型（纯静态、零依赖、无构建）。全部为 Mock 数据，不含任何真实加密逻辑。">
+<!--
+  移动端 = 「一套内核、受管外壳」中的 <720 档。
+  设计依据：
+    docs/v2.0/03 §2.2 断点表（底部 Tab / 单栏列表 / 无分栏 / 搜索为全屏页 / 对话框为底部面板）
+    docs/v2.0/03 §4.3 手机窄屏主壳线框图（单行顶栏 · 总览条 · 底部 Tab 5 项）
+    docs/v2.0/04 §1.2 每端被减掉的能力（减配必须对用户可见）
+    docs/v2.0/04 §六   各端展示差异矩阵
+  约定：二级界面一律底部面板（bottom sheet）；详情为全屏路由；列表项长按 = 动作面板，左滑为等价降级。
+  与桌面端共用同一套内核与 Token，仅外壳不同 —— 因此 core/ui/data 直接复用 ../v2.0/js/。
+  刻意不使用 ES Module：file:// 双击打开时模块加载会被 CORS 拦截。
+-->
+<link rel="stylesheet" href="../v2.0/assets/tokens.css">
+<link rel="stylesheet" href="../v2.0/assets/base.css">
+<link rel="stylesheet" href="../v2.0/assets/components.css">
+<!-- 共享的「表现型」样式：.file-grid / .file-card / .hit-snippet / .breadcrumb / .legend 等
+     是两端共用的呈现原语，定义在桌面端的 views.css 里。这里一并装载；其中桌面外壳专属的
+     .app / .sidebar / .topbar / .vault-* 等选择器在本端不会被使用，属惰性规则。
+     顺序要紧：mobile.css 必须最后加载，以便覆盖外壳相关声明。 -->
+<link rel="stylesheet" href="../v2.0/assets/views.css">
+<link rel="stylesheet" href="assets/mobile.css">
+</head>
+<body>
+
+<!-- 应用挂载点：mobile/js/app.js 会在此构建手机外框并渲染锁屏 / 主壳层 -->
+<div id="root"></div>
+
+<!-- Toast 宿主（info 级提示） -->
+<div class="toast-host" aria-live="polite" aria-atomic="false"></div>
+
+<!-- 共享内核（与桌面端同一份，避免双份漂移） -->
+<script src="../v2.0/js/core.js"></script>
+<script src="../v2.0/js/ui.js"></script>
+<script src="../v2.0/js/data.js"></script>
+
+<!-- 移动端外壳与视图 -->
+<script src="js/mui.js"></script>
+<script src="js/views-vault.js"></script>
+<script src="js/views-sync.js"></script>
+<script src="js/views-security.js"></script>
+<script src="js/views-system.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

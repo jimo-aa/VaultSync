@@ -1,0 +1,134 @@
+/* ============================================================================
+ * VaultSync V2.0 原型 — 基础层（reset / 排版 / 通用工具类）
+ * ==========================================================================*/
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-body);
+  line-height: 1.55;
+  color: var(--c-text);
+  background: var(--c-background);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden; /* 桌面外壳自行滚动，避免双滚动条 */
+}
+
+h1, h2, h3, h4, p, figure { margin: 0; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+a { color: var(--c-accent-alt); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img, svg { display: block; }
+table { border-collapse: collapse; width: 100%; }
+hr { border: 0; border-top: 1px solid var(--c-border); margin: var(--sp-4) 0; }
+
+/* ---- 焦点可见性（§6.3）：键盘才显示焦点环，鼠标点击不显示 ------------ */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--c-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---- 滚动条 ---------------------------------------------------------- */
+* { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--c-border);
+  border-radius: var(--r-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--c-stale); background-clip: content-box; }
+
+/* ---- 排版层级（§5.3）------------------------------------------------- */
+.t-display { font-size: var(--fs-display); font-weight: var(--fw-display); line-height: 1.2; letter-spacing: -.02em; }
+.t-h1      { font-size: var(--fs-h1);      font-weight: var(--fw-h1);      line-height: 1.3; letter-spacing: -.01em; }
+.t-h2      { font-size: var(--fs-h2);      font-weight: var(--fw-h2);      line-height: 1.35; }
+.t-body    { font-size: var(--fs-body); }
+.t-caption { font-size: var(--fs-caption); color: var(--c-text-2); }
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-variant-numeric: tabular-nums;
+}
+.t-num { font-variant-numeric: tabular-nums; }
+.t-muted { color: var(--c-text-2); }
+.t-strong { font-weight: 600; }
+.t-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.t-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---- 布局工具 -------------------------------------------------------- */
+.row { display: flex; align-items: center; gap: var(--sp-2); }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.col { display: flex; flex-direction: column; gap: var(--sp-2); }
+.grow { flex: 1 1 auto; min-width: 0; }
+.wrap { flex-wrap: wrap; }
+.gap-1 { gap: var(--sp-1); } .gap-2 { gap: var(--sp-2); }
+.gap-3 { gap: var(--sp-3); } .gap-4 { gap: var(--sp-4); }
+.gap-5 { gap: var(--sp-5); }
+.mt-1 { margin-top: var(--sp-1); } .mt-2 { margin-top: var(--sp-2); }
+.mt-3 { margin-top: var(--sp-3); } .mt-4 { margin-top: var(--sp-4); }
+.mt-5 { margin-top: var(--sp-5); }
+.hidden { display: none !important; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.divider-v { width: 1px; align-self: stretch; background: var(--c-border); }
+
+/* ---- 骨架屏 ---------------------------------------------------------- */
+.skeleton {
+  background: linear-gradient(90deg, var(--c-surface-alt) 25%, var(--c-border) 37%, var(--c-surface-alt) 63%);
+  background-size: 400% 100%;
+  animation: skeleton 1.4s ease-in-out infinite;
+  border-radius: var(--r-sm);
+}
+@keyframes skeleton { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+/* ---- 进入动效（只动 transform / opacity，§6.4）---------------------- */
+@keyframes vs-fade-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vs-pop-in    { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes vs-slide-up  { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes vs-slide-down{ from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+@keyframes vs-toast-in  { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes vs-spin      { to { transform: rotate(360deg); } }
+@keyframes vs-pulse     { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes vs-shake {
+  10%, 90% { transform: translateX(-1px); } 20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); } 40%, 60% { transform: translateX(4px); }
+}
+.anim-fade  { animation: vs-fade-in var(--mo-base) var(--ease-out); }
+.anim-pop   { animation: vs-pop-in var(--mo-slow) var(--ease-out); }
+.anim-up    { animation: vs-slide-up var(--mo-base) var(--ease-out); }
+.anim-shake { animation: vs-shake 420ms var(--ease-in-out); }
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade, .anim-pop, .anim-up, .anim-shake { animation: none; }
+}
+
+/* ---- 通用表面 -------------------------------------------------------- */
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+.card-pad { padding: var(--sp-4); }
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--c-border);
+}
+.card-body { padding: var(--sp-4); }
+.panel-alt { background: var(--c-surface-alt); }

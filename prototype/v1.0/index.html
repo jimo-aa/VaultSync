@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VaultSync · 桌面端原型</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="dark">
+
+<!-- ============ 图标库（线性风格） ============ -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.5v6c0 4.6 3.2 8 7.5 10 4.3-2 7.5-5.4 7.5-10v-6L12 2.5z"/><circle cx="12" cy="10.5" r="2.2"/><path d="M12 12.7v3"/></symbol>
+    <symbol id="i-vault" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="11" cy="12" r="3.4"/><path d="M11 10.4v1.6l1.2 1.2M18.5 9v6"/></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="13" height="9.5" rx="1.8"/><path d="M7.5 18h4M9.5 14v4"/><rect x="17" y="9" width="4.5" height="9.5" rx="1.4"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 0 1-13 5.1M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.5v6c0 4.6 3.2 8 7.5 10 4.3-2 7.5-5.4 7.5-10v-6L12 2.5z"/><path d="m8.8 11.8 2.2 2.2 4.2-4.4"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95a7 7 0 0 0-2.42-1.4L13.7 2.6h-3.4l-.38 2.54a7 7 0 0 0-2.42 1.4l-2.36-.95-2 3.46 2 1.55A7 7 0 0 0 5 12c0 .48.05.94.14 1.4l-2 1.55 2 3.46 2.36-.95a7 7 0 0 0 2.42 1.4l.38 2.54h3.4l.38-2.54a7 7 0 0 0 2.42-1.4l2.36.95 2-3.46-2-1.55c.09-.46.14-.92.14-1.4z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.4"/><rect x="13" y="4" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4.6" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4.6" cy="18" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-split" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M10 4.5v15"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-chev-r" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5.5 6.5 6.5L9 18.5"/></symbol>
+    <symbol id="i-chev-d" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5.5 9 6.5 6.5L18.5 9"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 7.8-1.2M12 14.5v2"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="14" r="4.2"/><path d="m11.2 10.8 8.3-8.3M16 6l2.6 2.6M13.5 8.5l2.3 2.3"/></symbol>
+    <symbol id="i-finger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5.4A8 8 0 0 1 12 3.8c1.9 0 3.6.64 5 1.7"/><path d="M4.6 9.5A9.4 9.4 0 0 1 6 7.6M19.5 9.6A8 8 0 0 1 20 12c0 2.5-.5 4.4-1.4 6.2"/><path d="M12 7.6c-2.9 0-5.2 2.3-5.2 5.2 0 2-.3 3.9-1 5.6"/><path d="M12 7.6c2.9 0 5.2 2.3 5.2 5.2 0 3-.6 5-1.6 7"/><path d="M12 11.4c.8 0 1.4.6 1.4 1.4 0 2.6-.5 4.6-1.3 6.4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5 20 19.5M9.9 6.2A9.6 9.6 0 0 1 12 5.8c6 0 9.5 6.2 9.5 6.2a17 17 0 0 1-3.3 3.9M6 8A16 16 0 0 0 2.5 12S6 18.2 12 18.2c1.2 0 2.3-.25 3.3-.66"/><path d="M9.9 9.9a2.9 2.9 0 0 0 4.1 4.1"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1"/><path d="M13.5 13.5h3v3h-3zM17.5 17.5h2.5v2.5h-2.5zM13.5 20h1M20 13.5h.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8L19 8.5v12H6v-17z"/><path d="M13.5 3.5v5.5H19"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5c0-1.1.9-2 2-2h4l2 2.5h7c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2v-11.5z"/></symbol>
+    <symbol id="i-img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="m5 18 5-5 3.5 3.5L16.5 13l4 4.5"/></symbol>
+    <symbol id="i-zip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M12 3.5v3m0 2.5v2m0 2.5v1M10.5 16.5h3v3h-3z"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8L19 8.5v12H6v-17z"/><path d="M9 12h6M9 15.5h6M9 8.5h2"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8L19 8.5v12H6v-17z"/><path d="M9 16.5c2.5-.5 5-2.5 6-6.5.6-2.4-.8-3-1.6-2.2-1.4 1.4.3 5.9 3.1 7.2 1.3.6 2-.2 1.5-1"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="5.5" width="12" height="13" rx="2"/><path d="m15.5 10.5 5-3v9l-5-3"/></symbol>
+    <symbol id="i-txt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8L19 8.5v12H6v-17z"/><path d="M9 8.5h6M9 12h6M9 15.5h3.5"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.6"/><circle cx="17.5" cy="5.5" r="2.6"/><circle cx="17.5" cy="18.5" r="2.6"/><path d="m8.4 10.7 6.8-3.9M8.4 13.3l6.8 3.9"/></symbol>
+    <symbol id="i-flame" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s5.5 4.2 5.5 9.5a5.5 5.5 0 0 1-11 0c0-2 1-3.9 2.2-5.4.3 1.2 1 2.2 2 2.4C10.2 7.6 10.8 5 12 3z"/><path d="M12 21a5.5 5.5 0 0 1-3.2-1"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5h15M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5M6.5 6.5 7.4 19a1.8 1.8 0 0 0 1.8 1.6h5.6A1.8 1.8 0 0 0 16.6 19l.9-12.5"/><path d="M10 10.5v6M14 10.5v6"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 12.5 8-8.5H20v8.5l-8.5 8a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8z"/><circle cx="15.5" cy="8.5" r="1.4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2.5"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5a12 12 0 0 1 16 0M7 13a8 8 0 0 1 10 0M10 16.5a4 4 0 0 1 4 0"/><circle cx="12" cy="19.3" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5h-15S6 13.5 6 9.5z"/><path d="M10 18.5a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 22 20H2L12 3.5z"/><path d="M12 9.5v5M12 17.2v.3"/></symbol>
+    <symbol id="i-oct" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.2 3.5h7.6L20.5 8.2v7.6l-4.7 4.7H8.2l-4.7-4.7V8.2L8.2 3.5z"/><path d="M12 8v4.5M12 15.8v.3"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 7.8v.3"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 18.5 9.5 8.5 19.5H4.5v-4L14.5 5.5zM13 7l4 4"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 1 2.3 5.6M4 12l-1.5-1.5M4 12l1.5-1.5"/><path d="M12 8v4l2.8 2"/></symbol>
+    <symbol id="i-pc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="11" rx="1.8"/><path d="M8.5 19.5h7M12 15.5v4"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.2"/><path d="M11 17.8h2"/></symbol>
+    <symbol id="i-drive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="7" rx="2"/><path d="M7 4.5h10l3 4.5M4.5 12.5h4M16 12.5h.5"/></symbol>
+    <symbol id="i-stego" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 18 5-5 3.5 3.5L16.5 13l4 4.5"/><path d="M13 6.5h5M13 9h3.5" opacity=".6"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 5.5v13M15 5.5v13"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M7.5 5.5v13l10-6.5-10-6.5z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></symbol>
+  </defs>
+</svg>
+
+<!-- ============ 锁屏 ============ -->
+<div class="screen on" id="scr-lock">
+  <div class="lock" id="lockBox">
+    <div class="lock-core">
+      <div class="dial">
+        <div class="notch"></div>
+        <div class="ring"></div>
+        <div class="ring2"></div>
+        <div class="core"><svg><use href="#i-logo"/></svg></div>
+      </div>
+      <h1>VaultSync 保险箱</h1>
+      <div class="slogan">Your Data · Everywhere · Encrypted</div>
+      <div class="pw-wrap">
+        <input class="input" id="lockPw" type="password" placeholder="输入主密码" autocomplete="off">
+        <svg class="eye" id="lockEye"><use href="#i-eye"/></svg>
+      </div>
+      <div class="err" id="lockErr"></div>
+      <div class="actions">
+        <button class="btn primary" id="btnUnlock"><svg class="ic"><use href="#i-unlock"/></svg>解锁</button>
+        <button class="btn" id="btnBio" title="生物识别解锁（Windows Hello）"><svg class="ic"><use href="#i-finger"/></svg>生物识别</button>
+      </div>
+      <div class="aux">
+        <button id="btnRecover">忘记主密码？</button>
+        <button id="btnManage">绑定 / 管理</button>
+      </div>
+      <div class="hint-chip">原型演示口令 · 主密码 <span class="mono">1234</span> · 伪装密码 <span class="mono">88888888</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 主壳层 ============ -->
+<div class="screen" id="scr-app">
+  <div class="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="side-logo">
+        <div class="mark"><svg><use href="#i-logo"/></svg></div>
+        <div><b>VaultSync</b><span class="small t3">V0.2 · 桌面端</span></div>
+      </div>
+      <nav class="side-nav">
+        <div class="nav-sec">空间</div>
+        <button class="nav-item active" data-page="vault"><svg class="ic"><use href="#i-vault"/></svg><span>保险箱</span></button>
+        <button class="nav-item" data-page="devices"><svg class="ic"><use href="#i-devices"/></svg><span>设备</span><em class="nav-badge" id="navDevBadge" style="display:none">1</em></button>
+        <button class="nav-item" data-page="sync"><svg class="ic"><use href="#i-sync"/></svg><span>同步</span><em class="nav-badge gold" id="navSyncBadge">1</em></button>
+        <div class="nav-sec">管控</div>
+        <button class="nav-item" data-page="security"><svg class="ic"><use href="#i-shield"/></svg><span>安全中心</span></button>
+        <button class="nav-item hidden" data-page="stego" id="navStego"><svg class="ic"><use href="#i-stego"/></svg><span>隐写术</span></button>
+        <button class="nav-item" data-page="settings"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button>
+      </nav>
+      <div class="side-foot">
+        <div class="storage">
+          <div class="row"><span>加密存储</span><span id="storeTxt">42 GB / 92 GB</span></div>
+          <div class="bar"><i id="storeBar"></i></div>
+        </div>
+        <button class="btn ghost sm block" id="btnLockNow"><svg class="ic"><use href="#i-lock"/></svg>立即锁定</button>
+      </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <div class="main">
+      <div class="topbar">
+        <div class="tb-title" id="tbTitle">保险箱</div>
+        <div class="tb-crumbs" id="tbCrumbs"></div>
+        <div class="tb-spacer"></div>
+        <div class="tb-search only-real">
+          <svg><use href="#i-search"/></svg>
+          <input class="input" id="gSearch" placeholder="搜索文件、标签、全文…" autocomplete="off">
+          <kbd>Ctrl K</kbd>
+          <div class="search-dd" id="searchDD"></div>
+        </div>
+        <div style="position:relative">
+          <button class="iconbtn" id="btnNotif" title="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
+          <span style="position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--danger);display:none" id="notifDot"></span>
+          <div class="dd" id="notifDD">
+            <div class="dd-h"><span>通知</span><button class="small t2" id="btnNotifClear">全部已读</button></div>
+            <div id="notifList"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <!-- ========== 保险箱 ========== -->
+        <section class="page active" id="page-vault">
+          <div class="toolbar">
+            <div class="seg" id="viewSeg">
+              <button data-view="grid" class="on"><svg><use href="#i-grid"/></svg>网格</button>
+              <button data-view="list"><svg><use href="#i-list"/></svg>列表</button>
+              <button data-view="split"><svg><use href="#i-split"/></svg>分栏</button>
+            </div>
+            <span class="badge info plain" id="selInfo" style="display:none"></span>
+            <div class="tb-spacer"></div>
+            <select class="select" id="selSort" style="width:130px">
+              <option>按修改时间</option><option>按名称</option><option>按大小</option>
+            </select>
+            <button class="btn ghost" id="btnTags"><svg class="ic"><use href="#i-tag"/></svg>标签</button>
+            <button class="btn ghost" id="btnNewFolder"><svg class="ic"><use href="#i-plus"/></svg>新建文件夹</button>
+            <button class="btn primary" id="btnImport"><svg class="ic"><use href="#i-up"/></svg>导入文件</button>
+          </div>
+          <div class="splitwrap">
+            <div class="tree" id="tree"></div>
+            <div id="vaultMain"></div>
+          </div>
+        </section>
+
+        <!-- ========== 设备 ========== -->
+        <section class="page" id="page-devices">
+          <div class="page-h">
+            <div><h1>设备</h1><div class="sub" id="devSub">通过端到端加密信道与已配对设备同步</div></div>
+            <div class="page-actions">
+              <button class="btn ghost" id="btnManualAdd"><svg class="ic"><use href="#i-key"/></svg>手动添加</button>
+              <button class="btn primary" id="btnPair"><svg class="ic"><use href="#i-plus"/></svg>配对新设备</button>
+            </div>
+          </div>
+          <div id="pairBannerWrap"></div>
+          <div class="dev-list" id="devList"></div>
+        </section>
+
+        <!-- ========== 同步 ========== -->
+        <section class="page" id="page-sync">
+          <div class="page-h">
+            <div><h1>同步</h1><div class="sub" id="syncSub">增量同步 · 仅传输差异块</div></div>
+            <div class="page-actions">
+              <button class="btn ghost" id="btnSyncPause"><svg class="ic"><use href="#i-pause"/></svg>暂停同步</button>
+              <button class="btn primary" id="btnSyncNow"><svg class="ic"><use href="#i-sync"/></svg>立即同步</button>
+            </div>
+          </div>
+          <div id="syncStats" class="statgrid"></div>
+          <div class="card">
+            <div class="card-h"><h3>传输队列</h3><span class="small t3" id="xferSummary"></span></div>
+            <div class="card-b" style="padding-top:4px">
+              <div class="queuesec">进行中</div>
+              <div class="xfer-list" id="xferActive"></div>
+              <div class="queuesec">等待中</div>
+              <div class="xfer-list" id="xferWaiting"></div>
+              <div class="queuesec" style="color:var(--warn)">冲突</div>
+              <div class="xfer-list" id="xferConflict"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ========== 安全中心 ========== -->
+        <section class="page" id="page-security">
+          <div class="page-h">
+            <div><h1>安全中心</h1><div class="sub">审计 · 检测 · 应急响应</div></div>
+            <div class="page-actions"><span class="badge ok" style="font-size:12.5px;padding:5px 13px">整体状态：正常</span></div>
+          </div>
+          <div class="secgrid" id="detectGrid"></div>
+          <div class="card" style="margin-bottom:var(--sp-4)">
+            <div class="card-h">
+              <h3>审计日志</h3>
+              <div style="display:flex;gap:8px">
+                <button class="btn ghost sm" id="btnAuditVerify"><svg class="ic"><use href="#i-check"/></svg>校验审计链</button>
+                <button class="btn ghost sm" id="btnAuditExport"><svg class="ic"><use href="#i-share"/></svg>导出</button>
+              </div>
+            </div>
+            <div class="card-b">
+              <div class="audit-filters" id="auditChips"></div>
+              <table class="audit-table">
+                <thead><tr><th style="width:150px">时间</th><th style="width:90px">类别</th><th>动作 / 对象</th><th style="width:110px">来源设备</th><th style="width:80px">结果</th><th style="width:130px">链哈希</th></tr></thead>
+                <tbody id="auditBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="secgrid" style="grid-template-columns:1fr 1fr">
+            <div class="card pad stego-card" id="stegoCard">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div class="modal-head" style="padding:0"><div class="mic enc"><svg><use href="#i-stego"/></svg></div></div>
+                <div style="flex:1"><b style="font-size:13.5px">隐写术引擎</b><div class="small t2" id="stegoStateTxt">默认隐藏 · 图片 LSB 隐蔽存储</div></div>
+                <button class="btn sm" id="btnStegoEnable">启用</button>
+              </div>
+            </div>
+            <div class="card pad wipe-card">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div class="modal-head" style="padding:0"><div class="mic danger"><svg><use href="#i-oct"/></svg></div></div>
+                <div style="flex:1"><b style="font-size:13.5px">紧急销毁</b><div class="small t2">本地 / 远程 / 全设备联动 · 加密擦除</div></div>
+                <button class="btn danger sm" id="btnWipe">立即销毁</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ========== 隐写术 ========== -->
+        <section class="page" id="page-stego">
+          <div class="page-h">
+            <div><h1>隐写术引擎</h1><div class="sub">加密之上的隐蔽 · AES-256-GCM 密文嵌入图片 LSB</div></div>
+            <div class="page-actions"><span class="badge enc">已启用</span></div>
+          </div>
+          <div class="stego-grid">
+            <div class="stego-tile" id="tileEmbed">
+              <div class="tic"><svg><use href="#i-img"/></svg></div>
+              <b>隐写导入（嵌入）</b>
+              <p>将保险箱中已加密的文件嵌入普通图片，图片外观无可见变化。</p>
+            </div>
+            <div class="stego-tile" id="tileExtract">
+              <div class="tic"><svg><use href="#i-search"/></svg></div>
+              <b>隐写提取（取出）</b>
+              <p>从携带隐藏数据的图片中提取密文帧，解密还原原始文件。</p>
+            </div>
+          </div>
+          <div class="card pad" style="margin-top:var(--sp-3)">
+            <b style="font-size:13.5px">容量参考</b>
+            <div class="small t2" style="margin:4px 0 10px">1920×1080 图片约可承载 760 KB 密文；更大文件自动分割嵌入多张图片。</div>
+            <div class="cap-wall" id="capWall"></div>
+            <div class="legend" style="margin-top:8px"><span><i style="background:var(--enc)"></i>已用容量</span><span><i style="background:var(--enc-soft)"></i>单图剩余</span><span><i style="background:var(--surface-alt)"></i>未使用图片</span></div>
+          </div>
+        </section>
+
+        <!-- ========== 设置 ========== -->
+        <section class="page" id="page-settings">
+          <div class="page-h"><div><h1>设置</h1><div class="sub">安全 · 落锁 · 同步 · 外观</div></div></div>
+
+          <div class="acc open">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-key"/></svg></div><div><b>主密码管理</b><span class="small">修改密码仅重新包装主密钥，数据零重加密</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="row-setting"><div class="rs-main"><b>修改主密码</b><span class="small">毫秒级完成，不影响已加密文件与同步</span></div><button class="btn sm" id="btnChangePw">修改</button></div>
+              <div class="row-setting"><div class="rs-main"><b>忘记主密码</b><span class="small">安全重置流程，需已配对设备授权</span></div><button class="btn sm ghost" id="btnRecoverCfg">查看流程</button></div>
+            </div>
+          </div>
+
+          <div class="acc">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-finger"/></svg></div><div><b>生物识别</b><span class="small" id="bioStateTxt">未绑定 · 主密码始终可用</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="row-setting"><div class="rs-main"><b>Windows Hello 指纹</b><span class="small">密钥由平台安全区托管，本应用不接触生物特征</span></div><label class="switch"><input type="checkbox" id="swBio"><span class="track"></span><span class="thumb"></span></label></div>
+              <div class="modal-note warn" style="margin-top:10px"><svg><use href="#i-warn"/></svg><span>安全区重置后生物识别副本自动失效，主密码路径不受影响。</span></div>
+            </div>
+          </div>
+
+          <div class="acc">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-clock"/></svg></div><div><b>自动落锁</b><span class="small">空闲 / 离开应用 / 锁屏 / 异地检测</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="row-setting"><div class="rs-main"><b>空闲超时</b><span class="small">无操作后自动锁定</span></div>
+                <select class="select"><option>1 分钟</option><option selected>5 分钟</option><option>15 分钟</option><option>30 分钟</option></select></div>
+              <div class="row-setting"><div class="rs-main"><b>离开应用立即锁定</b></div><label class="switch"><input type="checkbox" checked><span class="track"></span><span class="thumb"></span></label></div>
+              <div class="row-setting"><div class="rs-main"><b>系统锁屏时锁定</b></div><label class="switch"><input type="checkbox" checked><span class="track"></span><span class="thumb"></span></label></div>
+              <div class="row-setting"><div class="rs-main"><b>异地检测异常时锁定</b><span class="small">联动安全中心告警</span></div><label class="switch"><input type="checkbox" checked><span class="track"></span><span class="thumb"></span></label></div>
+            </div>
+          </div>
+
+          <div class="acc">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-eye-off"/></svg></div><div><b>伪装入口</b><span class="small">胁迫场景下输入伪装密码进入独立伪空间</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="row-setting"><div class="rs-main"><b>伪装密码</b><span class="small" id="dummyStateTxt">未设置</span></div><button class="btn sm" id="btnDummyCfg">配置</button></div>
+              <div class="row-setting"><div class="rs-main"><b>伪空间</b><span class="small">独立主密钥与保险箱文件，结构与真空间一致</span></div><button class="btn sm ghost" id="btnEnterDummy">进入演示</button></div>
+              <div class="modal-note info" style="margin-top:10px"><svg><use href="#i-info"/></svg><span>进入伪空间仅记录"进入了挂锁门"，不泄露真伪判断。</span></div>
+            </div>
+          </div>
+
+          <div class="acc">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-sync"/></svg></div><div><b>同步策略</b><span class="small" id="policyStateTxt">时段 09:00–18:00 · WiFi 仅同步大文件</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="row-setting"><div class="rs-main"><b>带宽 / 时段 / 过滤</b><span class="small">选择性同步：文件夹、大小、网络、设备</span></div><button class="btn sm" id="btnPolicyCfg">配置</button></div>
+            </div>
+          </div>
+
+          <div class="acc">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-globe"/></svg></div><div><b>外观与语言</b><span class="small">主题 · 语言</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="row-setting"><div class="rs-main"><b>主题</b></div>
+                <select class="select" id="selTheme"><option value="dark" selected>深色（默认）</option><option value="light">浅色</option></select></div>
+              <div class="row-setting"><div class="rs-main"><b>语言</b></div>
+                <select class="select"><option selected>简体中文</option><option>English</option></select></div>
+            </div>
+          </div>
+
+          <div class="acc">
+            <button class="acc-head"><div class="aic"><svg><use href="#i-info"/></svg></div><div><b>关于</b><span class="small">版本与设计文档</span></div><svg class="ic chev"><use href="#i-chev-r"/></svg></button>
+            <div class="acc-body">
+              <div class="kv" style="margin-bottom:0">
+                <dt>版本</dt><dd>V0.2 原型（HTML 演示）</dd>
+                <dt>引擎</dt><dd>vault-core / vault-crypto <span class="t3">（本原型未接入）</span></dd>
+                <dt>设计文档</dt><dd class="mono">docs/03-前端设计.md</dd>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹窗：文件详情 ============ -->
+<div class="overlay" id="ov-fileinfo"><div class="modal lg" id="m-fileinfo">
+  <div class="modal-head"><div class="mic blue" id="dfMic"><svg><use href="#i-file"/></svg></div><div><h2 id="dfName">文件</h2><p id="dfSub"></p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="preview-box" id="dfPreview"><svg><use href="#i-img"/></svg><span class="small">加密缩略图 · 解锁后解密预览</span></div>
+    <dl class="kv" id="dfKv"></dl>
+    <div class="m-sec">标签</div>
+    <div class="chip-row" id="dfTags"></div>
+    <div class="m-sec">加密信息</div>
+    <dl class="kv" id="dfEnc"></dl>
+  </div>
+  <div class="modal-foot" style="flex-wrap:wrap">
+    <button class="btn primary sm" data-act="preview" data-fileonly><svg class="ic"><use href="#i-eye"/></svg>预览</button>
+    <button class="btn sm" data-act="export" data-fileonly><svg class="ic"><use href="#i-down"/></svg>导出</button>
+    <button class="btn sm" data-act="burn" data-fileonly><svg class="ic"><use href="#i-flame"/></svg>阅后即焚</button>
+    <button class="btn sm" data-act="embed" data-fileonly><svg class="ic"><use href="#i-stego"/></svg>隐写嵌入</button>
+    <button class="btn sm ghost" data-act="rename"><svg class="ic"><use href="#i-edit"/></svg>重命名</button>
+    <button class="btn sm ghost" data-act="tag"><svg class="ic"><use href="#i-tag"/></svg>标签</button>
+    <button class="btn sm danger-ghost" data-act="wipe"><svg class="ic"><use href="#i-trash"/></svg>安全擦除</button>
+  </div>
+</div></div>
+
+<!-- ============ 弹窗：设备详情 ============ -->
+<div class="overlay" id="ov-devinfo"><div class="modal md" id="m-devinfo">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-pc"/></svg></div><div><h2 id="dvName">设备</h2><p>设备详情与信道状态</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <dl class="kv" id="dvKv"></dl>
+    <div class="m-sec">信道</div>
+    <dl class="kv" id="dvChan"></dl>
+    <div class="modal-note info"><svg><use href="#i-info"/></svg><span>传输信道 Noise 协议加密，数据块再经文件密钥 AEAD 加密，双保险。</span></div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn primary sm" id="btnDevSync"><svg class="ic"><use href="#i-sync"/></svg>立即同步</button>
+    <button class="btn sm danger-ghost only-real" id="btnDevRemoteWipe"><svg class="ic"><use href="#i-oct"/></svg>远程销毁此设备</button>
+    <button class="btn sm danger-ghost only-real" id="btnDevUnpair">解除配对</button>
+  </div>
+</div></div>
+
+<!-- ============ 弹窗：单文件同步详情 ============ -->
+<div class="overlay" id="ov-syncinfo"><div class="modal md" id="m-syncinfo">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-sync"/></svg></div><div><h2 id="dsName">同步详情</h2><p>块级增量传输</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <dl class="kv" id="dsKv"></dl>
+    <div class="m-sec">块级增量（CDC · 平均 64KB）</div>
+    <div class="blkgrid" id="dsBlocks"></div>
+    <div class="legend" style="margin-top:6px"><span><i style="background:var(--ok)"></i>已传输校验</span><span><i style="background:var(--blue)"></i>传输中</span><span><i style="background:var(--surface-hover)"></i>对端已有 · 跳过</span><span><i style="background:var(--surface-alt)"></i>待传输</span></div>
+    <div class="m-sec">断点续传</div>
+    <div class="small t2" id="dsResume">—</div>
+  </div>
+</div></div>
+
+<!-- ============ 弹窗：审计详情 ============ -->
+<div class="overlay" id="ov-auditinfo"><div class="modal md" id="m-auditinfo">
+  <div class="modal-head"><div class="mic gold"><svg><use href="#i-history"/></svg></div><div><h2>审计条目</h2><p>链式哈希防篡改</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body"><dl class="kv" id="daKv"></dl></div>
+</div></div>
+
+<!-- ============ 弹窗：导入 ============ -->
+<div class="overlay" id="ov-import"><div class="modal md" id="m-import">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-up"/></svg></div><div><h2>导入文件</h2><p>流式读取 · CDC 分块 · AES-256-GCM 逐块加密</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="dropzone" id="dz"><svg><use href="#i-up"/></svg><div><b>拖放文件到此处</b>，或点击选择</div><div class="small">单文件上限 2 GB · 大文件自动流式处理</div></div>
+    <div class="import-queue" id="impQueue"></div>
+    <div class="modal-note enc"><svg><use href="#i-lock"/></svg><span>导入完成后立即生成加密缩略图与全文索引（密文落盘）。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnImpStart">选择文件（演示）</button></div>
+</div></div>
+
+<!-- ============ 弹窗：新建文件夹 ============ -->
+<div class="overlay" id="ov-folder"><div class="modal sm" id="m-folder">
+  <div class="modal-head"><div class="mic gold"><svg><use href="#i-folder"/></svg></div><div><h2>新建加密文件夹</h2><p>文件夹独立派生子密钥 FSK</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body"><div class="field"><label>名称</label><input class="input" id="inpFolderName" placeholder="例如：合同归档"></div></div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnFolderOk">创建</button></div>
+</div></div>
+
+<!-- ============ 弹窗：重命名 ============ -->
+<div class="overlay" id="ov-rename"><div class="modal sm" id="m-rename">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-edit"/></svg></div><div><h2>重命名</h2><p>修改加密元数据中的文件名</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body"><div class="field"><label>新名称</label><input class="input" id="inpRename"></div></div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnRenameOk">保存</button></div>
+</div></div>
+
+<!-- ============ 弹窗：导出 ============ -->
+<div class="overlay" id="ov-export"><div class="modal md" id="m-export">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-down"/></svg></div><div><h2>导出文件</h2><p>解密输出到明文 · 全程恒定内存</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <dl class="kv" id="exKv"></dl>
+    <div class="field"><label>导出到</label><input class="input" id="inpExPath" value="D:\Export"></div>
+    <div class="modal-note warn"><svg><use href="#i-warn"/></svg><span>导出产生的明文文件不再受保险箱保护，请自行妥善处理。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnExportOk">解密并导出</button></div>
+</div></div>
+
+<!-- ============ 弹窗：安全擦除（单文件） ============ -->
+<div class="overlay" id="ov-wipefile"><div class="modal md" id="m-wipefile">
+  <div class="modal-head"><div class="mic danger"><svg><use href="#i-trash"/></svg></div><div><h2>安全擦除</h2><p>销毁文件密钥 FSKey 并摘除块清单</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <dl class="kv" id="wfKv"></dl>
+    <div class="field"><label>擦除级别</label>
+      <label class="radiocard"><input type="radio" name="wflevel" checked><span class="rdot"></span><span><b>加密擦除（推荐）</b><span class="small">密钥销毁后密文不可恢复，SSD 友好</span></span></label>
+      <label class="radiocard"><input type="radio" name="wflevel"><span class="rdot"></span><span><b>加密擦除 + 介质覆写</b><span class="small">按介质类型兜底单次覆写 + TRIM</span></span></label>
+    </div>
+    <div class="field"><label id="wfPhraseLabel">输入文件名以确认</label><input class="input" id="inpWfPhrase" placeholder="输入完整文件名"></div>
+    <div class="modal-note danger"><svg><use href="#i-oct"/></svg><span>擦除将同步传播到所有已配对设备，操作会记入审计日志。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn danger" id="btnWipeFileOk" disabled>确认擦除</button></div>
+</div></div>
+
+<!-- ============ 弹窗：阅后即焚分享 ============ -->
+<div class="overlay" id="ov-burn"><div class="modal md" id="m-burn">
+  <div class="modal-head"><div class="mic danger"><svg><use href="#i-flame"/></svg></div><div><h2>阅后即焚分享</h2><p>一次性 P2P 会话 · 对端打开后限时自动擦除</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="wizard-pane on" id="burnPane1">
+      <dl class="kv" id="burnKv"></dl>
+      <div class="field"><label>对端打开后保留时长</label>
+        <label class="radiocard"><input type="radio" name="burndur" checked><span class="rdot"></span><span><b>1 分钟</b><span class="small">默认 · 关闭文件亦立即擦除</span></span></label>
+        <label class="radiocard"><input type="radio" name="burndur"><span class="rdot"></span><span><b>5 分钟</b></span></label>
+      </div>
+      <div class="field"><label>发送到</label><select class="select" id="burnTarget"><option>WorkBook-X1（在线）</option><option>Phone-01（离线 · 上线后送达）</option></select></div>
+    </div>
+    <div class="wizard-pane" id="burnPane2">
+      <div class="field"><label>一次性分享会话</label><input class="input mono" id="burnCode" readonly></div>
+      <div class="burnline">
+        <div class="burnstep" id="bl1"><div class="bcol"><div class="bdot"><svg class="ic"><use href="#i-check"/></svg></div><div class="bline"></div></div><div class="btxt">会话已创建<b class="small t2" style="display:block">密钥仅存在于本次会话</b></div></div>
+        <div class="burnstep" id="bl2"><div class="bcol"><div class="bdot"><svg class="ic"><use href="#i-sync"/></svg></div><div class="bline"></div></div><div class="btxt">等待对端接收…<b class="small t2" style="display:block">P2P 直连 · Noise 加密信道</b></div></div>
+        <div class="burnstep" id="bl3"><div class="bcol"><div class="bdot"><svg class="ic"><use href="#i-down"/></svg></div><div class="bline"></div></div><div class="btxt">对端已接收并解密<b class="small t2" style="display:block">本端会话随之失效，不可复用</b></div></div>
+        <div class="burnstep" id="bl4"><div class="bcol"><div class="bdot"><svg class="ic"><use href="#i-flame"/></svg></div><div class="bline" style="display:none"></div></div><div class="btxt">已阅后焚毁<b class="small t2" style="display:block">对端副本已安全擦除，无残留</b></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-foot" id="burnFoot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnBurnCreate">创建分享会话</button></div>
+</div></div>
+
+<!-- ============ 弹窗：配对向导 ============ -->
+<div class="overlay" id="ov-pair"><div class="modal lg" id="m-pair">
+  <div class="modal-head"><div class="mic gold"><svg><use href="#i-qr"/></svg></div><div><h2>配对新设备</h2><p>交换公钥 · 校验指纹 · 双向确认</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="steps">
+    <div class="step cur" id="ps1"><span class="dot">1</span>选择方式</div><div class="step-line"></div>
+    <div class="step" id="ps2"><span class="dot">2</span>指纹核验</div><div class="step-line"></div>
+    <div class="step" id="ps3"><span class="dot">3</span>完成配对</div>
+  </div>
+  <div class="modal-body">
+    <div class="wizard-pane on" id="pw1">
+      <div class="seg" id="pairTabs" style="margin-bottom:14px">
+        <button data-pt="qr" class="on"><svg><use href="#i-qr"/></svg>扫码</button>
+        <button data-pt="invite"><svg><use href="#i-key"/></svg>邀请码</button>
+        <button data-pt="manual"><svg><use href="#i-edit"/></svg>手动输入</button>
+      </div>
+      <div class="wizard-pane on" id="paneQr">
+        <div class="qwrap">
+          <div class="qbox" id="qrBox"></div>
+          <div class="qmeta">用新设备扫描此二维码<span class="small t3">内容为公钥 + 设备 ID，不含敏感信息</span><span class="mono" id="qrPayload"></span></div>
+        </div>
+      </div>
+      <div class="wizard-pane" id="paneInvite">
+        <div class="field"><label>一次性邀请码（10 分钟内有效）</label>
+          <input class="input mono" id="inviteCode" readonly style="font-size:16px;letter-spacing:.12em;text-align:center"></div>
+        <div class="modal-note info"><svg><use href="#i-info"/></svg><span>在新设备输入此邀请码即可跨网络发起配对，用后即失效。</span></div>
+      </div>
+      <div class="wizard-pane" id="paneManual">
+        <div class="field"><label>对端设备 ID</label><input class="input mono" id="inpDevId" placeholder="vs-8f3a…"></div>
+        <div class="field"><label>对端公钥（Base64）</label><textarea class="input mono" id="inpDevKey" rows="3" placeholder="粘贴对端公钥"></textarea></div>
+      </div>
+    </div>
+    <div class="wizard-pane" id="pw2">
+      <p class="small t2" style="margin-bottom:4px">请在两台设备上分别核对以下指纹是否一致（公钥哈希前 8 字节）：</p>
+      <div class="fpr">
+        <div class="card"><div class="lab">本机 · DESKTOP-VAULT</div><div class="mono" id="fprA"></div></div>
+        <div class="card"><div class="lab">对端 · LumiaDevice</div><div class="mono" id="fprB"></div></div>
+      </div>
+      <div class="modal-note warn"><svg><use href="#i-warn"/></svg><span>指纹不一致说明信道可能被劫持（MITM），请拒绝配对。</span></div>
+    </div>
+    <div class="wizard-pane" id="pw3" style="text-align:center;padding:26px 0">
+      <div style="width:64px;height:64px;border-radius:20px;background:var(--ok-soft);color:var(--ok);display:flex;align-items:center;justify-content:center;margin:0 auto 16px"><svg style="width:30px;height:30px"><use href="#i-check"/></svg></div>
+      <h2 style="font-size:16px;margin-bottom:6px">配对完成</h2>
+      <p class="small t2">已建立长期加密信道 · 双方节点清单已更新 · 已记入审计</p>
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn ghost" data-close>取消</button>
+    <button class="btn primary" id="btnPairNext">下一步</button>
+    <button class="btn gold" id="btnPairConfirm" style="display:none">指纹一致，确认配对</button>
+    <button class="btn primary" id="btnPairDone" style="display:none">完成</button>
+  </div>
+</div></div>
+
+<!-- ============ 弹窗：解除配对 ============ -->
+<div class="overlay" id="ov-unpair"><div class="modal sm" id="m-unpair">
+  <div class="modal-head"><div class="mic danger"><svg><use href="#i-x"/></svg></div><div><h2>解除配对</h2><p id="upName"></p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="modal-note warn"><svg><use href="#i-warn"/></svg><span>解除后该设备将无法再同步，其本地密文仍保留，可稍后重新配对恢复。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn danger" id="btnUnpairOk">解除配对</button></div>
+</div></div>
+
+<!-- ============ 弹窗：远程销毁（单设备） ============ -->
+<div class="overlay" id="ov-rwipe"><div class="modal md" id="m-rwipe">
+  <div class="modal-head"><div class="mic danger"><svg><use href="#i-oct"/></svg></div><div><h2>远程销毁</h2><p id="rwName"></p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="modal-note danger" style="margin-bottom:14px"><svg><use href="#i-oct"/></svg><span>将向目标设备签发由本机密钥签名的销毁指令（高优先级信令队列）。设备离线时，将于下次上线后、处理任何其他消息之前执行。</span></div>
+    <div class="field"><label>输入 <span class="mono">销毁</span> 以确认</label><input class="input" id="inpRwPhrase" placeholder="销毁"></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn danger" id="btnRwOk" disabled>签发销毁指令</button></div>
+</div></div>
+
+<!-- ============ 弹窗：冲突解决 ============ -->
+<div class="overlay" id="ov-conflict"><div class="modal md" id="m-conflict">
+  <div class="modal-head"><div class="mic gold"><svg><use href="#i-warn"/></svg></div><div><h2>解决冲突</h2><p id="cfName"></p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="field"><label>两个版本均有加密时间戳副本</label>
+      <label class="radiocard"><input type="radio" name="cfv" checked><span class="rdot"></span><span><b>本机版本 · 09-15 10:02</b><span class="small">1.2 MB · 修改于本机</span></span></label>
+      <label class="radiocard"><input type="radio" name="cfv"><span class="rdot"></span><span><b>WorkBook 版本 · 09-15 09:47</b><span class="small">1.1 MB · 修改于 WorkBook-X1</span></span></label>
+    </div>
+    <div class="modal-note info"><svg><use href="#i-info"/></svg><span>策略优先级：删除优先 → 保留多版本（<span class="mono">doc_v1.vault / doc_v2.vault</span>）→ 向量时钟仅辅助判定因果。</span></div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn ghost" id="btnCfBoth">保留两个版本</button>
+    <button class="btn primary" id="btnCfPick">使用所选版本</button>
+  </div>
+</div></div>
+
+<!-- ============ 弹窗：同步策略 ============ -->
+<div class="overlay" id="ov-policy"><div class="modal md" id="m-policy">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-sync"/></svg></div><div><h2>同步策略</h2><p>选择性同步 · 带宽 · 时段</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="row-setting" style="border-bottom:1px solid var(--border-soft);padding:0 0 11px"><div class="rs-main"><b>启用自动同步</b></div><label class="switch"><input type="checkbox" checked><span class="track"></span><span class="thumb"></span></label></div>
+    <div class="field" style="margin-top:14px"><label>同步时段</label><input class="input" value="09:00 – 18:00"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="field"><label>上行限制</label><select class="select"><option>2 MB/s</option><option selected>10 MB/s</option><option>不限</option></select></div>
+      <div class="field"><label>下行限制</label><select class="select"><option>800 KB/s</option><option selected>10 MB/s</option><option>不限</option></select></div>
+    </div>
+    <div class="field"><label>大文件网络策略</label>
+      <label class="check"><input type="checkbox" checked><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><use href="#i-check"/></svg></span>大于 1 GB 的文件仅在 WiFi 下自动同步</label>
+    </div>
+    <div class="field"><label>不同步的文件夹</label>
+      <div class="chip-row" id="policyExcludes"><span class="tagchip">临时文件 ×</span><span class="tagchip">cache ×</span></div>
+      <div class="tip">点 × 移除；被排除文件夹仅保留本地</div>
+    </div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnPolicySave">保存策略</button></div>
+</div></div>
+
+<!-- ============ 弹窗：修改主密码 ============ -->
+<div class="overlay" id="ov-password"><div class="modal md" id="m-password">
+  <div class="modal-head"><div class="mic gold"><svg><use href="#i-key"/></svg></div><div><h2>修改主密码</h2><p>仅重新包装 MK · 数据零重加密</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="field"><label>当前主密码</label><input class="input" type="password" id="inpOldPw" autocomplete="off"></div>
+    <div class="field"><label>新主密码</label><input class="input" type="password" id="inpNewPw" autocomplete="off">
+      <div class="strength" id="pwStrength"><i></i><i></i><i></i><i></i></div>
+      <div class="tip" id="pwStrengthTxt">Argon2id 派生 KEK · 建议 ≥ 12 位含大小写与符号</div>
+    </div>
+    <div class="field"><label>确认新主密码</label><input class="input" type="password" id="inpNewPw2" autocomplete="off"></div>
+    <div class="modal-note info"><svg><use href="#i-info"/></svg><span>修改后重新生成 <span class="mono">MK_wrap_pwd</span> 并更换 salt；已配对设备与密文不受影响。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnPwOk">确认修改</button></div>
+</div></div>
+
+<!-- ============ 弹窗：伪装入口配置 ============ -->
+<div class="overlay" id="ov-dummy"><div class="modal md" id="m-dummy">
+  <div class="modal-head"><div class="mic enc"><svg><use href="#i-eye-off"/></svg></div><div><h2>伪装入口</h2><p>独立 MK + 独立保险箱文件，结构与真空间一致</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="field"><label>伪装密码（6–20 位，勿与主密码相同）</label><input class="input" type="password" id="inpDummyPw" autocomplete="off"></div>
+    <div class="modal-note enc"><svg><use href="#i-shield"/></svg><span>伪空间为空保险箱，可正常导入文件作为掩护。锁屏输入伪装密码即进入，真实保险箱调用一律拒绝。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" id="btnDummyEnter">进入伪空间演示</button><button class="btn primary" id="btnDummySet">保存</button></div>
+</div></div>
+
+<!-- ============ 弹窗：忘记密码 / 安全重置 ============ -->
+<div class="overlay" id="ov-recover"><div class="modal md" id="m-recover">
+  <div class="modal-head"><div class="mic danger"><svg><use href="#i-key"/></svg></div><div><h2>安全重置主密码</h2><p>密钥轮换与格式迁移 · 见设计文档 07</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <dl class="kv">
+      <dt>前置条件</dt><dd>存在一台已配对且在线的设备（持有互信公钥）</dd>
+      <dt>方式</dt><dd>已配对设备授权 → 本机生成新 MK 副本 → 重新包装</dd>
+      <dt>风险</dt><dd>无已配对设备时无法重置；唯一途径为整机销毁重建</dd>
+    </dl>
+    <label class="check"><input type="checkbox" id="chkRecover"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><use href="#i-check"/></svg></span>我了解：无可信设备时数据无法找回</label>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>关闭</button><button class="btn primary" id="btnRecoverGo" disabled>向 WorkBook-X1 请求授权</button></div>
+</div></div>
+
+<!-- ============ 弹窗：启用隐写 ============ -->
+<div class="overlay" id="ov-stego"><div class="modal md" id="m-stego">
+  <div class="modal-head"><div class="mic enc"><svg><use href="#i-stego"/></svg></div><div><h2>启用隐写术引擎</h2><p>高级功能 · 默认隐藏</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="modal-note enc" style="margin-bottom:12px"><svg><use href="#i-shield"/></svg><span>将加密文件嵌入图片 LSB（最低有效位）。攻击者即便察觉隐写痕迹，也无法解密原始数据。</span></div>
+    <div class="modal-note warn"><svg><use href="#i-warn"/></svg><span>载荷 Magic 标记默认省略以防自曝；启用后导航栏将出现"隐写术"入口并记入审计。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnStegoConfirm">启用</button></div>
+</div></div>
+
+<!-- ============ 弹窗：隐写嵌入向导 ============ -->
+<div class="overlay" id="ov-embed"><div class="modal lg" id="m-embed">
+  <div class="modal-head"><div class="mic enc"><svg><use href="#i-stego"/></svg></div><div><h2>隐写导入（嵌入）</h2><p>密文 → 图片 LSB</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="steps">
+    <div class="step cur" id="es1"><span class="dot">1</span>选择文件</div><div class="step-line"></div>
+    <div class="step" id="es2"><span class="dot">2</span>选择载体图片</div><div class="step-line"></div>
+    <div class="step" id="es3"><span class="dot">3</span>嵌入</div>
+  </div>
+  <div class="modal-body">
+    <div class="wizard-pane on" id="ew1">
+      <div class="field"><label>保险箱内文件</label><select class="select" id="embFile"></select></div>
+      <div class="modal-note info"><svg><use href="#i-lock"/></svg><span>嵌入的是已加密密文，Magic 标记默认省略。</span></div>
+    </div>
+    <div class="wizard-pane" id="ew2">
+      <div class="field"><label>载体图片</label><select class="select" id="embCarrier">
+        <option value="760">holiday_2026.png · 1920×1080 · 约 760 KB</option>
+        <option value="760">wallpaper_4k.png · 3840×2160 · 约 3.0 MB</option>
+        <option value="300">avatar.jpg · 1024×1024 · 约 300 KB</option>
+      </select></div>
+      <div class="small t2" id="embCap">—</div>
+    </div>
+    <div class="wizard-pane" id="ew3" style="text-align:center;padding:18px 0">
+      <div id="embProgWrap"><p class="small t2" style="margin-bottom:12px">正在按位写入像素 LSB…</p><div class="pbar thick gold" style="max-width:340px;margin:0 auto"><i id="embBar"></i></div></div>
+      <div id="embDone" style="display:none">
+        <div style="width:56px;height:56px;border-radius:18px;background:var(--enc-soft);color:var(--enc);display:flex;align-items:center;justify-content:center;margin:0 auto 12px"><svg style="width:26px;height:26px"><use href="#i-check"/></svg></div>
+        <b>嵌入完成</b><p class="small t2" id="embDoneTxt" style="margin-top:4px"></p>
+      </div>
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn ghost" data-close>取消</button>
+    <button class="btn primary" id="btnEmbNext">下一步</button>
+    <button class="btn primary" id="btnEmbDone" style="display:none">完成</button>
+  </div>
+</div></div>
+
+<!-- ============ 弹窗：隐写提取 ============ -->
+<div class="overlay" id="ov-extract"><div class="modal md" id="m-extract">
+  <div class="modal-head"><div class="mic enc"><svg><use href="#i-search"/></svg></div><div><h2>隐写提取（取出）</h2><p>LSB 提取 → 解密还原</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="wizard-pane on" id="xw1">
+      <div class="field"><label>选择图片</label><select class="select" id="extImage"><option>holiday_2026.png（来自桌面）</option><option>wallpaper_4k.png（来自桌面）</option></select></div>
+    </div>
+    <div class="wizard-pane" id="xw2" style="text-align:center;padding:18px 0">
+      <div id="extProgWrap"><p class="small t2" style="margin-bottom:12px">提取数据帧 → AES-256-GCM 解密 → 完整性终验…</p><div class="pbar thick" style="max-width:340px;margin:0 auto"><i id="extBar"></i></div></div>
+      <div id="extDone" style="display:none">
+        <div style="width:56px;height:56px;border-radius:18px;background:var(--ok-soft);color:var(--ok);display:flex;align-items:center;justify-content:center;margin:0 auto 12px"><svg style="width:26px;height:26px"><use href="#i-check"/></svg></div>
+        <b>还原成功</b><p class="small t2">合同草稿.pdf · 1.2 MB · SHA-256 校验通过<br>已存入保险箱「工作」文件夹</p>
+      </div>
+    </div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnExtGo">开始提取</button><button class="btn primary" id="btnExtDone" style="display:none">完成</button></div>
+</div></div>
+
+<!-- ============ 弹窗：导出审计 ============ -->
+<div class="overlay" id="ov-audexp"><div class="modal sm" id="m-audexp">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-share"/></svg></div><div><h2>导出审计日志</h2><p>仅解锁会话内可导出</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="field"><label>格式</label>
+      <label class="radiocard"><input type="radio" name="aex" checked><span class="rdot"></span><span><b>加密导出文件（.vaudit）</b><span class="small">专用导出密钥加密 · 含链头哈希</span></span></label>
+      <label class="radiocard"><input type="radio" name="aex"><span class="rdot"></span><span><b>明文 CSV（本机已解锁）</b><span class="small">导出事件本身亦记入审计</span></span></label>
+    </div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn primary" id="btnAudExpOk">导出</button></div>
+</div></div>
+
+<!-- ============ 弹窗：标签管理 ============ -->
+<div class="overlay" id="ov-tag"><div class="modal sm" id="m-tag">
+  <div class="modal-head"><div class="mic enc"><svg><use href="#i-tag"/></svg></div><div><h2>标签管理</h2><p id="tagSub">管理当前文件的标签</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="chip-row" id="tagAll" style="margin-bottom:14px"></div>
+    <div style="display:flex;gap:8px"><input class="input" id="inpTag" placeholder="新建标签"><button class="btn" id="btnTagAdd">添加</button></div>
+  </div>
+  <div class="modal-foot"><button class="btn primary" data-close>完成</button></div>
+</div></div>
+
+<!-- ============ 弹窗：文件预览 ============ -->
+<div class="overlay" id="ov-preview"><div class="modal xl" id="m-preview">
+  <div class="modal-head"><div class="mic blue"><svg><use href="#i-eye"/></svg></div><div><h2 id="pvTitle">预览</h2><p id="pvSub"></p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="preview-box" style="height:320px"><svg style="width:52px;height:52px"><use href="#i-img"/></svg><span>解密预览（原型占位）</span></div>
+    <div class="modal-note info"><svg><use href="#i-info"/></svg><span>预览明文仅存内存缓存，锁定或关闭后立即清零。</span></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>关闭</button><button class="btn primary" id="btnPvExport">导出</button></div>
+</div></div>
+
+<!-- ============ 弹窗：紧急销毁（范围选择） ============ -->
+<div class="overlay" id="ov-gwipe"><div class="modal md" id="m-gwipe">
+  <div class="modal-head"><div class="mic danger"><svg><use href="#i-oct"/></svg></div><div><h2>紧急销毁</h2><p>加密擦除 · 销毁后无法恢复</p></div><button class="iconbtn" data-close><svg class="ic"><use href="#i-close"/></svg></button></div>
+  <div class="modal-body">
+    <div class="field"><label>销毁范围</label>
+      <label class="radiocard"><input type="radio" name="gw" checked><span class="rdot"></span><span><b>本机销毁</b><span class="small">销毁本机 MK 与全部密钥槽，按介质兜底覆写</span></span></label>
+      <label class="radiocard"><input type="radio" name="gw"><span class="rdot"></span><span><b>全设备联动销毁</b><span class="small">签发签名指令经 P2P / 中继全量传播，各设备依次擦除</span></span></label>
+    </div>
+    <div class="modal-note danger" style="margin-bottom:14px"><svg><use href="#i-warn"/></svg><span>离线设备无法即时收到指令：指令进入其高优先级信令队列，下次上线后、处理任何其他消息之前执行。对"永不上线"的设备，销毁无法保证。</span></div>
+    <div class="field"><label>输入 <span class="mono">销毁</span> 以确认</label><input class="input" id="inpGwPhrase" placeholder="销毁"></div>
+  </div>
+  <div class="modal-foot"><button class="btn ghost" data-close>取消</button><button class="btn danger" id="btnGwGo" disabled>进入销毁流程</button></div>
+</div></div>
+
+<!-- ============ 全屏：紧急销毁 ============ -->
+<div class="wipefly" id="wipefly">
+  <div class="wic"><svg><use href="#i-oct"/></svg></div>
+  <h2 id="wipeTitle">正在紧急销毁</h2>
+  <div class="wstat" id="wipeStat">销毁密钥槽 MK_wrap_* …</div>
+  <div class="pbar thick"><i id="wipeBar"></i></div>
+  <div class="small t3">加密擦除 · 销毁后无法恢复 · 本操作不可取消</div>
+</div>
+
+<!-- ============ 转场：锁定 ============ -->
+<div class="lockfly" id="lockfly"><div class="dial"><div class="notch"></div><div class="ring"></div><div class="ring2"></div><div class="core"><svg><use href="#i-logo"/></svg></div></div></div>
+
+<!-- ============ 右键菜单 ============ -->
+<div class="ctxmenu" id="ctxMenu"></div>
+
+<!-- ============ Toast ============ -->
+<div class="toasts" id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

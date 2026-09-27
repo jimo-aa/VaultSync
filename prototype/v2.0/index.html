@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark" data-bp="desktop">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VaultSync V2.0 · 桌面端高保真原型</title>
+<meta name="description" content="VaultSync V2.0 桌面端高保真 HTML 原型（纯静态、零依赖、无构建）。全部为 Mock 数据，不含任何真实加密逻辑。">
+<!--
+  设计方案与页面清单依据：
+    docs/v2.0/03-前端设计.md   §2 信息架构与断点 / §3 状态设计 / §4 线框图 / §5 Token V2 / §6 无障碍
+    docs/v2.0/04-前端展示形式.md §2 视图与列表 / §3 可视化 / §4 动效 / §5 通知分级
+    docs/v2.0/05-01…05-06、07、08、12、13 各模块 UI 面
+  约定：二级界面一律居中弹窗（modal），不使用滑入抽屉。
+-->
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/base.css">
+<link rel="stylesheet" href="assets/components.css">
+<link rel="stylesheet" href="assets/views.css">
+</head>
+<body>
+
+<!-- 应用挂载点：锁屏 / 主壳层 / 全屏阻塞页 由 app.js 渲染 -->
+<div id="root"></div>
+
+<!-- Toast 宿主（info 级提示） -->
+<div class="toast-host" aria-live="polite" aria-atomic="false"></div>
+
+<!--
+  经典脚本加载顺序即依赖顺序。
+  刻意不使用 ES Module —— file:// 直接双击打开时模块加载会被浏览器 CORS 策略拦截。
+-->
+<script src="js/core.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/data.js"></script>
+<script src="js/views-vault.js"></script>
+<script src="js/views-sync.js"></script>
+<script src="js/views-security.js"></script>
+<script src="js/views-system.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
