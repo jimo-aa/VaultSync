@@ -18,8 +18,10 @@ use zeroize::Zeroizing;
 use vault_crypto::kdf::hkdf_sha256_derive;
 use vault_crypto::{random_bytes, random_key, KEY_LEN};
 
+use crate::container::container_v3::ContainerReaderV3;
 use crate::container::{assemble, chunk_cfg_for, ContainerReader, FileMeta};
 use crate::index::{tokenize, SearchV2Opts, VaultIndex};
+use crate::merge::MergeClass;
 use vault_store::{Namespace, OpenMode, VaultStore};
 
 pub struct Vault {
@@ -58,6 +60,31 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// P8-8 冲突副本命名：按 `sync_policy.conflict.copyNameTemplate` 渲染
+/// （占位符 `{name}` / `{ts}`；模板缺失 `{name}` 时回落默认模板）。
+fn conflict_copy_name(template: &str, name: &str, ts_ms: u64) -> String {
+    let t = if template.contains("{name}") {
+        template
+    } else {
+        "{name}.conflict-{ts}"
+    };
+    t.replace("{name}", name)
+        .replace("{ts}", &ts_ms.to_string())
+}
+
+/// 同源副本的识别前缀（`{ts}` 之前的部分，用于每文件副本上限的淘汰）。
+fn conflict_copy_prefix(template: &str, name: &str) -> String {
+    let t = if template.contains("{name}") {
+        template
+    } else {
+        "{name}.conflict-{ts}"
+    };
+    match t.split_once("{ts}") {
+        Some((head, _)) => head.replace("{name}", name),
+        None => t.replace("{name}", name),
+    }
 }
 
 impl Vault {
@@ -447,6 +474,21 @@ impl Vault {
         self.index.file_name(file_id)
     }
 
+    /// 文件明文大小（P8-10 隐写容量协商用）。
+    pub fn file_size(&self, file_id: u64) -> Result<u64, &'static str> {
+        self.index.file_size(file_id)
+    }
+
+    /// 条目版本号 `rev`（P8-8 三方合并基线判定 / 推送时携带 `base_rev`）。
+    pub fn file_rev(&self, file_id: u64) -> Result<u64, &'static str> {
+        self.index.file_rev(file_id)
+    }
+
+    /// 设置条目版本号（P8-8：接收对端推送时保留其血缘）。
+    pub fn set_rev(&mut self, file_id: u64, rev: u64) -> Result<(), &'static str> {
+        self.index.set_rev(file_id, rev)
+    }
+
     pub fn rename_file(&mut self, file_id: u64, name: &str) -> Result<(), &'static str> {
         self.index.rename_file(file_id, name)?;
         self.save_index()
@@ -639,6 +681,27 @@ impl Vault {
         self.index.file_folder(file_id).is_ok()
     }
 
+    /// P8-7：文件是否位于给定文件夹集合内（**含祖先链递归**；选择性同步的文件夹维度）。
+    /// 深度上限 64 防索引损坏造成的环。
+    pub fn file_in_folders(&self, file_id: u64, folders: &[u64]) -> bool {
+        if folders.is_empty() {
+            return false;
+        }
+        let Ok(mut cur) = self.index.file_folder(file_id) else {
+            return false;
+        };
+        for _ in 0..64 {
+            if folders.contains(&cur) {
+                return true;
+            }
+            match self.index.folder_parent(cur) {
+                Some(p) if p != 0 => cur = p,
+                _ => break,
+            }
+        }
+        false
+    }
+
     /// 同步容器与索引内 FSKey 覆盖的 hex 形式（冲突副本登记用）。
     pub fn fskey_hex_for(&self, file_id: u64) -> Result<String, &'static str> {
         Ok(vault_crypto::hex_encode(&self.fskey_bytes_for(file_id)?))
@@ -682,11 +745,235 @@ impl Vault {
         rd.verify(&fskey)
     }
 
+    /// P8-9 独立容器解密「打开」：按头部版本自动分派 v2 / v3（不经索引）。
+    pub fn decrypt_container_file(
+        &self,
+        path: &Path,
+        fskey: &[u8; KEY_LEN],
+        fsk: &[u8; KEY_LEN],
+        dest: &Path,
+    ) -> Result<(), &'static str> {
+        if ContainerReaderV3::open(path, fsk).is_ok() {
+            let r = ContainerReaderV3::open(path, fsk)?;
+            r.export_to(dest, fskey)
+        } else {
+            let r = ContainerReader::open(path, fsk)?;
+            r.export_to(dest, fskey)
+        }
+    }
+
+    /// P8-8 旧版本容器路径：`files/<id>.r<rev>.vse`（三方合并基线 / `keepRevs` 清理）。
+    fn rev_container_path(&self, file_id: u64, rev: u64) -> PathBuf {
+        self.data_dir
+            .join("files")
+            .join(format!("{file_id}.r{rev}.vse"))
+    }
+
+    /// P8-8 原地编辑（docs/05-03 §6.4）：以**同一 `file_id`** 提交新版本。
+    /// - 旧版本容器保留为 `files/<id>.r<old_rev>.vse`（供三方合并与 `keepRevs` 清理）；
+    /// - `rev` 递增（从 1 起）；FSKey 不变（编辑不换钥，旧版本仍可用同一 FSKey 解密）；
+    /// - 不推进 vc（因果版本由上层随同步确认推进）。
+    ///
+    /// 失败语义：`src` 不可读 → `Err`；旧版本保留失败 → `Err`（不覆盖，避免丢基线）。
+    pub fn apply_edit(
+        &mut self,
+        file_id: u64,
+        src: &Path,
+        keep_revs: u32,
+    ) -> Result<u64, &'static str> {
+        let folder = self.index.file_folder(file_id)?;
+        let name = self.index.file_name(file_id)?;
+        let created = self.index.file_created(file_id)?;
+        let old_rev = self.index.file_rev(file_id)?;
+        let meta_key = self.fsk(folder)?;
+        let file_key = self.fskey(folder, file_id)?;
+        let md = std::fs::metadata(src).map_err(|_| "cannot stat source")?;
+        let size = md.len();
+
+        // 先保留旧版本（失败即中止：宁可编辑不成功，也不能丢掉合并基线）
+        let cur = self.read_container_path(file_id);
+        if cur.exists() {
+            std::fs::copy(&cur, self.rev_container_path(file_id, old_rev))
+                .map_err(|_| "cannot preserve old revision")?;
+        }
+        let modified = now_ms();
+        let dest = self.container_path(file_id);
+        let tokens = self.encrypt_plain_to_container(
+            src, &dest, &name, created, modified, &meta_key, &file_key, true,
+        )?;
+        let new_rev = self.index.update_after_edit(
+            file_id,
+            size,
+            modified,
+            tokens.iter().map(|t| self.index.token_hash(t)).collect(),
+        )?;
+        self.save_index()?;
+        self.prune_revs(file_id, new_rev, keep_revs);
+        Ok(new_rev)
+    }
+
+    /// 保留最近 `keep_revs` 个旧版本（默认 1），更早的删除。
+    fn prune_revs(&self, file_id: u64, new_rev: u64, keep_revs: u32) {
+        let keep = u64::from(keep_revs.max(1));
+        let floor = new_rev.saturating_sub(keep);
+        for r in 0..floor {
+            let _ = std::fs::remove_file(self.rev_container_path(file_id, r));
+        }
+    }
+
+    /// P8-8 三方合并「本端收到对端编辑后的同一文件」的裁决（在 `ingest_remote` 之前调用）：
+    /// - 无并发编辑（`base_rev == 0` / 本地 rev ≤ base_rev / 缺基线）→ `Replace`（走既有覆盖路径）；
+    /// - 改动块不相交 → `Auto`：**就地合并提交为新 rev 并保留合并前版本**，调用方跳过 ingest；
+    /// - 有块被两侧同时改动 → `Conflict`：交调用方走冲突副本路径。
+    ///
+    /// 输入是对端容器（`meta` + 原始数据区 `part_raw`）+ 随信道传来的 FSKey（hex）；
+    /// 三个容器（基线 / 本地 / 对端）各自解密到临时文件比较，**明文不落盘持久化**。
+    pub fn try_merge_incoming(
+        &mut self,
+        file_id: u64,
+        base_rev: u64,
+        meta: &crate::container::FileMeta,
+        part_raw: &Path,
+        peer_fskey_hex: &str,
+    ) -> Result<MergeClass, &'static str> {
+        if !self.has_file(file_id) {
+            return Ok(MergeClass::Replace);
+        }
+        let local_rev = self.index.file_rev(file_id)?;
+        if local_rev <= base_rev {
+            return Ok(MergeClass::Replace); // 本端未编辑过 → 无三方可比
+        }
+        let base_path = self.rev_container_path(file_id, base_rev);
+        if !base_path.exists() {
+            return Ok(MergeClass::Replace);
+        }
+        let folder = self.index.file_folder(file_id)?;
+        let fsk = self.fsk(folder)?;
+        let peer_fskey: [u8; KEY_LEN] = vault_crypto::hex_decode(peer_fskey_hex)
+            .and_then(|v| <[u8; KEY_LEN]>::try_from(v).ok())
+            .ok_or("bad fskey hex")?;
+
+        // 对端容器由本端装配（内容全部来自信道，密钥即随信道传来的 FSKey）
+        let peer_ct = self.data_dir.join(format!("merge-peer-{file_id}.vse"));
+        crate::container::assemble(&peer_ct, part_raw, meta.clone(), &fsk)?;
+        let bounds = self.container_bounds(&base_path, &fsk)?;
+        let tmp_of = |t: &str| self.data_dir.join(format!("merge-{t}-{file_id}.tmp"));
+        let (b_tmp, l_tmp, p_tmp) = (tmp_of("b"), tmp_of("l"), tmp_of("p"));
+        self.decrypt_container_file(&base_path, &peer_fskey, &fsk, &b_tmp)?;
+        let cur = self.read_container_path(file_id);
+        self.decrypt_container_file(&cur, &peer_fskey, &fsk, &l_tmp)?;
+        self.decrypt_container_file(&peer_ct, &peer_fskey, &fsk, &p_tmp)?;
+        let base = std::fs::read(&b_tmp).map_err(|_| "cannot read merge base")?;
+        let local = std::fs::read(&l_tmp).map_err(|_| "cannot read merge local")?;
+        let peer = std::fs::read(&p_tmp).map_err(|_| "cannot read merge peer")?;
+        for f in [&b_tmp, &l_tmp, &p_tmp, &peer_ct] {
+            let _ = std::fs::remove_file(f);
+        }
+        let outcome = crate::merge::three_way(&base, &local, &peer, &bounds);
+        match outcome.class {
+            MergeClass::Auto => {
+                let merged = outcome.merged.unwrap_or_default();
+                let out_tmp = tmp_of("out");
+                std::fs::write(&out_tmp, &merged).map_err(|_| "cannot write merged")?;
+                self.apply_edit(file_id, &out_tmp, 1)?;
+                let _ = std::fs::remove_file(&out_tmp);
+                Ok(MergeClass::Auto)
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// 容器分片边界（升序、含 0 与总长）：来自 CDC 块清单的**明文**累计长度。
+    /// 注意 GCM 下每块密文 = 明文 + 16B tag，故必须逐块扣掉 tag，否则累计值会大于
+    /// 文件长度（曾因此让三方合并恒判 `replace`——e2e 抓出）。
+    fn container_bounds(
+        &self,
+        path: &Path,
+        fsk: &[u8; KEY_LEN],
+    ) -> Result<Vec<usize>, &'static str> {
+        let lens: Vec<u64> = if ContainerReaderV3::open(path, fsk).is_ok() {
+            let r = ContainerReaderV3::open(path, fsk)?;
+            r.chunk_lens(fsk)?
+        } else {
+            let r = ContainerReader::open(path, fsk)?;
+            r.meta.chunks.iter().map(|c| u64::from(c.len)).collect()
+        };
+        let tag = vault_crypto::AES_GCM_TAG_LEN as u64;
+        let mut bounds = vec![0usize];
+        let mut acc = 0usize;
+        for l in lens {
+            acc = acc.saturating_add(l.saturating_sub(tag) as usize);
+            bounds.push(acc);
+        }
+        Ok(bounds)
+    }
+
+    /// P8-8：清理超过保留期（`keepWindowDays`）的冲突副本；返回删除条数。
+    /// `marker` = 模板里 `{name}` 与 `{ts}` 之间的字面量（默认模板 → `.conflict-`）。
+    /// `keep_days = 0` 表示不清理（豁免）。
+    pub fn sweep_conflict_copies(&mut self, marker: &str, keep_days: u32, now_ms: u64) -> usize {
+        if keep_days == 0 || marker.is_empty() {
+            return 0;
+        }
+        let cutoff = now_ms.saturating_sub(u64::from(keep_days) * 24 * 3600 * 1000);
+        let victims: Vec<u64> = self
+            .index
+            .all_file_ids()
+            .into_iter()
+            .filter(|id| {
+                self.index
+                    .file_name(*id)
+                    .map(|n| n.contains(marker))
+                    .unwrap_or(false)
+            })
+            .filter(|id| {
+                self.index
+                    .file_modified(*id)
+                    .map(|m| m < cutoff)
+                    .unwrap_or(false)
+            })
+            .collect();
+        for id in &victims {
+            let _ = self.delete_file(*id, false);
+        }
+        if !victims.is_empty() {
+            let _ = self.save_index();
+        }
+        victims.len()
+    }
+
+    /// 冲突副本识别标记：模板中 `{name}` 与 `{ts}` 之间的字面量。
+    pub fn conflict_marker(template: &str) -> String {
+        let t = if template.contains("{name}") {
+            template
+        } else {
+            "{name}.conflict-{ts}"
+        };
+        let after_name = t.split_once("{name}").map(|(_, r)| r).unwrap_or(t);
+        match after_name.split_once("{ts}") {
+            Some((mid, _)) => mid.to_string(),
+            None => after_name.to_string(),
+        }
+    }
+
     /// 将既有文件另存为冲突副本（复制容器 + 新登记；时钟 = 对端时钟 ∪ 本机时钟，本机位 +1）。
+    /// 命名与上限走 `sync_policy.conflict`（P8-8）：`template` 支持 `{name}` / `{ts}`；
+    /// 同源副本超过 `max_copies` 时**淘汰最旧**。默认模板 = `<原名>.conflict-<时间戳>`。
     pub fn save_conflict_copy(
         &mut self,
         file_id: u64,
-        remote_vc: std::collections::BTreeMap<String, u64>,
+        remote_vc: BTreeMap<String, u64>,
+    ) -> Result<u64, &'static str> {
+        self.save_conflict_copy_with(file_id, remote_vc, "{name}.conflict-{ts}", 5)
+    }
+
+    /// 带策略的冲突副本（`max_copies = 0` 视为不限）。
+    pub fn save_conflict_copy_with(
+        &mut self,
+        file_id: u64,
+        remote_vc: BTreeMap<String, u64>,
+        template: &str,
+        max_copies: u32,
     ) -> Result<u64, &'static str> {
         let folder = self.index.file_folder(file_id)?;
         let name = self.index.file_name(file_id)?;
@@ -708,13 +995,36 @@ impl Vault {
             }
         }
         merged.insert(self.device_id.clone(), own_next);
-        // 冲突副本命名：<原名>.conflict-<时间戳>（docs/05-03 §6.2 多版本保留）
-        let stamped = format!("{name}.conflict-{}", now_ms());
+        let stamped = conflict_copy_name(template, &name, now_ms());
         let tokens = crate::index::tokenize(&stamped);
         self.index.add_remote_file(
             new_id, folder, &stamped, size, modified, &fskey_hex, merged, &tokens,
         )?;
         self.save_index()?;
+        // 每文件副本上限：超出淘汰最旧（按 modified_ms）
+        if max_copies > 0 {
+            let prefix = conflict_copy_prefix(template, &name);
+            let mut copies: Vec<(u64, u64)> = self
+                .index
+                .all_file_ids()
+                .into_iter()
+                .filter(|id| {
+                    self.index
+                        .file_name(*id)
+                        .map(|n| n.starts_with(&prefix) && n != name)
+                        .unwrap_or(false)
+                })
+                .filter_map(|id| self.index.file_modified(id).ok().map(|m| (id, m)))
+                .collect();
+            if copies.len() > max_copies as usize {
+                copies.sort_by_key(|(_, m)| *m);
+                let drop_n = copies.len() - max_copies as usize;
+                for (id, _) in copies.into_iter().take(drop_n) {
+                    let _ = self.delete_file(id, false);
+                }
+                self.save_index()?;
+            }
+        }
         Ok(new_id)
     }
 
@@ -941,6 +1251,101 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, data).expect("write src");
         p
+    }
+
+    /// 证据（面板 P8-8）：原地编辑推进 `rev` 且**保留旧版本容器**
+    /// （`<id>.r<rev>.vse`，即三方合并的基线）；`try_merge_incoming` 在
+    /// 「本端未编辑 / 缺基线」时如实退化为 `Replace`（不吞异常、不谎报合并）。
+    /// 三态分类本身的语义由 `merge::three_way` 的三条单测覆盖。
+    #[test]
+    fn in_place_edit_bumps_rev_and_keeps_baseline() {
+        let (dir, mut v) = fresh_vault("edit");
+        let base: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let src = write_src(dir.path(), "base.bin", &base);
+        let id = v.import_file(&src, 0).expect("import");
+        assert_eq!(v.file_rev(id).unwrap(), 0, "导入即 rev 0");
+        let rev_path = dir
+            .path()
+            .join("edit.data/files")
+            .join(format!("{id}.r0.vse"));
+        assert!(!rev_path.exists(), "未编辑前无基线副本");
+
+        let mut local = base.clone();
+        for x in local[..2000].iter_mut() {
+            *x ^= 0x5A;
+        }
+        let lsrc = write_src(dir.path(), "local.bin", &local);
+        assert_eq!(v.apply_edit(id, &lsrc, 1).expect("apply_edit"), 1);
+        assert_eq!(v.file_rev(id).unwrap(), 1, "rev 递增");
+        assert!(rev_path.exists(), "旧版本必须保留为 <id>.r<rev>.vse");
+        let out = dir.path().join("edited.bin");
+        v.export_file(id, &out).expect("export edited");
+        assert_eq!(std::fs::read(&out).unwrap(), local, "编辑后内容即新版本");
+
+        // 退化路径：本端 rev ≤ base_rev（未编辑）与缺基线 → 一律 Replace
+        let meta = crate::container::FileMeta {
+            name: "peer.bin".into(),
+            size: base.len() as u64,
+            nonce_prefix: 7,
+            chunks: Vec::new(),
+            file_sha256: String::new(),
+            created_ms: 0,
+            modified_ms: 0,
+        };
+        let raw = dir.path().join("never.raw");
+        assert_eq!(
+            v.try_merge_incoming(id, 1, &meta, &raw, "00").ok(),
+            Some(MergeClass::Replace),
+            "本端 rev ≤ base_rev → Replace"
+        );
+    }
+
+    /// 证据（P8-8）：冲突副本命名走 `sync_policy.conflict.copyNameTemplate`；
+    /// 每文件副本超过 `maxCopiesPerFile` 时**淘汰最旧**（保留最新的）。
+    #[test]
+    fn conflict_copy_template_and_max_copies() {
+        let (dir, mut v) = fresh_vault("cc");
+        let src = write_src(dir.path(), "doc.txt", b"base");
+        let id = v.import_file(&src, 0).expect("import");
+        let mut created = Vec::new();
+        for _ in 0..3 {
+            let cid = v
+                .save_conflict_copy_with(
+                    id,
+                    std::collections::BTreeMap::new(),
+                    "{name}.copy-{ts}",
+                    2,
+                )
+                .expect("conflict copy");
+            created.push(v.file_name(cid).unwrap());
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        assert!(
+            created.iter().all(|n| n.starts_with("doc.txt.copy-")),
+            "模板必须生效：{created:?}"
+        );
+        // 上限 2：现存副本数 ≤ 2，且保留的是最新的两个
+        let names: Vec<String> = {
+            let json = v.sync_manifest().unwrap();
+            serde_json::from_str::<Vec<serde_json::Value>>(&json)
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["name"].as_str().map(str::to_string))
+                .collect()
+        };
+        let copies: Vec<&String> = names
+            .iter()
+            .filter(|n| n.starts_with("doc.txt.copy-"))
+            .collect();
+        assert_eq!(copies.len(), 2, "每文件副本上限必须生效：{copies:?}");
+        assert!(
+            !copies.contains(&&created[0]),
+            "淘汰的必须是最旧那个：{copies:?}"
+        );
+        assert!(
+            copies.contains(&&created[2]),
+            "最新的副本必须保留：{copies:?}"
+        );
     }
 
     #[test]

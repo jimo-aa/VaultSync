@@ -677,6 +677,7 @@ mod tests {
             stego_enabled: AtomicBool::new(false),
             readonly: AtomicBool::new(false),
             maintenance: AtomicBool::new(false),
+            sync_ctx: Mutex::new(vault_p2p::policy::SyncContext::default()),
             lease: Mutex::new(None),
         };
         LegacyVault {

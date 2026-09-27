@@ -126,6 +126,24 @@ pub fn local_candidates(interfaces: &[(String, IpAddr)]) -> Vec<IpAddr> {
     lan
 }
 
+/// 枚举真实网卡并给出本机候选（P8-4；`if-addrs` 失败 → 空列表，调用方如实降级）。
+///
+/// 与 [`local_candidates`] 的分工：本函数只做「接口 → `(name, ip)`」的取数，
+/// 分类 / 虚拟接口排除 / 上限 8 全部由 `local_candidates` 决定（便于单测）。
+pub fn local_candidates_now() -> Vec<IpAddr> {
+    let Ok(ifs) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let pairs: Vec<(String, IpAddr)> = ifs
+        .into_iter()
+        .map(|i| match i.addr {
+            if_addrs::IfAddr::V4(v4) => (i.name.clone(), IpAddr::V4(v4.ip)),
+            if_addrs::IfAddr::V6(v6) => (i.name.clone(), IpAddr::V6(v6.ip)),
+        })
+        .collect();
+    local_candidates(&pairs)
+}
+
 /// 发现候选（浏览结果条目）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Discovered {

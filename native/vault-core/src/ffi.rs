@@ -864,6 +864,13 @@ pub unsafe extern "C" fn vault_core_stego_set_enabled(handle: *mut Session, on: 
     session
         .stego_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    // P8-10：开关落盘 `settings.enc`（VSSG 族之外的单文件 AEAD，key HKDF(MK,"settings")）——
+    // 解锁后引擎自读，不再依赖 UI 每次同步（docs/05-05 §5.3）。**读改写**：
+    // 同一载体还承载中继候选等其它设置（P8-5 收尾），整存整取会抹掉它们。
+    let mut s = crate::settings::Settings::load(&session.data_dir(), &session.mk);
+    s.schema = 1;
+    s.stego_enabled = enabled;
+    let persisted = s.save(&session.data_dir(), &session.mk).is_ok();
     session.audit(
         "security",
         if enabled {
@@ -872,7 +879,12 @@ pub unsafe extern "C" fn vault_core_stego_set_enabled(handle: *mut Session, on: 
             "stego disable"
         },
     );
-    OK
+    // 落盘失败如实报 IO（内存开关已改：本次会话仍生效，重启后丢失）
+    if persisted {
+        OK
+    } else {
+        ERR_IO
+    }
 }
 
 /// 图片容量（可嵌入载荷字节数，已扣除长度前缀）。失败返回负错误码。
@@ -1011,8 +1023,446 @@ pub unsafe extern "C" fn vault_core_stego_extract(
     }
 }
 
-// ==== P5-5 全设备联动销毁：离线设备高优先级信令队列（docs/05-06 §5.1）====
+/// P8-8：原地编辑——以**同一 `file_id`** 提交新版本（docs/05-03 §6.4）。
+/// `opts_json` = `{"keepRevs":1}`（默认 1 = 只保留上一版）。旧版本容器保留为
+/// `files/<id>.r<rev>.vse`（三方合并基线 + `keepRevs` 清理）。
+/// 返回 0；7 = 参数（含 opts 解析失败）；3 = 源不可读 / IO；9 = 只读；10 = 维护态。
+/// 新 `rev` 经 `vault_list` / 同步清单的 `rev` 字段可见。
+///
+/// # Safety
+/// `handle` 有效；`src` 合法路径；`opts_json` 可为 null。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_vault_apply_edit(
+    handle: *mut Session,
+    file_id: i64,
+    src: *const c_char,
+    opts_json: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        if session.is_maintenance() {
+            return Err(ERR_MAINTENANCE);
+        }
+        let src = unsafe { cstr(src) }?;
+        let keep = if opts_json.is_null() {
+            1u32
+        } else {
+            let opts: serde_json::Value =
+                serde_json::from_str(unsafe { cstr(opts_json) }?).map_err(|_| ERR_INVALID_ARG)?;
+            opts["keepRevs"].as_u64().unwrap_or(1).min(64) as u32
+        };
+        let rev = session
+            .with_vault(|v| {
+                v.apply_edit(file_id as u64, std::path::Path::new(src), keep)
+                    .map_err(CoreError::Internal)
+            })
+            .map_err(|e| map_err(&e))?;
+        session.audit("vault", &format!("apply_edit id={file_id} rev={rev}"));
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
 
+// ==== P8-10 隐写跨图分割与容量协商（docs/05-05 §三）====
+
+/// 容量协商的纯计算部分（与 FFI 解耦，便于单测）。
+/// `opts`：`{fillRatio, disperse, shuffle, codec, maxBytes}`。
+fn stego_plan_value(
+    file_len: u64,
+    name: &str,
+    images: &[String],
+    opts: &serde_json::Value,
+) -> serde_json::Value {
+    let fill = opts["fillRatio"].as_f64().unwrap_or(0.8).clamp(0.05, 1.0);
+    let max_bytes = opts["maxBytes"]
+        .as_u64()
+        .unwrap_or(vault_stego::multi::DEFAULT_MAX_BYTES);
+    let dispersed = opts["disperse"].as_bool().unwrap_or(true);
+    let mut notes: Vec<String> = Vec::new();
+    if opts["codec"].as_str() == Some("auto") {
+        // JPEG 鲁棒路线不做：`auto` 一律解析为 png 并如实标注（05-05 §3.4）
+        notes.push("codec_fallback=png".into());
+    }
+    if !dispersed {
+        notes.push("disperse=off".into());
+    }
+    if opts["shuffle"].as_bool().unwrap_or(false) {
+        notes.push("shuffle=on".into());
+    }
+    if file_len > max_bytes {
+        notes.push(format!("file exceeds maxBytes({max_bytes})"));
+    }
+
+    let first_overhead = (vault_stego::multi::SHARD_HEADER_LEN + 2 + name.len() + 32) as u64;
+    let mut per = Vec::new();
+    let mut net: Vec<u64> = Vec::new();
+    let mut read_error = false;
+    for (i, p) in images.iter().enumerate() {
+        match std::fs::read(p)
+            .ok()
+            .and_then(|b| vault_stego::png_size(&b).ok())
+        {
+            Some((w, h)) => {
+                let cap = vault_stego::capacity_bytes(w, h) as u64;
+                let usable = ((cap as f64) * fill).floor() as u64;
+                let overhead = if i == 0 {
+                    first_overhead
+                } else {
+                    vault_stego::multi::SHARD_HEADER_LEN as u64
+                };
+                let shard_bytes = usable.saturating_sub(overhead);
+                net.push(shard_bytes);
+                per.push(serde_json::json!({
+                    "index": i, "width": w, "height": h,
+                    "capacity": cap, "usable": usable, "shardBytes": shard_bytes,
+                }));
+            }
+            None => {
+                read_error = true;
+                notes.push(format!("image {i} unreadable"));
+                per.push(serde_json::json!({"index": i, "error": "unreadable image"}));
+            }
+        }
+    }
+    // 最少图数：贪心前缀和；已给图不够时按平均净容量外推「还需要几张」
+    let mut acc = 0u64;
+    let mut needed = 0usize;
+    for n in &net {
+        acc += n;
+        needed += 1;
+        if acc >= file_len {
+            break;
+        }
+    }
+    if acc < file_len && !net.is_empty() {
+        let per = net.iter().sum::<u64>() / (net.len() as u64);
+        if per > 0 {
+            needed += (file_len - acc).div_ceil(per) as usize;
+        }
+    }
+    let given = images.len();
+    let fits = !read_error && file_len <= max_bytes && acc >= file_len;
+    let shortfall = file_len.saturating_sub(acc);
+    serde_json::json!({
+        "schema": 1,
+        "fileLen": file_len,
+        "imagesGiven": given,
+        "imagesNeeded": needed,
+        "fits": fits,
+        "shortfallBytes": shortfall,
+        "fillRatio": fill,
+        "disperse": dispersed,
+        "perImage": per,
+        "notes": notes,
+    })
+}
+
+/// `embed_multi` 的输出路径（**不覆盖源图**：同目录 `<stem>.stego.png`）。
+fn stego_out_path(p: &str) -> String {
+    let path = std::path::Path::new(p);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    dir.join(format!("{stem}.stego.png"))
+        .to_string_lossy()
+        .to_string()
+}
+
+/// P8-10：隐写容量协商（**容量的唯一真值来源**，结果不缓存；docs/05-05 §3.3）。
+/// `images_json` = 图片路径数组；`opts_json` = `{fillRatio, disperse, shuffle, codec, maxBytes}`；
+/// `out_json` = `{schema,fileLen,imagesGiven,imagesNeeded,fits,shortfallBytes,perImage[],notes[]}`。
+/// 返回 0；7 = 未启用 / 参数非法（含空图集）；3 = 文件信息读取失败。
+/// `fits=false` 是**正常结果**（如实拒绝），不是错误码。
+///
+/// # Safety
+/// `handle` 有效；`images_json`、`out_json` 非空；`opts_json` 可为 null。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_plan(
+    handle: *mut Session,
+    file_id: i64,
+    images_json: *const c_char,
+    opts_json: *const c_char,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    if handle.is_null() || images_json.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        if !session
+            .stego_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ERR_INVALID_ARG);
+        }
+        let images: Vec<String> =
+            serde_json::from_str(unsafe { cstr(images_json) }?).map_err(|_| ERR_INVALID_ARG)?;
+        if images.is_empty() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let opts: serde_json::Value = if opts_json.is_null() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(unsafe { cstr(opts_json) }?).map_err(|_| ERR_INVALID_ARG)?
+        };
+        let file_len = session
+            .with_vault(|v| v.file_size(file_id as u64).map_err(CoreError::Internal))
+            .map_err(|e| map_err(&e))?;
+        let name = session
+            .with_vault(|v| v.file_name(file_id as u64).map_err(CoreError::Internal))
+            .unwrap_or_else(|_| format!("file-{file_id}"));
+        Ok(stego_plan_value(file_len, &name, &images, &opts))
+    };
+    match run() {
+        Ok(v) => {
+            let Ok(c) = CString::new(v.to_string()) else {
+                return ERR_INTERNAL;
+            };
+            unsafe { out_json.write(c.into_raw()) };
+            OK
+        }
+        Err(e) => e,
+    }
+}
+
+/// P8-10：跨图嵌入（每图一片；bit1 单图模式即 <1 图> = 单图）。
+/// 图片**不覆盖源文件**，产出同目录 `<stem>.stego.png`（`out_json.images[]` 给出实际路径）。
+/// 走后台任务（`out_task_id`）：`task_cancel` 在图片边界收敛为 `12`。
+/// `out_json` 立即返回 `{taskId, images:[…]}`（产物路径可预知）。
+///
+/// # Safety
+/// `handle` 有效；`images_json`、`out_json` 非空；`opts_json` 可为 null；`out_task_id` 可为 null。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_embed_multi(
+    handle: *mut Session,
+    file_id: i64,
+    images_json: *const c_char,
+    opts_json: *const c_char,
+    out_json: *mut *mut c_char,
+    out_task_id: *mut u32,
+) -> i32 {
+    if handle.is_null() || images_json.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let run = || -> Result<(serde_json::Value, u32), i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        if session.is_maintenance() {
+            return Err(ERR_MAINTENANCE);
+        }
+        if !session
+            .stego_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ERR_INVALID_ARG);
+        }
+        let images: Vec<String> =
+            serde_json::from_str(unsafe { cstr(images_json) }?).map_err(|_| ERR_INVALID_ARG)?;
+        if images.is_empty() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let opts: serde_json::Value = if opts_json.is_null() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(unsafe { cstr(opts_json) }?).map_err(|_| ERR_INVALID_ARG)?
+        };
+        let dispersed = opts["disperse"].as_bool().unwrap_or(true);
+        let max_bytes = opts["maxBytes"]
+            .as_u64()
+            .unwrap_or(vault_stego::multi::DEFAULT_MAX_BYTES);
+
+        let (plain, name) = read_plain_for_stego(session, file_id)?;
+        if plain.len() as u64 > max_bytes {
+            return Err(ERR_INVALID_ARG);
+        }
+        // 逐图净容量（与 `_plan` 同口径：唯一真值来源是同一段计算）
+        let plan = stego_plan_value(plain.len() as u64, &name, &images, &opts);
+        if plan["fits"] != serde_json::json!(true) {
+            return Err(ERR_INVALID_ARG);
+        }
+        // 逐图净容量（与 `_plan` 同口径：唯一真值来源是同一段计算）；
+        // `split_and_encode` 收到的是**可用容量**（它自己再扣分片头开销）
+        let mut caps: Vec<usize> = Vec::new();
+        for entry in plan["perImage"].as_array().into_iter().flatten() {
+            let usable = entry["usable"].as_u64().unwrap_or(0).min(usize::MAX as u64);
+            caps.push(usable as usize);
+        }
+        let frames = vault_stego::multi::split_and_encode(&name, &plain, &caps, dispersed)
+            .map_err(|_| ERR_INVALID_ARG)?;
+        let outs: Vec<String> = images.iter().map(|p| stego_out_path(p)).collect();
+        let key = session.stego_key();
+
+        // 后台任务：逐图加密 + LSB 嵌入（图片边界检查点 → 可 task_cancel）
+        let images_moved = images.clone();
+        let outs_moved = outs.clone();
+        let task_id = crate::contract::spawn_task("stego", "interactive", move |ctl, _p| {
+            for (i, frame) in frames.iter().enumerate() {
+                if ctl.checkpoint().is_err() {
+                    return Err("cancelled".to_string());
+                }
+                let nonce_v = vault_crypto::random::random_bytes(vault_crypto::AES_GCM_NONCE_LEN);
+                let mut nonce = [0u8; vault_crypto::AES_GCM_NONCE_LEN];
+                nonce.copy_from_slice(&nonce_v);
+                let sealed = vault_crypto::aead::aead_encrypt(&key, &nonce, frame)
+                    .map_err(|e| e.to_string())?;
+                let image = std::fs::read(&images_moved[i]).map_err(|e| e.to_string())?;
+                let out = vault_stego::embed_spread(&image, &sealed, dispersed)
+                    .map_err(|e| e.to_string())?;
+                std::fs::write(&outs_moved[i], out).map_err(|e| e.to_string())?;
+            }
+            Ok(serde_json::json!({"images": outs_moved}))
+        });
+        session.audit(
+            "security",
+            &format!("stego embed multi id={file_id} shards={}", images.len()),
+        );
+        Ok((
+            serde_json::json!({"taskId": task_id, "images": outs, "shards": images.len()}),
+            task_id,
+        ))
+    };
+    match run() {
+        Ok((v, id)) => {
+            let Ok(c) = CString::new(v.to_string()) else {
+                return ERR_INTERNAL;
+            };
+            unsafe { out_json.write(c.into_raw()) };
+            if !out_task_id.is_null() {
+                unsafe { out_task_id.write(id) };
+            }
+            OK
+        }
+        Err(e) => e,
+    }
+}
+
+/// P8-10：跨图提取（乱序可、重复索引拒绝、缺片报 `missing[]`）。
+/// V1.0 单图载荷（首字节 `0x00`）仍可提取（**单向兼容**）。
+/// `out_json` = `{name, size, shards}`；失败时写 `{"error":…,"missing":[…]}`（若有结构信息）并返回码。
+/// **终验在写盘之前完成**，故不存在「半成品目标文件」需要删除（比「先写后删」更强）。
+///
+/// # Safety
+/// `handle` 有效；`images_json`、`dest`、`out_json` 非空。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_stego_extract_multi(
+    handle: *mut Session,
+    images_json: *const c_char,
+    dest: *const c_char,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    if handle.is_null() || images_json.is_null() || dest.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARG;
+    }
+    let mut diag: Option<serde_json::Value> = None;
+    let mut run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        if !session
+            .stego_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ERR_INVALID_ARG);
+        }
+        let images: Vec<String> =
+            serde_json::from_str(unsafe { cstr(images_json) }?).map_err(|_| ERR_INVALID_ARG)?;
+        if images.is_empty() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let dest = unsafe { cstr(dest) }?;
+        let key = session.stego_key();
+        let mut shards: Vec<vault_stego::multi::Shard> = Vec::new();
+        for p in &images {
+            let image = std::fs::read(p).map_err(|_| ERR_IO)?;
+            // V2 分片载荷恒为分散布局；解不开则按 V1 单图载荷处理
+            let sealed = vault_stego::extract_spread(&image, true).map_err(|_| ERR_FORMAT)?;
+            let plain =
+                vault_crypto::aead::aead_decrypt(&key, &sealed).ok_or(ERR_WRONG_PASSWORD)?;
+            match plain.first() {
+                Some(&vault_stego::multi::PAYLOAD_VER_V2) => {
+                    let s = vault_stego::multi::parse_shard(&plain, u64::MAX)
+                        .map_err(|_| ERR_FORMAT)?;
+                    shards.push(s);
+                }
+                Some(&0x00) => {
+                    // V1 布局：[u32 name_len][name][data]（单图，单向兼容）
+                    if plain.len() < 4 {
+                        return Err(ERR_FORMAT);
+                    }
+                    let name_len =
+                        u32::from_be_bytes(plain[0..4].try_into().map_err(|_| ERR_FORMAT)?)
+                            as usize;
+                    if plain.len() < 4 + name_len {
+                        return Err(ERR_FORMAT);
+                    }
+                    let name = String::from_utf8_lossy(&plain[4..4 + name_len]).to_string();
+                    let data = &plain[4 + name_len..];
+                    std::fs::write(dest, data).map_err(|_| ERR_IO)?;
+                    session.audit("security", "stego extract (v1 payload)");
+                    return Ok(serde_json::json!({
+                        "name": name, "size": data.len(), "shards": 1,
+                        "payloadVer": 1,
+                    }));
+                }
+                _ => return Err(ERR_FORMAT),
+            }
+        }
+        let total = shards.first().map(|s| s.total).unwrap_or(0);
+        match vault_stego::multi::reassemble(&shards) {
+            Ok((hdr, data)) => {
+                std::fs::write(dest, &data).map_err(|_| ERR_IO)?;
+                session.audit("security", "stego extract multi");
+                Ok(serde_json::json!({
+                    "name": hdr.name, "size": data.len(), "shards": total,
+                    "payloadVer": 2,
+                }))
+            }
+            Err(e) => {
+                let mut v = serde_json::json!({"error": e.as_str()});
+                if let vault_stego::multi::ReassembleError::Missing(m) = &e {
+                    v["missing"] = serde_json::json!(m);
+                }
+                diag = Some(v);
+                Err(ERR_FORMAT)
+            }
+        }
+    };
+    match run() {
+        Ok(v) => {
+            let Ok(c) = CString::new(v.to_string()) else {
+                return ERR_INTERNAL;
+            };
+            unsafe { out_json.write(c.into_raw()) };
+            OK
+        }
+        Err(e) => {
+            // 结构化失败（缺片 / 重复）把诊断写进 out_json，便于 UI 如实呈现
+            if let Some(d) = diag {
+                if let Ok(c) = CString::new(d.to_string()) {
+                    unsafe { out_json.write(c.into_raw()) };
+                }
+            }
+            e
+        }
+    }
+}
+
+/// 导出保险箱文件明文 + 原文件名（隐写入口共用；临时明文即读即删）。
+fn read_plain_for_stego(session: &Session, file_id: i64) -> Result<(Vec<u8>, String), i32> {
+    let tmp = session.data_dir().join(format!("stego-{file_id}.tmp"));
+    session
+        .with_vault(|v| {
+            v.export_file(file_id as u64, &tmp)
+                .map_err(CoreError::Internal)
+        })
+        .map_err(|e| map_err(&e))?;
+    let plain = std::fs::read(&tmp).map_err(|_| ERR_IO)?;
+    let _ = std::fs::remove_file(&tmp);
+    let name = session
+        .with_vault(|v| v.file_name(file_id as u64).map_err(CoreError::Internal))
+        .unwrap_or_else(|_| format!("file-{file_id}"));
+    Ok((plain, name))
+}
+
+// ==== P5-5 全设备联动销毁：离线设备高优先级信令队列（docs/05-06 §5.1）====
 /// 为**每一个**已配对设备各签发一条销毁指令并入队（离线设备下次上线时投递）。
 /// 返回 JSON {"queued":N,"peers":["vd-…"]}。
 ///
@@ -1485,7 +1935,10 @@ pub unsafe extern "C" fn vault_core_p2p_sync(
         let session = unsafe { &*handle };
         let a = unsafe { cstr(addr) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
-        engine.sync_with(a).map_err(|_| ERR_IO)
+        apply_sync_policy(session, &engine);
+        let v = engine.sync_with(a).map_err(|_| ERR_IO)?;
+        publish_transfer_queue("done", 0, Some(&engine));
+        Ok(v)
     };
     match run() {
         Ok(v) => json_out(v),
@@ -1517,6 +1970,8 @@ pub unsafe extern "C" fn vault_core_p2p_sync_task(
         let session = unsafe { &*handle };
         let a = unsafe { cstr(addr) }?.to_string();
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        apply_sync_policy(session, &engine);
+        let eng_task = std::sync::Arc::clone(&engine);
         let id = crate::contract::spawn_task("sync", "background", move |ctl, _progress| {
             // 桥接注册表控制面 → 引擎文件/块检查点（task_pause/cancel 即时生效）
             let sync_ctl = vault_p2p::engine::SyncCtl {
@@ -1524,11 +1979,15 @@ pub unsafe extern "C" fn vault_core_p2p_sync_task(
                 pause: ctl.pause_flag(),
                 gate: ctl.gate(),
             };
-            engine.set_sync_ctl(Some(sync_ctl));
-            let result = engine.sync_with(&a);
-            engine.set_sync_ctl(None);
+            eng_task.set_sync_ctl(Some(sync_ctl));
+            let result = eng_task.sync_with(&a);
+            eng_task.set_sync_ctl(None);
+            // P8-2/P8-7：完成事件（含被跳过条目）
+            publish_transfer_queue("done", 0, Some(&eng_task));
             result
         });
+        // P8-2：入队事件（TRANSFER_QUEUE(11)）
+        publish_transfer_queue("queued", id, Some(&engine));
         Ok(id)
     };
     match run() {
@@ -1542,24 +2001,232 @@ pub unsafe extern "C" fn vault_core_p2p_sync_task(
     }
 }
 
-/// 发起一次经中继的增量同步（发起端）。返回摘要 JSON。
+/// P8-7：选择性同步策略读取（`sync-policy.enc`）。返回 JSON（`sync_policy` 载荷
+/// + `fromDefault`：读取失败/缺失 → 默认全同步并如实置真）。
 ///
 /// # Safety
-/// `handle` 有效；`relay`、`room` 合法。
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_sync_policy_get(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let (p, from_default) = crate::settings::SyncPolicy::load(&session.data_dir(), &session.mk);
+        let mut v = serde_json::to_value(&p).map_err(|_| ERR_INTERNAL)?;
+        if let Some(o) = v.as_object_mut() {
+            o.insert("fromDefault".into(), serde_json::json!(from_default));
+        }
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// P8-7：写入选择性同步策略。0 = OK；7 = 非法（**原子拒绝**，旧策略不受影响）；
+/// 9 = 只读降级；10 = 维护态（策略属业务写入）；3 = 落盘失败。
+/// 成功即注入已创建的 P2P 引擎（下一次同步立即生效）并记审计 `sync.policy`。
+///
+/// # Safety
+/// `handle` 有效；`json` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_sync_policy_set(
+    handle: *mut Session,
+    json: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        if session.is_maintenance() {
+            return Err(ERR_MAINTENANCE);
+        }
+        let body = unsafe { cstr(json) }?;
+        let p: crate::settings::SyncPolicy =
+            serde_json::from_str(body).map_err(|_| ERR_INVALID_ARG)?;
+        p.validate().map_err(|_| ERR_INVALID_ARG)?;
+        p.save(&session.data_dir(), &session.mk)
+            .map_err(|_| ERR_IO)?;
+        session.audit("sync", "policy updated");
+        if let Some(e) = session
+            .p2p
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            e.set_sync_filter(p.to_engine_filter());
+        }
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// P8-7：外壳上报同步上下文（时段 / 当前网络类型），供引擎的第二处生效点复核。
+/// JSON `{"inWindow":true,"netType":"wifi"}`；未知 netType 一律按「未上报」放行。
+/// 0 = OK；7 = 参数非法。
+///
+/// # Safety
+/// `handle` 有效；`json` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_set_sync_context(
+    handle: *mut Session,
+    json: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        let session = unsafe { &*handle };
+        let body = unsafe { cstr(json) }?;
+        let v: serde_json::Value = serde_json::from_str(body).map_err(|_| ERR_INVALID_ARG)?;
+        let ctx = vault_p2p::policy::SyncContext {
+            in_window: v["inWindow"].as_bool().unwrap_or(true),
+            net_type: v["netType"].as_str().unwrap_or("").to_string(),
+        };
+        *session.sync_ctx.lock().unwrap_or_else(|e| e.into_inner()) = ctx.clone();
+        if let Some(e) = session
+            .p2p
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            e.set_sync_context(ctx);
+        }
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// P8-7/P8-8：把策略与上下文注入引擎（每次同步前调用——策略改动无需重建引擎），
+/// 并按 `conflict.keepWindowDays` 顺带清理超期冲突副本。
+fn apply_sync_policy(session: &Session, engine: &vault_p2p::P2pEngine) {
+    let (p, _from_default) = crate::settings::SyncPolicy::load(&session.data_dir(), &session.mk);
+    engine.set_sync_filter(p.to_engine_filter());
+    let ctx = session
+        .sync_ctx
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    engine.set_sync_context(ctx);
+    let _ = engine.sweep_expired_conflicts(p.conflict.keep_window_days);
+}
+
+/// P8-2/P8-7：传输队列事件（`TRANSFER_QUEUE`(11)）——排队/完成计数 + 被跳过条目。
+fn publish_transfer_queue(phase: &str, task_id: u32, engine: Option<&vault_p2p::P2pEngine>) {
+    let skipped = engine.map(|e| e.skipped()).unwrap_or(serde_json::json!([]));
+    let payload = match phase {
+        "queued" => serde_json::json!({"phase": "queued", "queued": 1, "running": 0, "done": 0}),
+        _ => {
+            serde_json::json!({"phase": "done", "queued": 0, "running": 0, "done": 1, "skipped": skipped})
+        }
+    };
+    crate::contract::publish(crate::contract::EV_TRANSFER_QUEUE, task_id, payload);
+}
+
+/// 发起一次经中继的增量同步（发起端，P8-5 VSR2）。返回摘要 JSON。
+/// 失败：7 = 参数（房间名 / token 不合规，本地前置拦截）；3 = 网络 / 鉴权
+/// （中继 R 码已映射为本机码，可读诊断进引擎事件日志，**不把 R 码原样上抛**）；
+/// 13 = 中继受限 / 不可用——同时发布 `PATH_DEGRADED`(13) 契约事件
+/// （reason ∈ relay_limit | relay_unavailable，docs/08 §3.4 映射纪律）。
+///
+/// # Safety
+/// `handle` 有效；`relay`、`room`、`token` 合法 UTF-8。
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_p2p_sync_relay(
     handle: *mut Session,
     relay: *const c_char,
     room: *const c_char,
+    token: *const c_char,
 ) -> *mut c_char {
     let run = || -> Result<serde_json::Value, i32> {
         unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let r = unsafe { cstr(relay) }?;
         let room = unsafe { cstr(room) }?;
+        let token = unsafe { cstr(token) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
-        let v = engine.sync_via_relay(r, room).map_err(|_| ERR_IO)?;
+        apply_sync_policy(session, &engine);
+        let v = engine.sync_via_relay(r, room, token).map_err(|f| {
+            if let Some(reason) = f.degrade_reason {
+                crate::contract::publish(
+                    crate::contract::EV_PATH_DEGRADED,
+                    0,
+                    serde_json::json!({"reason": reason, "diag": f.diag}),
+                );
+            }
+            f.local_code
+        })?;
         session.audit("device", &format!("sync relay {}", summary_line(&v)));
+        publish_transfer_queue("done", 0, Some(&engine));
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// **P8-4 打洞探针**（矩阵 / 诊断驱动用；`docs/v2.0/14-打洞NAT矩阵验收手册.md` §七）。
+///
+/// 走真实路径：VSR2 接入（顺带从 `OK` 行取观测端点）→ Noise 握手 → `hello_ext` 候选交换
+/// → 映射观测 → 打洞（**同步**等结果）。**不要求已配对**、不读写保险箱、不做清单交换。
+/// 两端各调一次（`role` = `0` 发起端 / 其它 响应端；`code` 两端需一致，空串 = 不用 PSK）。
+///
+/// 返回 JSON（`schema` / `role` / `peerDeviceId` / `ok` / `reason` / `symmetricNat` /
+/// `localCandidates` / `remoteCandidates` / `kind` / `degradedSteps` / `mappedPort` /
+/// `peerObservedPort` / `elapsedMs`）——**只含计数、原因与端口，无 IP**（隐私纪律）；
+/// 结果同时落进 `path_status` 的 `punch` 段（与后台自动尝试共用同一套记账）。
+/// 失败（中继接入 / 握手 / Hello）→ null，可读诊断进引擎事件日志 + 审计（同 `sync_relay`）。
+///
+/// # Safety
+/// `handle` 有效；`relay_addr` / `room` / `token` / `code` 合法 UTF-8（`code` 可空串）。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_punch_probe(
+    handle: *mut Session,
+    relay_addr: *const c_char,
+    room: *const c_char,
+    token: *const c_char,
+    code: *const c_char,
+    role: u32,
+    timeout_ms: u64,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        // 探针是只读诊断动作：不走 ensure_writable（维护态也应可诊断）
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        let relay_addr = unsafe { cstr(relay_addr) }?;
+        let room = unsafe { cstr(room) }?;
+        let token = unsafe { cstr(token) }?;
+        let code = unsafe { cstr(code) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        apply_sync_policy(session, &engine);
+        let ro = vault_p2p::engine::ProbeRole::from_code(role);
+        let shared = if code.is_empty() { None } else { Some(code) };
+        let v = engine
+            .punch_probe(relay_addr, room, token, shared, ro, timeout_ms.max(1000))
+            .map_err(|f| {
+                if let Some(reason) = f.degrade_reason {
+                    crate::contract::publish(
+                        crate::contract::EV_PATH_DEGRADED,
+                        0,
+                        serde_json::json!({"reason": reason, "diag": f.diag}),
+                    );
+                }
+                f.local_code
+            })?;
+        // 审计只记判定与计数（**不含 IP**）
+        session.audit(
+            "device",
+            &format!(
+                "punch probe role={} ok={} reason={} symmetricNat={} local={} remote={} kind={} elapsedMs={}",
+                v["role"].as_str().unwrap_or("?"),
+                v["ok"],
+                v["reason"].as_str().unwrap_or("none"),
+                v["symmetricNat"],
+                v["localCandidates"],
+                v["remoteCandidates"],
+                v["kind"].as_str().unwrap_or("?"),
+                v["elapsedMs"],
+            ),
+        );
         Ok(v)
     };
     match run() {
@@ -1569,22 +2236,219 @@ pub unsafe extern "C" fn vault_core_p2p_sync_relay(
 }
 
 /// 作为响应端经中继接入一次（阻塞至本轮同步结束；冒烟/无直连场景用）。
+/// 失败语义同 `vault_core_p2p_sync_relay`（含 PATH_DEGRADED 发布）。
 ///
 /// # Safety
-/// `handle` 有效；`relay`、`room` 合法。
+/// `handle` 有效；`relay`、`room`、`token` 合法 UTF-8。
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_p2p_serve_relay(
     handle: *mut Session,
     relay: *const c_char,
     room: *const c_char,
+    token: *const c_char,
 ) -> i32 {
     let run = || -> Result<(), i32> {
         unsafe { ensure_writable(handle) }?;
         let session = unsafe { &*handle };
         let r = unsafe { cstr(relay) }?;
         let room = unsafe { cstr(room) }?;
+        let token = unsafe { cstr(token) }?;
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
-        engine.serve_relay_connection(r, room).map_err(|_| ERR_IO)
+        apply_sync_policy(session, &engine);
+        engine.serve_relay_connection(r, room, token).map_err(|f| {
+            if let Some(reason) = f.degrade_reason {
+                crate::contract::publish(
+                    crate::contract::EV_PATH_DEGRADED,
+                    0,
+                    serde_json::json!({"reason": reason, "diag": f.diag}),
+                );
+            }
+            f.local_code
+        })?;
+        publish_transfer_queue("done", 0, Some(&engine));
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+// ==== 中继设置与多中继候选（P8-5 收尾，docs/v2.0/08 §3.6）====
+
+/// 中继设置读取（settings.enc 载体）：
+/// `{allowPublicRelay, relays: [{addr, token, public}]}`。token 是用户显式配置的
+/// 接入凭证（非密钥材料），设置页需要回显，故原样返回。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_relay_settings_get(handle: *mut Session) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        let s = crate::settings::Settings::load(&session.data_dir(), &session.mk);
+        Ok(serde_json::json!({
+            "allowPublicRelay": s.allow_public_relay,
+            "relays": s
+                .relays
+                .iter()
+                .map(|r| serde_json::json!({"addr": r.addr, "token": r.token, "public": r.public}))
+                .collect::<Vec<_>>(),
+        }))
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 中继设置写入（**原子拒绝**：任一条不合法整体拒绝，旧设置完好）。审计只记
+/// 开关与条数，**不含 token**。失败：7 = JSON 不可解析 / 校验不过。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄；`json` 为合法 UTF-8 JSON 文本。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_relay_settings_set(
+    handle: *mut Session,
+    json: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if handle.is_null() {
+            return Err(ERR_INVALID_ARG);
+        }
+        let session = unsafe { &*handle };
+        let body = unsafe { cstr(json) }?;
+        let v: serde_json::Value = serde_json::from_str(body).map_err(|_| ERR_INVALID_ARG)?;
+        let allow = v
+            .get("allowPublicRelay")
+            .and_then(|x| x.as_bool())
+            .ok_or(ERR_INVALID_ARG)?;
+        let mut relays = Vec::new();
+        for r in v
+            .get("relays")
+            .and_then(|x| x.as_array())
+            .ok_or(ERR_INVALID_ARG)?
+        {
+            let addr = r
+                .get("addr")
+                .and_then(|x| x.as_str())
+                .ok_or(ERR_INVALID_ARG)?
+                .to_string();
+            let token = r
+                .get("token")
+                .and_then(|x| x.as_str())
+                .ok_or(ERR_INVALID_ARG)?
+                .to_string();
+            let public = r.get("public").and_then(|x| x.as_bool()).unwrap_or(false);
+            relays.push(crate::settings::RelayEndpoint {
+                addr,
+                token,
+                public,
+            });
+        }
+        // 读改写：stego 开关与中继候选同载体，整存整取会抹掉对方字段
+        let mut s = crate::settings::Settings::load(&session.data_dir(), &session.mk);
+        s.schema = 1;
+        s.allow_public_relay = allow;
+        s.relays = relays;
+        s.validate().map_err(|_| ERR_INVALID_ARG)?;
+        s.save(&session.data_dir(), &session.mk)
+            .map_err(|_| ERR_IO)?;
+        session.audit(
+            "device",
+            &format!(
+                "relay settings set allowPublicRelay={} relays={}",
+                allow,
+                s.relays.len()
+            ),
+        );
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 多中继候选顺序同步（发起端，P8-5 收尾）：候选 = 设置里的中继列表（保序；
+/// `allowPublicRelay = false` 时官方条目**在拨号前**被剔除）。按序逐个尝试，
+/// 全部失败 → 最后一跳的本机码；发布 `PATH_DEGRADED`(13)（候选全部失败时
+/// 只发一次）。候选为空 → 13 + `relay_unavailable`，不发起任何连接。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄；`room` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_sync_relay_candidates(
+    handle: *mut Session,
+    room: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let room = unsafe { cstr(room) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        apply_sync_policy(session, &engine);
+        let s = crate::settings::Settings::load(&session.data_dir(), &session.mk);
+        let cands = s.relay_candidates();
+        let v = engine
+            .sync_via_relay_candidates(&cands, room)
+            .map_err(|f| {
+                if let Some(reason) = f.degrade_reason {
+                    crate::contract::publish(
+                        crate::contract::EV_PATH_DEGRADED,
+                        0,
+                        serde_json::json!({
+                            "reason": reason,
+                            "diag": f.diag,
+                            "candidates": cands.len(),
+                        }),
+                    );
+                }
+                f.local_code
+            })?;
+        session.audit(
+            "device",
+            &format!(
+                "sync relay candidates n={} {}",
+                cands.len(),
+                summary_line(&v)
+            ),
+        );
+        publish_transfer_queue("done", 0, Some(&engine));
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 响应端的多中继候选顺序接入（语义同 `vault_core_p2p_sync_relay_candidates`）。
+///
+/// # Safety
+/// `handle` 必须是未释放的有效会话句柄；`room` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_p2p_serve_relay_candidates(
+    handle: *mut Session,
+    room: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let room = unsafe { cstr(room) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        apply_sync_policy(session, &engine);
+        let s = crate::settings::Settings::load(&session.data_dir(), &session.mk);
+        let cands = s.relay_candidates();
+        engine.serve_relay_candidates(&cands, room).map_err(|f| {
+            if let Some(reason) = f.degrade_reason {
+                crate::contract::publish(
+                    crate::contract::EV_PATH_DEGRADED,
+                    0,
+                    serde_json::json!({"reason": reason, "diag": f.diag}),
+                );
+            }
+            f.local_code
+        })?;
+        publish_transfer_queue("done", 0, Some(&engine));
+        Ok(())
     };
     run().err().unwrap_or(OK)
 }
@@ -1637,10 +2501,15 @@ pub unsafe extern "C" fn vault_core_p2p_discover(
     run().err().unwrap_or(OK)
 }
 
-/// 路径与填充诊断（P8-6，docs/05-03 §四、05-04 F-07）：
-/// `{"padding":{tier,legacyPeer,frameLenHistogram[4]},"path":{directCandidates,
-/// punchedCandidates,relayCandidates}}`。候选计数在 P8-4 发现/打洞落地前
-/// **恒为 0**（不得编造，原则 7）。
+/// 路径与填充诊断（P8-6/P8-4/P8-5，docs/05-03 §4.4、05-04 F-07）：
+/// `{"schema":1,"padding":{tier,legacyPeer,frameLenHistogram[4],overheadRatio},
+/// "lastPathFailure":{reason,atMs}|null,"peers":[{peerId,path,pathSinceMs,
+/// attempts{direct,relay},lastFailure,bytesIn,bytesOut,paddingTier,
+/// punch{attempts,ok,reason,symmetricNat,localCandidates,remoteCandidates,
+/// degradedSteps,kind}}]}`。
+/// 只输出本进程可观测字段；rtt / 对端候选数等未观测项**不输出**（原则 7，
+/// 不编造）。P8-4：`punch` 段只给**计数与原因**，不给 IP（隐私纪律）；
+/// `path` 仍为 `direct|relay`——打通后数据仍走本会话承载，**不谎称** `hole_punch`。
 ///
 /// # Safety
 /// `handle` 有效。
@@ -1650,14 +2519,204 @@ pub unsafe extern "C" fn vault_core_p2p_path_status(handle: *mut Session) -> *mu
         let session = unsafe { &*handle };
         let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
         let st = engine.status();
-        Ok(serde_json::json!({
-            "padding": st["padding"],
-            "path": {
-                "directCandidates": 0,
-                "punchedCandidates": 0,
-                "relayCandidates": 0,
-            },
-        }))
+        let mut ps = engine.path_stats();
+        if let Some(obj) = ps.as_object_mut() {
+            obj.insert("padding".into(), st["padding"].clone());
+            obj.insert("lastPathFailure".into(), st["lastPathFailure"].clone());
+        }
+        Ok(ps)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// ==== P8-9 阅后即焚（docs/v2.0/05-04 §五；CAP_BURN_SHARE）====
+
+/// 创建一次性票据：`{"burnId","code","room","expiresMs","openTimeoutSecs"}`。
+/// `code` **仅此一次返回**（秘密不落盘，重启即失效）。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_create(
+    handle: *mut Session,
+    file_id: u64,
+    ttl_secs: u64,
+    open_timeout_secs: u64,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
+        if crate::contract::capability_bits() & crate::contract::CAP_BURN_SHARE == 0 {
+            return Err(ERR_CAPABILITY);
+        }
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let v = engine
+            .burn_create(file_id, ttl_secs, open_timeout_secs.max(1))
+            .map_err(|_| ERR_INTERNAL)?;
+        session.audit("burn", &format!("create file=#{file_id} ttl={ttl_secs}s"));
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 接收端登记票据（凭邀请码；秘密仅内存）。`relay_addr`/`relay_token` 为空串 = 直连模式。
+///
+/// # Safety
+/// `handle` 有效；三个入参均合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_receive(
+    handle: *mut Session,
+    code: *const c_char,
+    relay_addr: *const c_char,
+    relay_token: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let code = unsafe { cstr(code) }?;
+        let ra = unsafe { cstr(relay_addr) }?;
+        let rt = unsafe { cstr(relay_token) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let relay = if ra.is_empty() { None } else { Some((ra, rt)) };
+        let v = engine
+            .burn_receive(code, relay)
+            .map_err(|_| ERR_INVALID_ARG)?;
+        session.audit("burn", "joined room (code accepted, secret kept in memory)");
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 发送端投递：`addr` 非空 = 直连；否则用 `relay_addr` + `relay_token`（房间由票据派生）。
+/// 返回 `{"delivered","bytes","peer"}`；已交付票据复用 → 7（参数）。
+///
+/// # Safety
+/// `handle` 有效；三个入参均合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_send(
+    handle: *mut Session,
+    burn_id: u64,
+    addr: *const c_char,
+    relay_addr: *const c_char,
+    relay_token: *const c_char,
+) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let addr = unsafe { cstr(addr) }?;
+        let ra = unsafe { cstr(relay_addr) }?;
+        let rt = unsafe { cstr(relay_token) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let v = if !addr.is_empty() {
+            engine.burn_send_direct(burn_id, addr)
+        } else {
+            engine.burn_send_relay(burn_id, ra, rt)
+        }
+        .map_err(|e| {
+            // 秘密与文件名绝不进日志/错误串；只记短码
+            session.audit("burn", &format!("deliver failed id={burn_id} err={e}"));
+            ERR_INVALID_ARG
+        })?;
+        session.audit(
+            "burn",
+            &format!("delivered id={burn_id} bytes={}", v["bytes"]),
+        );
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 「打开」：解密为受控临时明文（Unix 0600）并起自动擦除定时器。
+/// 返回 `{"path","name","size","openTimeoutSecs"}`。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_open(handle: *mut Session, burn_id: u64) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let v = engine.burn_open(burn_id).map_err(|_| ERR_INVALID_ARG)?;
+        session.audit("burn", &format!("opened id={burn_id}"));
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 显式「另存」：写用户路径并放弃该次自动擦除。0 = OK。
+///
+/// # Safety
+/// `handle` 有效；`dest` 合法 UTF-8。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_save_as(
+    handle: *mut Session,
+    burn_id: u64,
+    dest: *const c_char,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let dest = unsafe { cstr(dest) }?;
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        engine
+            .burn_save_as(burn_id, dest)
+            .map_err(|_| ERR_INVALID_ARG)?;
+        session.audit("burn", &format!("saved_as id={burn_id}"));
+        Ok(())
+    };
+    run().err().unwrap_or(OK)
+}
+
+/// 擦除（临时明文 + 容器 + 内存密钥；重试 1/5/30 s ×3）。
+/// 返回 `{"erased","attempts"}`——`erased=false` 时上层须告警。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_erase(handle: *mut Session, burn_id: u64) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        unsafe { ensure_writable(handle) }?;
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        let v = engine.burn_erase(burn_id).map_err(|_| ERR_INTERNAL)?;
+        session.audit(
+            "burn",
+            &format!("erase id={burn_id} erased={}", v["erased"]),
+        );
+        Ok(v)
+    };
+    match run() {
+        Ok(v) => json_out(v),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// 票据状态：`{"burnId","side","phase","opened","erased",...}`。
+///
+/// # Safety
+/// `handle` 有效。
+#[no_mangle]
+pub unsafe extern "C" fn vault_core_burn_status(handle: *mut Session, burn_id: u64) -> *mut c_char {
+    let run = || -> Result<serde_json::Value, i32> {
+        let session = unsafe { &*handle };
+        let engine = crate::p2p_service::p2p_engine(session).map_err(|e| map_err(&e))?;
+        Ok(engine.burn_status(burn_id))
     };
     match run() {
         Ok(v) => json_out(v),
@@ -1666,9 +2725,7 @@ pub unsafe extern "C" fn vault_core_p2p_path_status(handle: *mut Session) -> *mu
 }
 
 /// 解除与指定设备的配对（从对端登记表移除）。0 = OK（本来就不存在亦返回 0，幂等）。
-///
 /// # Safety
-/// `handle` 有效；`device_id` 合法 UTF-8。
 #[no_mangle]
 pub unsafe extern "C" fn vault_core_p2p_unpair(
     handle: *mut Session,
@@ -2331,6 +3388,88 @@ mod tests {
 
     fn cs(s: &str) -> CString {
         CString::new(s).expect("no NUL")
+    }
+
+    // ==== P8-10 容量协商 ====
+
+    /// 构造真实 PNG（测试用 dev-dependency `png`；生产路径不依赖图像库）。
+    fn tiny_png(dir: &std::path::Path, name: &str, w: u32, h: u32) -> String {
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, w, h);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().unwrap();
+            let data = vec![0u8; (w as usize) * (h as usize) * 3];
+            writer.write_image_data(&data).unwrap();
+        }
+        let p = dir.join(name);
+        std::fs::write(&p, out).unwrap();
+        p.to_string_lossy().to_string()
+    }
+
+    /// 证据（面板 P8-10 `stego::plan_matches_actual_shard_count` / `fits` 语义）：
+    /// `_plan` 是容量的唯一真值来源——图不够时 `fits=false` + `imagesNeeded` + `shortfallBytes`，
+    /// 不可读图如实计入 notes，`codec=auto` 标 png 回退。
+    #[test]
+    fn stego_plan_reports_needed_images_and_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let small = tiny_png(dir.path(), "s.png", 16, 16); // capacity = 92
+        let big = tiny_png(dir.path(), "b.png", 256, 256); // capacity = 24572
+
+        // 大文件 + 两图 → 不够：fits=false 且外推所需图数
+        let plan = stego_plan_value(
+            100_000,
+            "f.bin",
+            &[small.clone(), big.clone()],
+            &serde_json::json!({"fillRatio": 0.8}),
+        );
+        assert_eq!(plan["fits"], serde_json::json!(false));
+        assert_eq!(plan["imagesGiven"], serde_json::json!(2));
+        assert!(
+            plan["imagesNeeded"].as_u64().unwrap() > 2,
+            "外推所需图数：{plan}"
+        );
+        assert!(plan["shortfallBytes"].as_u64().unwrap() > 0);
+        assert_eq!(plan["perImage"].as_array().unwrap().len(), 2);
+        // 净容量 = floor(cap × 0.8) − 分片头（首片含文件头），与切分口径一致
+        let first = &plan["perImage"][0];
+        assert_eq!(first["usable"], serde_json::json!(73)); // floor(92×0.8)
+        assert_eq!(first["shardBytes"], serde_json::json!(20)); // 73 − (14+2+5+32)
+
+        // 小文件 + 大图 → fits，且一张即够
+        let ok = stego_plan_value(
+            1000,
+            "f.bin",
+            std::slice::from_ref(&big),
+            &serde_json::json!({}),
+        );
+        assert_eq!(ok["fits"], serde_json::json!(true));
+        assert_eq!(ok["imagesNeeded"], serde_json::json!(1));
+        assert_eq!(ok["shortfallBytes"], serde_json::json!(0));
+
+        // codec=auto → notes 标 png 回退（JPEG 鲁棒路线不做）
+        let auto = stego_plan_value(
+            10,
+            "f.bin",
+            std::slice::from_ref(&small),
+            &serde_json::json!({"codec": "auto"}),
+        );
+        assert!(auto["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str() == Some("codec_fallback=png")));
+
+        // 不可读图 → fits=false + notes 如实标注（不谎报可嵌）
+        let bad = stego_plan_value(
+            10,
+            "f.bin",
+            &[dir.path().join("missing.png").to_string_lossy().to_string()],
+            &serde_json::json!({}),
+        );
+        assert_eq!(bad["fits"], serde_json::json!(false));
+        assert!(bad["perImage"][0]["error"].is_string());
     }
 
     #[test]

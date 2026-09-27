@@ -559,6 +559,39 @@ impl VaultIndex {
             .ok_or("file not found")
     }
 
+    /// 条目版本号 `rev`（P8-8 原地编辑 / 三方合并基线判定）。
+    pub fn file_rev(&self, id: u64) -> Result<u64, &'static str> {
+        self.d.files.get(&id).map(|f| f.rev).ok_or("file not found")
+    }
+
+    /// 条目创建时间（原地编辑保持原 created_ms）。
+    pub fn file_created(&self, id: u64) -> Result<u64, &'static str> {
+        self.d
+            .files
+            .get(&id)
+            .map(|f| f.created_ms)
+            .ok_or("file not found")
+    }
+
+    /// P8-8 原地编辑后的条目更新：`rev` 递增（从 1 起）、size/modified 更新、
+    /// 内容采样令牌覆盖；返回新 `rev`。
+    pub fn update_after_edit(
+        &mut self,
+        id: u64,
+        size: u64,
+        modified_ms: u64,
+        tokens_extra: Vec<String>,
+    ) -> Result<u64, &'static str> {
+        let f = self.d.files.get_mut(&id).ok_or("file not found")?;
+        f.rev += 1;
+        f.size = size;
+        f.modified_ms = modified_ms;
+        f.tokens_extra = tokens_extra;
+        let rev = f.rev;
+        self.push_file(id);
+        Ok(rev)
+    }
+
     /// 检索：查询分词 → HMAC → 倒排并集（返回脱敏元数据，不含内容片段）。
     pub fn search(&self, query: &str) -> String {
         let mut hits: BTreeSet<u64> = BTreeSet::new();
@@ -782,6 +815,11 @@ impl VaultIndex {
         self.d.folders.keys().copied().collect()
     }
 
+    /// 文件夹的父 id（未知 id → None；根自身 parent = 0）。
+    pub fn folder_parent(&self, id: u64) -> Option<u64> {
+        self.d.folders.get(&id).map(|f| f.parent)
+    }
+
     /// 全部文件 id（BTreeMap 序，天然稳定）。
     pub fn all_file_ids(&self) -> Vec<u64> {
         self.d.files.keys().copied().collect()
@@ -884,7 +922,7 @@ impl VaultIndex {
             .map(|(id, f)| {
                 serde_json::json!({
                     "id": id, "folder": f.folder, "name": f.name, "size": f.size,
-                    "modifiedMs": f.modified_ms, "vc": f.vc,
+                    "modifiedMs": f.modified_ms, "vc": f.vc, "rev": f.rev,
                 })
             })
             .collect();
@@ -906,10 +944,18 @@ impl VaultIndex {
             .map(|(id, f)| {
                 serde_json::json!({
                     "id": id, "folder": f.folder, "name": f.name, "size": f.size,
-                    "modifiedMs": f.modified_ms, "vc": f.vc,
+                    "modifiedMs": f.modified_ms, "vc": f.vc, "rev": f.rev,
                 })
             })
             .collect()
+    }
+
+    /// 设置条目版本号（P8-8：接收对端推送时保留其 `rev` 血缘）。
+    pub fn set_rev(&mut self, id: u64, rev: u64) -> Result<(), &'static str> {
+        let f = self.d.files.get_mut(&id).ok_or("file not found")?;
+        f.rev = rev;
+        self.push_file(id);
+        Ok(())
     }
 
     /// 墓碑清单条目（deletedMs 标记删除，docs/05-03 删除同步语义）。

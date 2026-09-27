@@ -86,6 +86,8 @@ pub struct Session {
     pub(crate) readonly: std::sync::atomic::AtomicBool,
     /// 维护态（P7-3）：轮换/迁移中业务写冻结（码 10）；擦除/销毁不受冻结。
     pub(crate) maintenance: std::sync::atomic::AtomicBool,
+    /// P8-7：外壳注入的同步会话上下文（时段 / 网络类型；引擎不感知时区与网络栈）。
+    pub(crate) sync_ctx: Mutex<vault_p2p::policy::SyncContext>,
     pub(crate) lease: Mutex<Option<vault_store::VaultLease>>,
 }
 

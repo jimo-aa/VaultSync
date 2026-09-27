@@ -674,9 +674,42 @@ pub mod container_v3 {
             aead_decrypt_with_aad(fsk, &blob, &aad).ok_or("chunk tampered or key mismatch")
         }
 
+        /// 全容器分片长度清单（P8-8 三方合并的段边界；按片序拼接；GCM 下密文长 = 明文长）。
+        pub fn chunk_lens(&self, fsk: &[u8; KEY_LEN]) -> Result<Vec<u64>, &'static str> {
+            let mut lens: Vec<u64> = Vec::new();
+            for shard in 0..self.shard_count {
+                let s = if shard + 1 == self.shard_count {
+                    self.meta.clone()
+                } else {
+                    self.read_shard(shard, fsk)?
+                };
+                lens.extend(s.chunks.iter().map(|c| u64::from(c.len)));
+            }
+            Ok(lens)
+        }
+
         /// 数据区内偏移定位（导出 / 同步读原始密文用）。
         pub fn data_region_offset(&self) -> u64 {
             self.data_region_offset
+        }
+
+        /// 流式解密导出到 `dest`（P8-8 三方合并基线 / P8-9 阅后即焚「打开」用）：
+        /// 逐块解密（按需解所在片）→ 整文件 SHA-256 终验。
+        pub fn export_to(&self, dest: &Path, fsk: &[u8; KEY_LEN]) -> Result<(), &'static str> {
+            use std::io::Write as _;
+            let mut out = std::fs::File::create(dest).map_err(|_| "cannot create dest")?;
+            let total = (self.shard_count as u64 - 1) * u64::from(self.meta_shard_span)
+                + self.meta.chunks.len() as u64;
+            let mut hasher = vault_crypto::Sha256::new();
+            for i in 0..total {
+                let pt = self.decrypt_chunk(fsk, i)?;
+                hasher.update(&pt);
+                out.write_all(&pt).map_err(|_| "write dest failed")?;
+            }
+            if Some(hasher.finalize_hex()) != self.meta.file_sha256 {
+                return Err("whole-file sha256 mismatch after reassembly");
+            }
+            Ok(())
         }
     }
 

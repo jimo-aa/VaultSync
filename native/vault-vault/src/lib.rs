@@ -11,6 +11,7 @@
 pub mod container;
 pub mod erase;
 pub mod index;
+pub mod merge;
 pub mod thumbnail;
 pub mod vault;
 

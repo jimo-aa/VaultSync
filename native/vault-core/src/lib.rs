@@ -21,6 +21,7 @@ mod platform_store;
 pub mod rotation;
 mod service;
 mod session;
+mod settings;
 
 /// 引擎自检：确认全部子 crate 依赖边可用。
 pub fn self_check() -> bool {

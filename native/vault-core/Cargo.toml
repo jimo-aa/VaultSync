@@ -20,7 +20,10 @@ vault-audit = { path = "../vault-audit" }
 # Linux 无默认后端 → secure store 不可用 → 生物识别路径自动禁用（docs/05-01 降级）。
 keyring = { version = "3", default-features = false, features = ["windows-native", "apple-native"] }
 zeroize = "1.8"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# 测试用：构造真实 PNG 驱动隐写容量协商（生产路径不依赖图像库）
+png = "0.17"

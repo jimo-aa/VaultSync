@@ -31,6 +31,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod multi;
+
 pub use vault_crypto;
 
 /// 载荷帧长度前缀字节数：u32 大端。
@@ -203,6 +205,130 @@ fn read_lsb(rgba: &[u8], byte_len: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+// ==== P8-10 位分散（docs/05-05 §3.6）====
+
+/// 第 `bit` 个通道位对应的 RGBA 缓冲下标（跳过 A：位 p → 像素 p/3 的第 p%3 通道）。
+fn bit_index(bit: usize) -> usize {
+    (bit / CHANNELS_PER_PIXEL) * 4 + (bit % CHANNELS_PER_PIXEL)
+}
+
+/// 位分散的位置函数（docs/05-05 §3.6）：`s = T' / B`（向下取整），`pos(i) = i×s + s/2`。
+/// `T'` = 通道位总数**减去长度前缀的 32 位**（前缀恒定占前 32 位、不参与分散，
+/// 使读取端能在算出 `s` 之前先取得长度字段——与文档 `B = 4 + payload_len` 的记账
+/// 等价，只是把前缀固定在前 32 位，已在 LOG 登记）。
+/// `s == 0`（容量用满）→ 退化为连续写入（V1 行为），返回 `spread=false`。
+fn spread_step(channel_bits: usize, payload_bits: usize) -> (usize, bool) {
+    if payload_bits == 0 {
+        return (0, false);
+    }
+    let first = LEN_PREFIX * 8;
+    let usable = channel_bits.saturating_sub(first);
+    let s = usable / payload_bits;
+    if s == 0 {
+        (1, false)
+    } else {
+        (s, true)
+    }
+}
+
+/// 按位分散规则写 payload（`spread=false` 时退化为连续写入）。
+fn write_lsb_spread(rgba: &mut [u8], payload: &[u8], spread: bool) {
+    if rgba.len() < 4 {
+        return;
+    }
+    let channel_bits = (rgba.len() / 4) * CHANNELS_PER_PIXEL;
+    let payload_bits = payload.len() * 8;
+    let (step, dispersed) = if spread {
+        spread_step(channel_bits, payload_bits)
+    } else {
+        (1, false)
+    };
+    let first = LEN_PREFIX * 8;
+    let mut bit_pos = 0usize;
+    for byte in payload {
+        for i in 0..8 {
+            let bit = (byte >> i) & 1;
+            let logical = if dispersed {
+                first + bit_pos * step + step / 2
+            } else {
+                first + bit_pos
+            };
+            let idx = bit_index(logical);
+            if idx >= rgba.len() {
+                return;
+            }
+            rgba[idx] = (rgba[idx] & 0xFE) | bit;
+            bit_pos += 1;
+        }
+    }
+}
+
+/// 按位分散规则读 payload。
+fn read_lsb_spread(rgba: &[u8], byte_len: usize, spread: bool) -> Vec<u8> {
+    let mut out = vec![0u8; byte_len];
+    if rgba.len() < 4 {
+        return out;
+    }
+    let channel_bits = (rgba.len() / 4) * CHANNELS_PER_PIXEL;
+    let payload_bits = byte_len * 8;
+    let (step, dispersed) = if spread {
+        spread_step(channel_bits, payload_bits)
+    } else {
+        (1, false)
+    };
+    let first = LEN_PREFIX * 8;
+    let mut bit_pos = 0usize;
+    for slot in out.iter_mut() {
+        for i in 0..8 {
+            let logical = if dispersed {
+                first + bit_pos * step + step / 2
+            } else {
+                first + bit_pos
+            };
+            let idx = bit_index(logical);
+            if idx >= rgba.len() {
+                return out;
+            }
+            *slot |= (rgba[idx] & 1) << i;
+            bit_pos += 1;
+        }
+    }
+    out
+}
+
+/// P8-10：通用嵌入入口——`[u32 大端长度] ‖ bytes`，`spread=true` 时 payload 走位分散。
+/// 长度前缀恒为连续位（不分散），使读取端可先取长度再算分散步长。
+pub fn embed_spread(png: &[u8], bytes: &[u8], spread: bool) -> Result<Vec<u8>, &'static str> {
+    if bytes.is_empty() {
+        return Err(ERR_EMPTY);
+    }
+    let (width, height, mut rgba) = decode_rgba(png)?;
+    if bytes.len() > capacity_bytes(width, height) {
+        return Err(ERR_OVER_CAPACITY);
+    }
+    let len = u32::try_from(bytes.len()).map_err(|_| ERR_OVER_CAPACITY)?;
+    write_lsb(&mut rgba, &len.to_be_bytes());
+    write_lsb_spread(&mut rgba, bytes, spread);
+    encode_rgba(&rgba, width, height)
+}
+
+/// P8-10：通用提取入口（与 [`embed_spread`] 对称）。`spread` 必须与嵌入时一致。
+pub fn extract_spread(png: &[u8], spread: bool) -> Result<Vec<u8>, &'static str> {
+    let (width, height, rgba) = decode_rgba(png)?;
+    let prefix: [u8; LEN_PREFIX] = match read_lsb(&rgba, LEN_PREFIX).try_into() {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(ERR_DECODE),
+    };
+    let payload_len = u32::from_be_bytes(prefix) as usize;
+    if payload_len == 0 {
+        return Err(ERR_EMPTY);
+    }
+    if payload_len > capacity_bytes(width, height) {
+        return Err(ERR_OUT_OF_RANGE);
+    }
+    Ok(read_lsb_spread(&rgba, payload_len, spread))
 }
 
 #[cfg(test)]
@@ -383,6 +509,36 @@ mod tests {
             &rgba,
         );
         assert_eq!(extract(&crafted), Err(ERR_OUT_OF_RANGE));
+    }
+
+    /// 证据（面板 `stego::bit_dispersion_roundtrip_is_bijective`）：位分散往返逐字节一致，
+    /// 且同一图在分散/连续两种布局下产出的像素不同（确实分散，而非原地踏步）。
+    /// 容量用满（`s = 1`）时仍可往返——容量公式已扣除长度前缀，故 `s ≥ 1` 恒成立，
+    /// `s = 0` 分支保留为防御（正常路径不可达）。
+    #[test]
+    fn bit_dispersion_roundtrip_is_bijective() {
+        let png = rgb_test_png(64, 64);
+        let payload: Vec<u8> = (0..500u32).map(|i| (i % 251) as u8).collect();
+        let spread = embed_spread(&png, &payload, true).unwrap();
+        let contiguous = embed_spread(&png, &payload, false).unwrap();
+        assert_eq!(extract_spread(&spread, true).unwrap(), payload);
+        assert_eq!(extract_spread(&contiguous, false).unwrap(), payload);
+        assert_ne!(spread, contiguous, "分散与连续必须产生不同的像素布局");
+        assert_ne!(
+            extract_spread(&spread, false).unwrap(),
+            payload,
+            "用连续规则读分散布局应得到不同结果（否则没有真正分散）"
+        );
+        // 容量用满：s = 1，仍逐字节往返
+        let full = vec![0x5Au8; capacity_bytes(64, 64)];
+        let deg = embed_spread(&png, &full, true).unwrap();
+        assert_eq!(extract_spread(&deg, true).unwrap(), full);
+        assert_eq!(channel_bits_of(64, 64) - LEN_PREFIX * 8, full.len() * 8);
+    }
+
+    /// 通道位总数（分散步长记账的参照）。
+    fn channel_bits_of(width: u32, height: u32) -> usize {
+        (width as usize) * (height as usize) * CHANNELS_PER_PIXEL
     }
 
     #[test]

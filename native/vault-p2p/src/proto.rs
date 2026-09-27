@@ -26,6 +26,9 @@ pub struct ManifestItem {
     pub nonce_prefix: u32,
     #[serde(default)]
     pub file_sha: String,
+    /// P8-8：条目版本号（原地编辑血缘；接收端保留并作为三方合并基线判据）。
+    #[serde(default)]
+    pub rev: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +73,11 @@ pub enum Msg {
         pad_tier_min: u8,
         #[serde(default)]
         pad_tier_max: u8,
+        /// P8-4：本机候选（`ip:port` 字面量，含 UDP 映射观测结果）。旧端缺省空
+        /// 列表 → 不打洞（如实降级，不猜地址）。候选随 Noise 信道内传输，
+        /// 对端已由信道密钥 + Hello 签名认证，故候选来源可信（数量另受上限约束）。
+        #[serde(default)]
+        candidates: Vec<String>,
     },
     /// 配对：发起端（已配对设备）请求登记；响应端凭 PSK 信任。
     PairReq,
@@ -83,11 +91,15 @@ pub enum Msg {
     },
     /// 推送文件：fskey_wrapped = AEAD(子密钥(hh,"fskey"), FSKey)，仅本信道可解。
     /// overwrite = 向量时钟分叉时以本版本为准（对端先留存冲突副本）。
+    /// `base_rev`（P8-8）= 本版本所基于的基线版本号（`rev - 1`；0 = 未曾原地编辑）；
+    /// 接收端凭它判定「双方是否从同一基线各编辑了一次」→ 三方块级合并。
     SendFileBegin {
         item: ManifestItem,
         fskey_wrapped: String,
         total_chunks: usize,
         overwrite: bool,
+        #[serde(default)]
+        base_rev: u64,
     },
     BlockData {
         id: u64,
@@ -100,6 +112,9 @@ pub enum Msg {
     FileApplied {
         id: u64,
         name: String,
+        /// P8-8：接收端的合并结果（`Some("auto")` = 已块级自动合并，本次未落盘对端原样内容）。
+        #[serde(default)]
+        merge: Option<String>,
     },
     /// 请求对端推送该文件（拉取阶段）。
     PullFile {
@@ -129,9 +144,40 @@ pub enum Msg {
     DestroyAck,
     /// 单向同步流程结束（发起端发起）。
     SyncDone,
+    /// P8-9 阅后即焚：报价（接收端凭 burn PSK 完成握手即证明持有票据秘密）。
+    BurnOffer {
+        burn_id: u64,
+        name: String,
+        size: u64,
+        sha: String,
+        total_chunks: usize,
+        /// 打开后的自动擦除窗口（秒；接收端据此起定时器，缺省 60）。
+        #[serde(default = "d_open_timeout")]
+        open_timeout_secs: u64,
+    },
+    /// P8-9：分片载荷（**明文**在 Noise 内传输；接收端用专用 burn 密钥再落盘）。
+    BurnData {
+        burn_id: u64,
+        idx: usize,
+        data_b64: String,
+    },
+    /// P8-9：传输完成（发送端宣告；接收端据此落盘完成并回 ACK）。
+    BurnDone {
+        burn_id: u64,
+    },
+    /// P8-9：阶段回执（`phase ∈ delivered`）——只回阶段枚举，不含明文 / 文件名。
+    BurnAck {
+        burn_id: u64,
+        phase: String,
+    },
     Error {
         msg: String,
     },
+}
+
+/// P8-9：`BurnOffer.open_timeout_secs` 的缺省（秒）。
+fn d_open_timeout() -> u64 {
+    60
 }
 
 /// 删除指令签名体（签名即对此串）。

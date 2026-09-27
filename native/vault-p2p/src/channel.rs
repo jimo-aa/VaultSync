@@ -294,6 +294,11 @@ impl SecureChannel {
         )
     }
 
+    /// 载荷与线上字节总量（宿主聚合 overheadRatio 用；线上含 4B 前缀 + 填充）。
+    pub fn byte_totals(&self) -> (u64, u64) {
+        (self.payload_bytes, self.wire_bytes)
+    }
+
     pub fn handshake_hash(&self) -> &[u8; 32] {
         &self.handshake_hash
     }

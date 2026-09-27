@@ -1,5 +1,6 @@
-# 自建中继服务端（docs/08）：零信任转发节点——不落盘、不解密、不持有密钥。
-# 官方中继与自建中继协议一致；自建部署可用 token 限制接入。
+# 自建中继服务端（docs/08 VSR2）：零信任转发节点——不落盘、不解密、不持有密钥。
+# 官方中继与自建中继协议一致；接入 token 挑战-应答 + 三类会话上限 + 匿名计量。
+# 零内部依赖（不依赖任何其他 vault-* crate，与客户端共享零代码——docs/08 §3.6）。
 [package]
 name = "vault-relay"
 version.workspace = true
@@ -11,3 +12,8 @@ name = "vault-relay"
 path = "src/main.rs"
 
 [dependencies]
+hmac = "0.12"
+sha2 = "0.10"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

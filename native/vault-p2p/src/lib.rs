@@ -7,12 +7,15 @@
 //! `peers` 对端登记表 / `engine` 同步引擎编排。
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+pub mod burn;
 pub mod channel;
 pub mod engine;
 pub mod identity;
 pub mod orders;
 pub mod peers;
+pub mod policy;
 pub mod proto;
+pub mod relay_client;
 
 pub use engine::P2pEngine;
 pub use identity::Identity;

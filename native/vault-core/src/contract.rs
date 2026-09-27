@@ -50,6 +50,16 @@ pub fn capability_bits() -> u64 {
         | crate::contract::CAP_PQ_HYBRID
         | crate::contract::CAP_SEARCH_FRAGMENT
         | crate::contract::CAP_DISCOVERY
+        // P8-4：打洞链路已交付（中继 UDP 观测端点 + 候选经 Hello 交换 +
+        // 双向验证的 punch + 路径状态机降级；证据见
+        // `vault-p2p::engine::tests::punch_records_bidirectional_success_and_hides_addresses`
+        // 与 `punch_symmetric_nat_falls_back_fast`）。
+        // **边界**：打通后数据仍走本会话承载（可靠 datagram 承载未落地），
+        // 故 `path` 不谎报 hole_punch，打洞结果单列在 `punch` 段。
+        | crate::contract::CAP_HOLE_PUNCH
+        // P8-9：阅后即焚已交付（一次性票据 / 单次性 / 打开后自动擦除，证据见
+        // `vault-p2p::engine::tests::burn_end_to_end_delivers_opens_and_erases`）。
+        | crate::contract::CAP_BURN_SHARE
 }
 
 // ==== 事件类型（docs/v2.0/02 §6.4，1–24；24–255 保留）====

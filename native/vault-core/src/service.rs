@@ -136,6 +136,14 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
         Some(mk) if verifier_of(&mk) == ks.verifier => {
             guard_reset(path);
             let keys = open_derived_keys(&mut ks, &mk).map_err(CoreError::Internal)?;
+            // P8-10：隐写开关从 settings.enc 自读（不再依赖 UI 每次解锁后同步）
+            let data_dir = {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("vault");
+                path.parent()
+                    .unwrap_or(Path::new("."))
+                    .join(format!("{stem}.data"))
+            };
+            let stego_from_settings = crate::settings::Settings::load(&data_dir, &mk).stego_enabled;
             let s = Session {
                 mk: Zeroizing::new(mk),
                 keys: Zeroizing::new(keys),
@@ -144,9 +152,10 @@ pub fn unlock(path: &Path, password: &str, disguise: bool) -> Result<Session, Co
                 vault: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 p2p: std::sync::Mutex::new(None),
                 audit: std::sync::Mutex::new(None),
-                stego_enabled: std::sync::atomic::AtomicBool::new(false),
+                stego_enabled: std::sync::atomic::AtomicBool::new(stego_from_settings),
                 readonly: std::sync::atomic::AtomicBool::new(false),
                 maintenance: std::sync::atomic::AtomicBool::new(false),
+                sync_ctx: std::sync::Mutex::new(vault_p2p::policy::SyncContext::default()),
                 lease: std::sync::Mutex::new(None),
             };
             // P7-3：头部停在轮换态 → 会话进维护态（FFI 层随即自动续做）
@@ -213,6 +222,7 @@ pub fn unlock_biometric(path: &Path, store: &dyn SecureStore) -> Result<Session,
                 stego_enabled: std::sync::atomic::AtomicBool::new(false),
                 readonly: std::sync::atomic::AtomicBool::new(false),
                 maintenance: std::sync::atomic::AtomicBool::new(false),
+                sync_ctx: std::sync::Mutex::new(vault_p2p::policy::SyncContext::default()),
                 lease: std::sync::Mutex::new(None),
             })
         }
