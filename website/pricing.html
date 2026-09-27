@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>定价 — VaultSync</title>
+<meta name="description" content="VaultSync 定价：Free 永久免费（全部安全能力）、Pro 一次性买断、Team 按席位、企业自建部署。付费买规模与协作，不买安全。">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><span class="logo"><svg class="i"><use href="#i-logo"/></svg></span>VaultSync</a>
+    <div class="nav-links">
+      <a href="index.html#features">功能</a>
+      <a href="index.html#security">安全模型</a>
+      <a href="pricing.html" class="active">定价</a>
+      <a href="download.html">下载</a>
+      <a class="btn btn-gold btn-sm" href="download.html">免费下载</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" style="padding-bottom:40px;">
+  <div class="hero-bg"><span class="orb orb-1"></span><span class="orb orb-2"></span></div>
+  <div class="wrap">
+    <span class="badge"><span class="dot"></span>界限只划在规模 / 协作 / 服务额度 / 托管运维上</span>
+    <h1>付费买<span class="gold">规模与服务</span>，<br>不买安全。</h1>
+    <p class="sub">单机核心能力（加密、擦除、轮换、审计、伪装、完整导出）不设任何门槛。<br>免费版是完整的安全产品，不是试用版。</p>
+  </div>
+</header>
+
+<section style="padding-top:32px;">
+  <div class="wrap">
+    <div class="tier-grid">
+      <div class="tier">
+        <h3>Free</h3>
+        <p class="who">个人 · 起步即完整</p>
+        <div class="price"><b>¥0</b> <span>/ 永久</span></div>
+        <p class="mode">免费 forever</p>
+        <ul>
+          <li><b>5</b> 台已配对设备</li>
+          <li>全部安全能力（十项红线清单）</li>
+          <li>局域网 / 打洞直连无限</li>
+          <li>官方中继低额度 + 降速</li>
+          <li>自建中继无限</li>
+          <li>功能更新走延迟通道</li>
+          <li class="off">版本历史 / 阅后即焚 / 归档导出</li>
+        </ul>
+        <a class="btn btn-ghost btn-block" href="download.html">免费下载</a>
+      </div>
+      <div class="tier hot">
+        <span class="tag">最受欢迎</span>
+        <h3>Pro</h3>
+        <p class="who">个人 · 进阶</p>
+        <div class="price"><b>¥198</b> <span>/ 一次性买断</span></div>
+        <p class="mode">本地功能买断 · 永久可用（示例价格）</p>
+        <ul>
+          <li><b>15</b> 台已配对设备</li>
+          <li>版本历史与文件恢复</li>
+          <li>阅后即焚一次性分享会话</li>
+          <li>隐写跨图分割</li>
+          <li>审计长期归档 / 取证导出</li>
+          <li>选择性同步四维全量</li>
+          <li>快速更新通道 + LTS（1 年，可续期）</li>
+        </ul>
+        <button class="btn btn-gold btn-block" data-buy="pro">购买 Pro（买断）</button>
+        <div style="margin-top:10px;">
+          <button class="btn btn-ghost btn-block btn-sm" data-buy="relay">或购买中继包（¥60/年）</button>
+        </div>
+      </div>
+      <div class="tier">
+        <h3>Team</h3>
+        <p class="who">小团队 · 协作</p>
+        <div class="price"><b>¥120</b> <span>/ 席位/年</span></div>
+        <p class="mode">按席位订阅（示例价格）</p>
+        <ul>
+          <li>席位池设备数（<b>席位 × 3</b>）</li>
+          <li>组织策略下发（同步 / 锁定 / 密码强度）</li>
+          <li>成员与设备清单</li>
+          <li>无头 / CLI / NAS 部署、API / SDK</li>
+          <li>官方中继不限 / 池化</li>
+          <li>审计报告 / SBOM / 合规包 / 支持 SLA</li>
+        </ul>
+        <button class="btn btn-ghost btn-block" data-buy="team">购买 Team</button>
+      </div>
+      <div class="tier">
+        <h3>Enterprise</h3>
+        <p class="who">政企 · 自主可控</p>
+        <div class="price"><b>定制</b></div>
+        <p class="mode">年度授权 · 联系获取报价</p>
+        <ul>
+          <li>全 Team 能力</li>
+          <li>私有化 / 离线环境部署</li>
+          <li>发布密钥与授权体系自主托管</li>
+          <li>专属支持与交付</li>
+        </ul>
+        <button class="btn btn-ghost btn-block" data-buy="enterprise">联系我们</button>
+      </div>
+    </div>
+    <p style="text-align:center;margin-top:28px;color:var(--muted);font-size:13px;">
+      价格均为示例数据（Mock），最终定价以正式发布为准。
+    </p>
+  </div>
+</section>
+
+<section class="alt" id="limits">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>各档位能力对照</h2>
+      <p>我们不限制你的本地容量与单文件大小——你用的是自己的硬盘。</p>
+    </div>
+    <div class="card" style="overflow-x:auto;">
+      <table class="feature-table">
+        <thead><tr><th>能力</th><th>Free</th><th>Pro</th><th>Team</th></tr></thead>
+        <tbody>
+          <tr><td>已配对设备上限</td><td>5</td><td>15</td><td>席位池（席位 × 3）</td></tr>
+          <tr><td>全部加密原语 / 擦除 / 轮换 / 伪装 / 审计校验</td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>限次分享令牌</td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>局域网 / 打洞直连</td><td><svg class="i ti"><use href="#i-check"/></svg> 无限</td><td><svg class="i ti"><use href="#i-check"/></svg> 无限</td><td><svg class="i ti"><use href="#i-check"/></svg> 无限</td></tr>
+          <tr><td>官方中继</td><td>低额度 + 降速</td><td>高额度</td><td>不限 / 池化</td></tr>
+          <tr><td>自建中继</td><td><svg class="i ti"><use href="#i-check"/></svg> 无限</td><td><svg class="i ti"><use href="#i-check"/></svg> 无限</td><td><svg class="i ti"><use href="#i-check"/></svg> 无限</td></tr>
+          <tr><td>版本历史与文件恢复</td><td>—</td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>阅后即焚一次性会话</td><td>—</td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>审计长期归档 / 取证导出</td><td>—</td><td><svg class="i ti"><use href="#i-check"/></svg></td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>隐写跨图分割</td><td>单图</td><td><svg class="i ti"><use href="#i-check"/></svg> 跨图</td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>选择性同步</td><td>文件夹排除</td><td>四维全量</td><td>四维 + 按设备策略</td></tr>
+          <tr><td>组织策略 / 成员清单</td><td>—</td><td>—</td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>无头 / CLI / NAS / SDK</td><td>—</td><td>—</td><td><svg class="i ti"><use href="#i-check"/></svg></td></tr>
+          <tr><td>更新通道</td><td>延迟通道</td><td>快速 + LTS</td><td>快速 + LTS</td></tr>
+          <tr><td>安全补丁</td><td colspan="3" class="note">对全部档位同时发布，永不作为付费激励</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>到期了会怎样？</h2>
+      <p>许可证只门禁功能，<strong>绝不参与解密链条</strong>。任何情况下不影响密钥体系与数据可用性。</p>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h3>中继额度耗尽 / token 到期</h3><p>回落免费额度并降速，<strong>同步不中断</strong>——只是变慢、变少。</p></div>
+      <div class="card"><h3>快速更新通道到期</h3><p>仍可获取全部功能更新与安全补丁的延迟通道版本。</p></div>
+      <div class="card"><h3>团队订阅到期</h3><p>管理功能与协作服务停止；<strong>每台设备的本地库、全部密钥、全部数据永久可读、可导出、可销毁</strong>。</p></div>
+      <div class="card"><h3>许可证丢失 / 损坏 / 停运</h3><p>重新导入即可，密钥与数据与许可证完全无关。发布方公开签名公钥与规范——即使我们停运，社区也可自签授权，你不会被绑架。</p></div>
+    </div>
+    <div class="card" style="margin-top:20px;border-color:rgba(217,178,95,.35);">
+      <h3>我们还明确不做</h3>
+      <p style="color:var(--muted);">
+        强 DRM / 代码混淆 / 反调试 · 机器指纹与硬件绑定 · 在线心跳与周期回连校验 ·
+        远程吊销（kill switch）· 把安全能力或数据可用性作为续费筹码 · 把免费版做成试用版 ·
+        为转化率引入遥测。授权校验不是遥测：除你每年一次的主动兑换外，客户端不发起任何出站请求。
+      </p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-inner">
+    <div class="foot-col" style="max-width:320px;">
+      <a class="brand" href="index.html"><span class="logo"><svg class="i"><use href="#i-logo"/></svg></span>VaultSync</a>
+      <p style="margin-top:12px;">端到端加密的多设备文件同步系统。你的文件，只有你能读。</p>
+    </div>
+    <div class="foot-col">
+      <h4>产品</h4>
+      <a href="index.html#features">功能</a>
+      <a href="index.html#security">安全模型</a>
+      <a href="download.html">下载</a>
+      <a href="pricing.html">定价</a>
+    </div>
+    <div class="foot-col">
+      <h4>资源</h4>
+      <a href="https://github.com/jimo-aa/VaultSync">GitHub 仓库</a>
+      <a href="https://github.com/jimo-aa/VaultSync/issues">问题反馈</a>
+    </div>
+    <div class="foot-col">
+      <h4>承诺</h4>
+      <a href="index.html#promise">Free-forever 红线</a>
+      <a href="pricing.html#terms">到期语义</a>
+    </div>
+  </div>
+  <div class="foot-note">
+    © 2026 VaultSync · 本站为项目官网示例，购买与下载均为 Mock 演示数据。<br>
+    安全提示：主密码不可找回（无后门），忘记密码 = 数据不可恢复。
+  </div>
+</footer>
+
+<!-- 购买弹窗（Mock，居中 modal） -->
+<div class="modal-mask" id="purchase-mask">
+  <div class="modal">
+    <div class="form-view">
+      <h3 id="pm-title">购买</h3>
+      <p class="sub" id="pm-mode"></p>
+      <div class="opt-row">
+        <div class="field" id="pm-seats-wrap" style="display:none;">
+          <label for="pm-seats">席位数（≥2）</label>
+          <input type="number" id="pm-seats" min="2" value="2">
+        </div>
+        <div class="field" id="pm-years-wrap">
+          <label for="pm-years" id="pm-years-label">购买年限</label>
+          <input type="number" id="pm-years" min="1" max="5" value="1">
+        </div>
+      </div>
+      <div class="field">
+        <label for="pm-email">接收邮箱（licensee，仅用于展示）</label>
+        <input type="email" id="pm-email" placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="pm-pay-method">支付方式</label>
+        <select id="pm-pay-method">
+          <option>支付宝（演示）</option>
+          <option>微信支付（演示）</option>
+          <option>银行卡（演示）</option>
+        </select>
+      </div>
+      <div class="summary"><span id="pm-desc"></span><b id="pm-total"></b></div>
+      <div class="actions">
+        <button class="btn btn-ghost" data-close>取消</button>
+        <button class="btn btn-gold" id="pm-pay">确认支付</button>
+      </div>
+      <p class="mock-note"><svg class="i"><use href="#i-warn"/></svg><span>演示环境：本页不会发起任何真实网络请求与扣款，生成的「许可证」为未签名的 Mock 数据，不可用于真实客户端。</span></p>
+    </div>
+    <div class="success-view" style="display:none;">
+      <div class="big"><svg class="i"><use href="#i-check"/></svg></div>
+      <h3>购买成功（演示）</h3>
+      <p class="sub">以下为 Mock 许可证数据（VSL1 格式演示，未签名）</p>
+      <div class="license-box" id="pm-license"></div>
+      <div class="actions">
+        <button class="btn btn-ghost" data-close>关闭</button>
+        <a class="btn btn-gold" id="pm-download" download>下载许可证文件</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="assets/app.js"></script>
+</body>
+</html>

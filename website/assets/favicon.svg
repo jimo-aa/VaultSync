@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- VaultSync Logo：金库拨盘 + 同步轨道 -->
+  <rect width="64" height="64" rx="15" fill="#10131A"/>
+  <g transform="translate(8,8)" fill="none" stroke="#D9B25F" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="24" cy="24" r="11.5"/>
+    <circle cx="24" cy="24" r="1.8" fill="#D9B25F" stroke="none"/>
+    <path d="M24 21v-6M21.4 25.5l-5.2 3M26.6 25.5l5.2 3"/>
+    <path d="M10.1 16A16 16 0 0 1 35.3 12.7M37.6 14.2 36.6 10.7M37.6 14.2 34.1 13.2"/>
+    <path d="M37.9 35.3A16 16 0 0 1 12.7 35.3M10.4 33.8l1 3.5M10.4 33.8l3.5-1"/>
+  </g>
+</svg>

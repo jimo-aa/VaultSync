@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>下载 — VaultSync</title>
+<meta name="description" content="下载 VaultSync：Windows 已验证，macOS / Linux / 移动端规划中。免费版即全强度加密。">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><span class="logo"><svg class="i"><use href="#i-logo"/></svg></span>VaultSync</a>
+    <div class="nav-links">
+      <a href="index.html#features">功能</a>
+      <a href="index.html#security">安全模型</a>
+      <a href="pricing.html">定价</a>
+      <a href="download.html" class="active">下载</a>
+      <a class="btn btn-gold btn-sm" href="#windows">免费下载</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" style="padding-bottom:40px;">
+  <div class="hero-bg"><span class="orb orb-1"></span><span class="orb orb-2"></span></div>
+  <div class="wrap">
+    <span class="badge"><span class="dot"></span>当前版本 v0.5.0（M4）· 首个正式版规划为 v2.0.0</span>
+    <h1>下载 <span class="gold">VaultSync</span></h1>
+    <p class="sub">免费版即全强度加密，且永远可以完整导出你的数据。<br>安装包尚未正式发布——当前请从源码构建。</p>
+    <div class="cta">
+      <a class="btn btn-ghost btn-lg" href="https://github.com/jimo-aa/VaultSync">前往 GitHub 仓库</a>
+    </div>
+  </div>
+</header>
+
+<section id="windows" style="padding-top:40px;">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>桌面端</h2>
+      <p>安装包签名发布体系（P9-7）落地后，此处将提供官方签名安装包与校验和。</p>
+    </div>
+    <div class="grid g3">
+      <div class="dl-card">
+        <div class="ico"><svg class="i"><use href="#i-win"/></svg></div>
+        <div class="info">
+          <h3>Windows</h3>
+          <p class="ver"><svg class="i ti"><use href="#i-check"/></svg> 已验证（开发构建）</p>
+          <p class="req">Windows 10+ · 64 位</p>
+        </div>
+        <div>
+          <a class="btn btn-ghost btn-sm" href="#" data-download>获取安装包</a>
+        </div>
+      </div>
+      <div class="dl-card wip">
+        <div class="ico"><svg class="i"><use href="#i-apple"/></svg></div>
+        <div class="info">
+          <h3>macOS</h3>
+          <p class="ver"><svg class="i ti" style="color:var(--gold)"><use href="#i-clock"/></svg> 规划中（V2.0 / P9）</p>
+          <p class="req">Keychain 生物识别路径已在设计中</p>
+        </div>
+        <div>
+          <a class="btn btn-ghost btn-sm" href="#" data-download>敬请期待</a>
+        </div>
+      </div>
+      <div class="dl-card wip">
+        <div class="ico"><svg class="i"><use href="#i-linux"/></svg></div>
+        <div class="info">
+          <h3>Linux</h3>
+          <p class="ver"><svg class="i ti" style="color:var(--gold)"><use href="#i-clock"/></svg> 规划中（V2.0 / P9）</p>
+          <p class="req">无安全存储后端时自动禁用生物识别路径</p>
+        </div>
+        <div>
+          <a class="btn btn-ghost btn-sm" href="#" data-download>敬请期待</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="mobile">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>移动端</h2>
+      <p>Android / iOS 在 V2.0（P9）路线图中，交互基线见 prototype/mobile。</p>
+    </div>
+    <div class="grid g2">
+      <div class="dl-card wip">
+        <div class="ico"><svg class="i"><use href="#i-android"/></svg></div>
+        <div class="info">
+          <h3>Android</h3>
+          <p class="ver"><svg class="i ti" style="color:var(--gold)"><use href="#i-clock"/></svg> 规划中</p>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="#" data-download>敬请期待</a>
+      </div>
+      <div class="dl-card wip">
+        <div class="ico"><svg class="i"><use href="#i-phone"/></svg></div>
+        <div class="info">
+          <h3>iOS</h3>
+          <p class="ver"><svg class="i ti" style="color:var(--gold)"><use href="#i-clock"/></svg> 规划中</p>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="#" data-download>敬请期待</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="build">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>从源码构建（开发者）</h2>
+      <p>构建时自动编译 Rust 引擎并捆绑 vault_core.dll。</p>
+    </div>
+    <div class="grid g2">
+      <div class="card">
+        <h3>环境依赖</h3>
+        <p>Flutter SDK（桌面端）与 Rust toolchain（cargo）。克隆仓库后：</p>
+        <div class="license-box">git clone https://github.com/jimo-aa/VaultSync.git
+cd VaultSync/app
+flutter pub get
+flutter run -d windows</div>
+      </div>
+      <div class="card">
+        <h3>首次运行</h3>
+        <p>锁屏输入的密码即成为主密码（≥8 位且强度达标）。主密码不可找回——忘记密码 = 数据不可恢复。开发阶段请勿存放唯一副本的重要数据。</p>
+        <p style="margin-top:10px;">引擎端到端冒烟（当前 234 项断言 / 75 个导出）：</p>
+        <div class="license-box">cd app
+dart run tool/ffi_check.dart</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:20px;">
+      <h3>校验你的下载（正式发布后）</h3>
+      <p style="color:var(--muted);">官方安装包将附带 Ed25519 签名清单与 SHA-256 校验和；签名公钥随客户端内置分发，更新通道按档位区分——但<strong style="color:var(--text);">安全补丁对全档同时发布</strong>。</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-inner">
+    <div class="foot-col" style="max-width:320px;">
+      <a class="brand" href="index.html"><span class="logo"><svg class="i"><use href="#i-logo"/></svg></span>VaultSync</a>
+      <p style="margin-top:12px;">端到端加密的多设备文件同步系统。你的文件，只有你能读。</p>
+    </div>
+    <div class="foot-col">
+      <h4>产品</h4>
+      <a href="index.html#features">功能</a>
+      <a href="index.html#security">安全模型</a>
+      <a href="download.html">下载</a>
+      <a href="pricing.html">定价</a>
+    </div>
+    <div class="foot-col">
+      <h4>资源</h4>
+      <a href="https://github.com/jimo-aa/VaultSync">GitHub 仓库</a>
+      <a href="https://github.com/jimo-aa/VaultSync/issues">问题反馈</a>
+    </div>
+    <div class="foot-col">
+      <h4>承诺</h4>
+      <a href="index.html#promise">Free-forever 红线</a>
+      <a href="pricing.html#terms">到期语义</a>
+    </div>
+  </div>
+  <div class="foot-note">
+    © 2026 VaultSync · 本站为项目官网示例，购买与下载均为 Mock 演示数据。<br>
+    安全提示：主密码不可找回（无后门），忘记密码 = 数据不可恢复。
+  </div>
+</footer>
+
+<div id="toast"></div>
+<script src="assets/app.js"></script>
+</body>
+</html>
