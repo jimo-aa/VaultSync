@@ -61,7 +61,7 @@ jobs:
       - name: 生成 SBOM
         working-directory: native
         run: cargo tree -e normal,build --workspace --charset utf8 > sbom-dep-tree.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: native/sbom-dep-tree.json
