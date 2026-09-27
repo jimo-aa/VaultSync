@@ -14,7 +14,7 @@ sha2 = "0.10"
 rand = "0.8"
 zeroize = "1.8"
 # 签名校验（更新清单等非 P2P 场景；与 vault-p2p 的 P2P 身份签名同族）
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 # P7-8 混合 KEM（FIPS 203）。注意：该实现尚无独立审计，仅按 R2 处置用于
 # 信道握手增强（suite 2，协商成功才启用、失败 fail-open）——见 src/pq.rs 模块注释。
 ml-kem = { version = "0.3", default-features = false, features = ["zeroize"] }
