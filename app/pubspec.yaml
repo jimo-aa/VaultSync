@@ -40,7 +40,7 @@ dependencies:
   window_manager: ^0.5.2
   shared_preferences: ^2.5.5
   path_provider: ^2.1.5
-  intl: any
+  intl: 0.20.3
   flutter_localizations:
     sdk: flutter
   ffi: ^2.2.0
